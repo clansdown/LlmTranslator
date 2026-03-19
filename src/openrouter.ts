@@ -125,6 +125,70 @@ export async function fetchVisionModels(apiKey: string): Promise<VisionModel[]> 
 }
 
 /**
+ * Fetches ZDR (Zero Data Retention) models from OpenRouter
+ * @param {string} apiKey - OpenRouter API key
+ * @returns {Promise<VisionModel[]>} Array of ZDR vision model objects
+ * @throws {Error} If API request fails
+ */
+export async function fetchZdrModels(apiKey: string): Promise<VisionModel[]> {
+    console.log("[fetchZdrModels] Fetching from:", OPENROUTER_BASE_URL + "/endpoints/zdr");
+    const response = await fetch(OPENROUTER_BASE_URL + "/endpoints/zdr", {
+        method: "GET",
+        headers: {
+            "Authorization": "Bearer " + apiKey,
+            "Content-Type": "application/json"
+        }
+    });
+
+    console.log("[fetchZdrModels] Response status:", response.status);
+
+    if (!response.ok) {
+        const text = await response.text();
+        console.log("Error response body:", text);
+        let errorMessage = "Failed to fetch ZDR models: " + response.status;
+        
+        try {
+            const errorData = JSON.parse(text);
+            console.log("Parsed error data:", errorData);
+            if (errorData.error && errorData.error.message) {
+                errorMessage = errorData.error.message;
+            }
+        } catch (e) {
+            if (text && text.trim().length > 0) {
+                errorMessage = text;
+            }
+        }
+        
+        throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    console.log("[fetchZdrModels] Raw response data:", data);
+    console.log("[fetchZdrModels] Models count:", data.data?.length);
+    
+    const allModels = data.data || [];
+    
+    // Map ZDR response field names to our VisionModel type
+    const models = allModels.map(function(model: {model_id?: string; model_name?: string}): VisionModel {
+        return {
+            id: model.model_id ?? "",
+            name: model.model_name ?? ""
+        };
+    });
+    
+    // Sort alphabetically by name
+    models.sort(function(a: VisionModel, b: VisionModel): number {
+        const nameA = (a.name ?? "").toLowerCase();
+        const nameB = (b.name ?? "").toLowerCase();
+        if (nameA < nameB) return -1;
+        if (nameA > nameB) return 1;
+        return 0;
+    });
+    
+    return models;
+}
+
+/**
  * Fetches the account balance from OpenRouter
  * @param {string} apiKey - OpenRouter API key
  * @returns {Promise<BalanceInfo>} Object with total_credits and total_usage

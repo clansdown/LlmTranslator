@@ -7,4 +7,5 @@
  */
 export interface Config {
     openRouterApiKey: string | null;
+    selectedModel: string | null;
 }

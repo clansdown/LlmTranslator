@@ -3,47 +3,19 @@
  */
 
 import { savePreference, getPreference } from './storage';
-import { fetchBalance } from './openrouter';
+import { fetchBalance, fetchZdrModels } from './openrouter';
+import * as ui from './ui';
 import type { Config } from './types/config';
+import type { VisionModel } from './types/api';
 
 /**
  * Application configuration object
  * Contains runtime configuration that code will need access to
  */
 const config: Config = {
-    openRouterApiKey: null
+    openRouterApiKey: null,
+    selectedModel: null
 };
-
-/**
- * Displays an error message using a Bootstrap alert
- * @param {string} message - Error message to display
- * @returns {void}
- */
-function displayError(message: string): void {
-    const template = document.getElementById('error-alert-template') as HTMLTemplateElement | null;
-    if (!template) {
-        return;
-    }
-    const clone = template.content.cloneNode(true);
-    const container = (clone as DocumentFragment).firstElementChild as HTMLElement;
-    const messageSpan = (clone as Element).querySelector('.error-message');
-    if (messageSpan) {
-        messageSpan.textContent = message;
-    }
-    document.getElementById('error-container')?.appendChild(container);
-}
-
-/**
- * Updates the balance display in the toolbar
- * @param {string} credits - Formatted credits string
- * @returns {void}
- */
-function updateBalanceDisplay(credits: string): void {
-    const balanceDisplay = document.getElementById('balance-display');
-    if (balanceDisplay) {
-        balanceDisplay.textContent = "Balance: " + credits;
-    }
-}
 
 /**
  * Refreshes the OpenRouter account balance
@@ -57,9 +29,91 @@ async function refreshBalance(): Promise<void> {
 
     try {
         const balanceInfo = await fetchBalance(apiKey);
-        updateBalanceDisplay("$" + balanceInfo.totalCredits.toFixed(2));
+        ui.updateBalanceDisplay("$" + balanceInfo.totalCredits.toFixed(2));
     } catch (error) {
-        displayError(error instanceof Error ? error.message : "Failed to fetch balance");
+        ui.displayError(error instanceof Error ? error.message : "Failed to fetch balance");
+    }
+}
+
+/**
+ * Populates the model dropdown with available ZDR models
+ * @param {VisionModel[]} models - Array of available vision models
+ * @param {string} [selectedId] - Optional model ID to select by default
+ * @returns {void}
+ */
+function populateModelDropdown(models: VisionModel[], selectedId?: string): void {
+    const dropdown = document.getElementById("model-selector") as HTMLSelectElement | null;
+    if (!dropdown) {
+        return;
+    }
+
+    dropdown.innerHTML = "";
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = "Select model...";
+    dropdown.appendChild(placeholder);
+
+    for (const model of models) {
+        const option = document.createElement("option");
+        option.value = model.id;
+        option.textContent = model.name;
+        dropdown.appendChild(option);
+    }
+
+    dropdown.disabled = false;
+
+    if (selectedId && models.some(m => m.id === selectedId)) {
+        dropdown.value = selectedId;
+        config.selectedModel = selectedId;
+    } else if (models.length > 0) {
+        dropdown.value = models[0].id;
+        config.selectedModel = models[0].id;
+        savePreference("selectedModel", models[0].id).catch(() => {});
+    }
+}
+
+/**
+ * Handles model fetch errors by disabling dropdown with error message
+ * @returns {void}
+ */
+function handleModelFetchError(): void {
+    const dropdown = document.getElementById("model-selector") as HTMLSelectElement | null;
+    if (!dropdown) {
+        return;
+    }
+
+    dropdown.innerHTML = "";
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "Unable to Fetch Models";
+    dropdown.appendChild(option);
+    dropdown.disabled = true;
+}
+
+/**
+ * Fetches and loads ZDR models into the dropdown
+ * @returns {Promise<void>}
+ */
+async function loadModels(): Promise<void> {
+    const apiKey = config.openRouterApiKey;
+    console.log("[loadModels] Called, apiKey:", apiKey ? "exists" : "null");
+    if (!apiKey) {
+        console.log("[loadModels] No API key, returning early");
+        return;
+    }
+
+    try {
+        console.log("[loadModels] Fetching ZDR models...");
+        const models = await fetchZdrModels(apiKey);
+        console.log("[loadModels] Fetched models:", models.length, models);
+        const savedModelId = await getPreference("selectedModel");
+        console.log("[loadModels] Saved model ID:", savedModelId);
+        populateModelDropdown(models, savedModelId ?? undefined);
+        console.log("[loadModels] Dropdown populated");
+    } catch (error) {
+        console.error("[loadModels] Error:", error);
+        handleModelFetchError();
+        ui.displayError(error instanceof Error ? error.message : "Failed to load models");
     }
 }
 
@@ -70,16 +124,19 @@ async function refreshBalance(): Promise<void> {
  * @throws {Error} If saving to OPFS fails
  */
 async function setApiKey(key: string): Promise<void> {
+    console.log("[setApiKey] Called with key length:", key.length);
     config.openRouterApiKey = key;
 
     try {
         await savePreference("apiKey", key);
     } catch (error) {
-        displayError(error instanceof Error ? error.message : "Failed to save API key");
+        ui.displayError(error instanceof Error ? error.message : "Failed to save API key");
         throw error;
     }
 
     await refreshBalance();
+    console.log("[setApiKey] Calling loadModels...");
+    await loadModels();
 }
 
 /**
@@ -93,7 +150,7 @@ async function loadApiKey(): Promise<void> {
             await setApiKey(key);
         }
     } catch (error) {
-        displayError(error instanceof Error ? error.message : "Failed to load API key");
+        ui.displayError(error instanceof Error ? error.message : "Failed to load API key");
     }
 }
 
@@ -120,12 +177,34 @@ function setupApiKeyInput(): void {
 }
 
 /**
+ * Sets up the model selector dropdown change handler
+ * @returns {void}
+ */
+function setupModelSelector(): void {
+    const dropdown = document.getElementById("model-selector") as HTMLSelectElement | null;
+    if (!dropdown) {
+        return;
+    }
+
+    dropdown.addEventListener("change", function(): void {
+        const selectedId = dropdown.value;
+        if (selectedId) {
+            config.selectedModel = selectedId;
+            savePreference("selectedModel", selectedId).catch(() => {
+                ui.displayError("Failed to save model selection");
+            });
+        }
+    });
+}
+
+/**
  * Initializes the application on page load
  * @returns {Promise<void>}
  */
 export async function init(): Promise<void> {
     setupApiKeyToggle();
     setupApiKeyInput();
+    setupModelSelector();
     await loadApiKey();
     console.log("LLM Translator initialized");
 }
@@ -148,3 +227,5 @@ function setupApiKeyToggle(): void {
         toggleButton.textContent = isPassword ? "🔒" : "👁";
     });
 }
+
+init();

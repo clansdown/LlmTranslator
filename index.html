@@ -67,10 +67,15 @@
         }
     </style>
 </head>
-<body onLoad="main.init()">
+<body>
     <div class="container-fluid">
         <div class="toolbar-sticky">
             <div class="row g-2 align-items-center">
+                <div class="col-md-6">
+                    <select class="form-select" id="model-selector" aria-label="Model selection" disabled>
+                        <option value="">Select model...</option>
+                    </select>
+                </div>
                 <div class="col-md-4">
                     <div class="api-key-wrapper">
                         <label for="api-key-input" class="visually-hidden">OpenRouter API Key</label>
@@ -78,13 +83,13 @@
                         <button type="button" class="btn-toggle-visibility" id="toggle-key-visibility" aria-label="Toggle API key visibility">👁</button>
                     </div>
                 </div>
-                <div class="col-md-2">
-                    <button type="button" class="btn btn-outline-secondary w-100" id="config-button">
-                        ⚙ Config
+                <div class="col-md-1 text-end">
+                    <button type="button" class="btn btn-outline-secondary" id="config-button">
+                        ⚙ 
                     </button>
                 </div>
-                <div class="col-md-6 text-end">
-                    <span class="balance-display" id="balance-display">Balance: --</span>
+                <div class="col-md-1 text-end">
+                    <span class="balance-display" id="balance-display" title="OpenRouter balance">--</span>
                 </div>
             </div>
         </div>
