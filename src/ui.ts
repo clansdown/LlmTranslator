@@ -30,7 +30,7 @@ export function displayError(message: string): void {
 export function updateBalanceDisplay(credits: string): void {
     const balanceDisplay = document.getElementById('balance-display');
     if (balanceDisplay) {
-        balanceDisplay.textContent = "Balance: " + credits;
+        balanceDisplay.textContent = credits;
     }
 }
 

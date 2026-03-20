@@ -5,6 +5,8 @@
 import { savePreference, getPreference } from './storage';
 import { fetchBalance, fetchZdrModels } from './openrouter';
 import * as ui from './ui';
+import * as settings from './settings';
+import * as translation from './translation';
 import type { Config } from './types/config';
 import type { VisionModel } from './types/api';
 
@@ -14,7 +16,10 @@ import type { VisionModel } from './types/api';
  */
 const config: Config = {
     openRouterApiKey: null,
-    selectedModel: null
+    selectedModel: null,
+    minPrice: null,
+    maxPrice: null,
+    selectedPromptId: null
 };
 
 /**
@@ -33,6 +38,16 @@ async function refreshBalance(): Promise<void> {
     } catch (error) {
         ui.displayError(error instanceof Error ? error.message : "Failed to fetch balance");
     }
+}
+
+/**
+ * Converts per-token price to per-million price string
+ * @param {string} pricePerToken - Price per token as string
+ * @returns {string} Price per million tokens
+ */
+function formatCost(pricePerToken: string): string {
+    const perMillion = parseFloat(pricePerToken) * 1_000_000;
+    return perMillion.toFixed(2);
 }
 
 /**
@@ -56,7 +71,15 @@ function populateModelDropdown(models: VisionModel[], selectedId?: string): void
     for (const model of models) {
         const option = document.createElement("option");
         option.value = model.id;
-        option.textContent = model.name;
+
+        if (model.pricing) {
+            const promptCost = formatCost(model.pricing.prompt);
+            const completionCost = formatCost(model.pricing.completion);
+            option.textContent = model.name + " ($" + promptCost + "/$" + completionCost + ")";
+        } else {
+            option.textContent = model.name;
+        }
+
         dropdown.appendChild(option);
     }
 
@@ -65,10 +88,12 @@ function populateModelDropdown(models: VisionModel[], selectedId?: string): void
     if (selectedId && models.some(m => m.id === selectedId)) {
         dropdown.value = selectedId;
         config.selectedModel = selectedId;
+        translation.updateButtonStates();
     } else if (models.length > 0) {
         dropdown.value = models[0].id;
         config.selectedModel = models[0].id;
         savePreference("selectedModel", models[0].id).catch(() => {});
+        translation.updateButtonStates();
     }
 }
 
@@ -104,8 +129,10 @@ async function loadModels(): Promise<void> {
 
     try {
         console.log("[loadModels] Fetching ZDR models...");
-        const models = await fetchZdrModels(apiKey);
+        let models = await fetchZdrModels(apiKey);
         console.log("[loadModels] Fetched models:", models.length, models);
+        models = settings.filterModelsByPrice(models);
+        console.log("[loadModels] Models after price filter:", models.length);
         const savedModelId = await getPreference("selectedModel");
         console.log("[loadModels] Saved model ID:", savedModelId);
         populateModelDropdown(models, savedModelId ?? undefined);
@@ -193,8 +220,32 @@ function setupModelSelector(): void {
             savePreference("selectedModel", selectedId).catch(() => {
                 ui.displayError("Failed to save model selection");
             });
+        } else {
+            config.selectedModel = null;
         }
+        translation.updateButtonStates();
     });
+}
+
+/**
+ * Loads settings from OPFS into config
+ * @returns {Promise<void>}
+ */
+async function loadSettings(): Promise<void> {
+    const minPriceStr = await getPreference("minPrice");
+    if (minPriceStr) {
+        config.minPrice = parseFloat(minPriceStr);
+    }
+
+    const maxPriceStr = await getPreference("maxPrice");
+    if (maxPriceStr) {
+        config.maxPrice = parseFloat(maxPriceStr);
+    }
+
+    const selectedPromptId = await getPreference("selectedPrompt");
+    if (selectedPromptId) {
+        config.selectedPromptId = selectedPromptId;
+    }
 }
 
 /**
@@ -202,6 +253,24 @@ function setupModelSelector(): void {
  * @returns {Promise<void>}
  */
 export async function init(): Promise<void> {
+    translation.setConfig(config);
+
+    await loadSettings();
+
+    const inputLanguage = await getPreference("inputLanguage") ?? "english";
+    translation.populateLanguageDropdowns(inputLanguage);
+    translation.setupLanguageDropdownHandlers();
+    translation.setupTranslateButtons();
+    translation.setupTextareaKeyHandlers();
+
+    settings.setConfig(config);
+    await settings.initializeDefaultPromptsIfNeeded();
+    await settings.loadPromptsIntoMemory();
+
+    settings.setupSettingsButton(document.getElementById("config-button") as HTMLButtonElement);
+    settings.setupPromptDropdown();
+    settings.updatePromptDropdown();
+
     setupApiKeyToggle();
     setupApiKeyInput();
     setupModelSelector();

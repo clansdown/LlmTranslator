@@ -73,6 +73,10 @@ export interface ImageInput {
 export interface VisionModel {
     id: string;
     name: string;
+    pricing?: {
+        prompt: string;
+        completion: string;
+    };
     architecture?: {
         input_modalities?: string[];
         output_modalities?: string[];

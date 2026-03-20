@@ -169,10 +169,18 @@ export async function fetchZdrModels(apiKey: string): Promise<VisionModel[]> {
     const allModels = data.data || [];
     
     // Map ZDR response field names to our VisionModel type
-    const models = allModels.map(function(model: {model_id?: string; model_name?: string}): VisionModel {
+    const models = allModels.map(function(model: {
+        model_id?: string;
+        model_name?: string;
+        pricing?: { prompt: string; completion: string };
+    }): VisionModel {
         return {
             id: model.model_id ?? "",
-            name: model.model_name ?? ""
+            name: model.model_name ?? "",
+            pricing: model.pricing ? {
+                prompt: model.pricing.prompt,
+                completion: model.pricing.completion
+            } : undefined
         };
     });
     
@@ -485,6 +493,77 @@ export async function generateTitle(apiKey: string, prompt: string, systemPrompt
     if (!response.ok) {
         const text = await response.text();
         throw new Error("Failed to generate title: " + response.status + " - " + text);
+    }
+
+    const data = await response.json() as ChatCompletionResponse;
+    if (data.choices && data.choices.length > 0 && data.choices[0].message) {
+        return data.choices[0].message.content || "";
+    }
+    return "";
+}
+
+/**
+ * Translates text using OpenRouter chat completion with ZDR enforcement
+ * @param {string} apiKey - OpenRouter API key
+ * @param {string} sourceText - Text to translate
+ * @param {string} systemPrompt - System prompt (e.g., "Translate to English:")
+ * @param {string} model - Model ID to use
+ * @returns {Promise<string>} Translated text
+ * @throws {Error} If API request fails
+ */
+export async function translateText(
+    apiKey: string,
+    sourceText: string,
+    systemPrompt: string,
+    model: string
+): Promise<string> {
+    /** @type {Array<{role: string; content: string}>} */
+    const messages: Array<{role: string; content: string}> = [];
+
+    messages.push({
+        role: "system",
+        content: systemPrompt
+    });
+
+    messages.push({
+        role: "user",
+        content: sourceText
+    });
+
+    /** @type {object} */
+    const body: Record<string, unknown> = {
+        model: model,
+        messages: messages,
+        provider: {
+            zdr: true
+        }
+    };
+
+    const response = await fetch(OPENROUTER_BASE_URL + "/chat/completions", {
+        method: "POST",
+        headers: {
+            "Authorization": "Bearer " + apiKey,
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify(body)
+    });
+
+    if (!response.ok) {
+        const text = await response.text();
+        let errorMessage = "Translation failed: " + response.status;
+
+        try {
+            const errorData = JSON.parse(text);
+            if (errorData.error && errorData.error.message) {
+                errorMessage = errorData.error.message;
+            }
+        } catch (e) {
+            if (text && text.trim().length > 0) {
+                errorMessage = text;
+            }
+        }
+
+        throw new Error(errorMessage);
     }
 
     const data = await response.json() as ChatCompletionResponse;
