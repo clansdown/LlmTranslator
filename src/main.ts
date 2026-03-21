@@ -262,6 +262,7 @@ export async function init(): Promise<void> {
     translation.setupLanguageDropdownHandlers();
     translation.setupTranslateButtons();
     translation.setupTextareaKeyHandlers();
+    await translation.loadTranslationHistory();
 
     settings.setConfig(config);
     await settings.initializeDefaultPromptsIfNeeded();

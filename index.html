@@ -65,6 +65,10 @@
         .api-key-wrapper .btn-toggle-visibility:hover {
             color: var(--bs-body-color);
         }
+
+        .text-justify {
+            /* text-align: justify; */
+        }
     </style>
 </head>
 <body>
@@ -156,15 +160,28 @@
     <!-- translation-item-template: Template for displaying a translation pair -->
     <template id="translation-item-template">
         <div class="translation-item" style="border: 1px solid var(--bs-border-color); border-radius: 0.375rem; margin-bottom: 1rem; overflow: hidden;">
-            <div style="background: var(--bs-tertiary-bg); padding: 0.5rem; font-size: 0.875rem; color: var(--bs-secondary-color);">
-                <span class="translation-prompt"></span>
-                <span style="float: right;" class="translation-model-name"></span>
+            <div class="row p-2 small" style="background: var(--bs-tertiary-bg); color: var(--bs-secondary-color);">
+                <div class="col-lg-2">
+                    <span class="translation-prompt"></span>
+                </div>
+                <div class="col-lg-1">
+                    <span class="translation-char-count"></span>
+                </div>
+                <div class="col text-end">
+                    <span class="ms-2 translation-model-name"></span>
+                </div>
             </div>
-            <div class="row">
-                <div class="col-12 text-justify translation-source" style="padding: 0.75rem; border-bottom: 1px solid var(--bs-border-color); white-space: pre-wrap; font-size: 0.9rem;"></div>
+            <div class="row px-3">
+                <div class="col text-justify translation-source p-2" style=" border-bottom: 1px solid var(--bs-border-color); white-space: pre-wrap;"></div>
+                <div class="col-auto p-1">
+                    <button type="button" class="btn btn-sm btn-outline-secondary copy-source-btn" title="Copy to clipboard">📋</button>
+                </div>
             </div>
-            <div class="row">
-                <div class="col-12 text-justify translation-target" style="padding: 0.75rem; white-space: pre-wrap; font-size: 0.9rem;"></div>
+            <div class="row px-3">
+                <div class="col text-justify translation-target p-2" style="white-space: pre-wrap;"></div>
+                <div class="col-auto p-1">
+                    <button type="button" class="btn btn-sm btn-outline-secondary copy-target-btn" title="Copy to clipboard">📋</button>
+                </div>
             </div>
             <div class="translation-spinner" style="display: none; padding: 1rem; text-align: center;">
                 <div class="spinner-border spinner-border-sm" role="status"></div>

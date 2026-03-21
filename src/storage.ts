@@ -26,6 +26,8 @@
 
 import type { Conversation, ConversationSummary } from './types/state';
 import type { Prompt } from './types/prompt';
+import type { Translation } from './types/translation';
+import { DEBUG_TRANSLATIONS } from './debug';
 import { saveImageToExternal, saveConversationToExternal, saveSummaryToExternal, saveReferenceImageToExternal } from './externalSync';
 
 const STORAGE_PREFERENCES_DIR: string = "preferences";
@@ -33,6 +35,9 @@ const STORAGE_CONVERSATIONS_DIR: string = "conversations";
 const STORAGE_IMAGES_DIR: string = "images";
 const STORAGE_REFERENCE_DIR: string = "reference";
 const STORAGE_PROMPTS_DIR: string = "prompts";
+const STORAGE_TRANSLATIONS_DIR: string = "translations";
+const STORAGE_INPUT_DIR: string = "input";
+const STORAGE_OUTPUT_DIR: string = "output";
 
 /**
  * Gets the OPFS root directory handle
@@ -820,5 +825,100 @@ export async function initializeDefaultPrompts(defaultPrompts: Prompt[]): Promis
         for (const prompt of defaultPrompts) {
             await savePrompt(prompt);
         }
+    }
+}
+
+/**
+ * Saves a translation to OPFS
+ * @param {'input' | 'output'} pill - Which pane
+ * @param {Translation} translation - Translation object to save
+ * @returns {Promise<void>}
+ */
+export async function saveTranslation(pill: 'input' | 'output', translation: Translation): Promise<void> {
+    if (DEBUG_TRANSLATIONS) {
+        console.log(`[saveTranslation] Saving ${pill} translation ${translation.timestamp}...`);
+    }
+    try {
+        const root = await getOPFSHandle();
+        const translationsDir = await ensureDirectory(root, STORAGE_TRANSLATIONS_DIR);
+        const paneDir = pill === 'input' 
+            ? await ensureDirectory(translationsDir, STORAGE_INPUT_DIR)
+            : await ensureDirectory(translationsDir, STORAGE_OUTPUT_DIR);
+        const fileHandle = await paneDir.getFileHandle(String(translation.timestamp) + ".json", { create: true });
+        const writable = await fileHandle.createWritable();
+        await writable.write(JSON.stringify(translation, null, 2));
+        await writable.close();
+        if (DEBUG_TRANSLATIONS) {
+            console.log(`[saveTranslation] Saved ${pill} translation ${translation.timestamp} successfully`);
+        }
+    } catch (e) {
+        if (DEBUG_TRANSLATIONS) {
+            console.error("[saveTranslation] Error saving translation:", e);
+        }
+    }
+}
+
+/**
+ * Lists and loads translations from OPFS
+ * @param {'input' | 'output'} pill - Which pane
+ * @param {number} [limit=1000] - Maximum number of translations to load
+ * @returns {Promise<Translation[]>} Array of translation objects, newest first
+ */
+export async function listTranslations(pill: 'input' | 'output', limit: number = 1000): Promise<Translation[]> {
+    if (DEBUG_TRANSLATIONS) {
+        console.log(`[listTranslations] Loading ${pill} translations (limit: ${limit})...`);
+    }
+    try {
+        const root = await getOPFSHandle();
+        const translationsDir = await ensureDirectory(root, STORAGE_TRANSLATIONS_DIR);
+        const paneDir = pill === 'input' 
+            ? await ensureDirectory(translationsDir, STORAGE_INPUT_DIR)
+            : await ensureDirectory(translationsDir, STORAGE_OUTPUT_DIR);
+
+        const timestamps: number[] = [];
+        for await (const entry of (paneDir as FileSystemDirectoryHandle & { values(): AsyncIterableIterator<FileSystemHandle> }).values()) {
+            if (entry.kind === "file" && entry.name.endsWith(".json")) {
+                const num = parseInt(entry.name.replace(".json", ""), 10);
+                if (!isNaN(num)) {
+                    timestamps.push(num);
+                }
+            }
+        }
+
+        if (DEBUG_TRANSLATIONS) {
+            console.log(`[listTranslations] Found ${timestamps.length} files for ${pill}`);
+        }
+
+        timestamps.sort(function(a: number, b: number): number { return b - a; });
+
+        const translations: Translation[] = [];
+        const limitedTimestamps = timestamps.slice(0, limit);
+
+        for (const timestamp of limitedTimestamps) {
+            try {
+                const fileHandle = await paneDir.getFileHandle(String(timestamp) + ".json");
+                const file = await fileHandle.getFile();
+                const content = await file.text();
+                const translation = JSON.parse(content) as Translation;
+                if (translation.status === 'complete') {
+                    translations.push(translation);
+                }
+            } catch (e) {
+                if (DEBUG_TRANSLATIONS) {
+                    console.warn(`[listTranslations] Skipping invalid translation file: ${timestamp}`);
+                }
+            }
+        }
+
+        if (DEBUG_TRANSLATIONS) {
+            console.log(`[listTranslations] Loaded ${translations.length} ${pill} translations`);
+        }
+
+        return translations;
+    } catch (e) {
+        if (DEBUG_TRANSLATIONS) {
+            console.error("[listTranslations] Error:", e);
+        }
+        return [];
     }
 }

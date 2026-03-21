@@ -4,7 +4,8 @@
  */
 
 import { translateText } from './openrouter';
-import { savePreference } from './storage';
+import { savePreference, saveTranslation, listTranslations } from './storage';
+import { DEBUG_TRANSLATIONS } from './debug';
 import * as ui from './ui';
 import { LANGUAGES } from './languages';
 import { INPUT_PROMPT_TEMPLATE, OUTPUT_PROMPT_TEMPLATE } from './prompts';
@@ -73,6 +74,35 @@ export function setModelNameMap(models: Array<{id: string; name: string}>): void
  */
 function getModelName(modelId: string): string {
     return modelNameMap.get(modelId) ?? modelId;
+}
+
+/**
+ * Loads translation history from OPFS into memory
+ * @returns {Promise<void>}
+ */
+export async function loadTranslationHistory(): Promise<void> {
+    if (DEBUG_TRANSLATIONS) {
+        console.log('[loadTranslationHistory] Loading translation history...');
+    }
+    const MAX_HISTORY = 1000;
+
+    const inputHistory = await listTranslations('input', MAX_HISTORY);
+    if (DEBUG_TRANSLATIONS) {
+        console.log(`[loadTranslationHistory] Loaded ${inputHistory.length} input translations`);
+    }
+    inputTranslations = inputHistory;
+    renderTranslations('input');
+
+    const outputHistory = await listTranslations('output', MAX_HISTORY);
+    if (DEBUG_TRANSLATIONS) {
+        console.log(`[loadTranslationHistory] Loaded ${outputHistory.length} output translations`);
+    }
+    outputTranslations = outputHistory;
+    renderTranslations('output');
+
+    if (DEBUG_TRANSLATIONS) {
+        console.log('[loadTranslationHistory] Translation history loaded');
+    }
 }
 
 /**
@@ -208,6 +238,8 @@ export async function translate(pill: 'input' | 'output'): Promise<void> {
         return;
     }
 
+    textarea.value = '';
+
     const translations = pill === 'input' ? inputTranslations : outputTranslations;
 
     let promptName: string;
@@ -273,20 +305,20 @@ export async function translate(pill: 'input' | 'output'): Promise<void> {
     try {
         const result = await translateText(
             config.openRouterApiKey,
-            sourceText,
-            promptContent,
+            translation.source,
+            translation.promptContent,
             config.selectedModel
         );
 
         translation.translation = result;
         translation.status = 'complete';
+        saveTranslation(pill, translation);
     } catch (error) {
         translation.status = 'error';
         translation.error = error instanceof Error ? error.message : "Translation failed";
     }
 
     renderTranslations(pill);
-
     await refreshBalance();
 }
 
@@ -346,6 +378,29 @@ export function renderTranslations(pill: 'input' | 'output'): void {
                 });
             }
 
+            const copySourceBtn = element.querySelector('.copy-source-btn') as HTMLButtonElement | null;
+            const copyTargetBtn = element.querySelector('.copy-target-btn') as HTMLButtonElement | null;
+
+            if (copySourceBtn) {
+                copySourceBtn.addEventListener('click', function() {
+                    const text = sourceEl?.textContent ?? '';
+                    navigator.clipboard.writeText(text).catch(function() {
+                        console.log('Failed to copy source text');
+                    });
+                });
+            }
+
+            if (copyTargetBtn) {
+                copyTargetBtn.addEventListener('click', function() {
+                    const text = targetEl?.textContent ?? '';
+                    if (text) {
+                        navigator.clipboard.writeText(text).catch(function() {
+                            console.log('Failed to copy translation text');
+                        });
+                    }
+                });
+            }
+
             container.insertBefore(element, container.firstChild);
         }
 
@@ -355,6 +410,7 @@ export function renderTranslations(pill: 'input' | 'output'): void {
         const errorEl = element.querySelector('.translation-error') as HTMLElement | null;
         const promptEl = element.querySelector('.translation-prompt') as HTMLElement | null;
         const modelNameEl = element.querySelector('.translation-model-name') as HTMLElement | null;
+        const charCountEl = element.querySelector('.translation-char-count') as HTMLElement | null;
 
         if (sourceEl) {
             sourceEl.textContent = translation.source;
@@ -370,9 +426,15 @@ export function renderTranslations(pill: 'input' | 'output'): void {
             if (spinnerEl) spinnerEl.style.display = 'block';
             if (errorEl) errorEl.style.display = 'none';
             if (targetEl) targetEl.style.display = 'none';
+            if (charCountEl) {
+                charCountEl.textContent = `(${translation.source.length}/—)`;
+            }
         } else if (translation.status === 'error') {
             if (spinnerEl) spinnerEl.style.display = 'none';
             if (targetEl) targetEl.style.display = 'none';
+            if (charCountEl) {
+                charCountEl.textContent = `(${translation.source.length}/—)`;
+            }
             if (errorEl) {
                 errorEl.style.display = 'block';
                 const errorMsg = errorEl.querySelector('.error-message') as HTMLElement | null;
@@ -386,6 +448,9 @@ export function renderTranslations(pill: 'input' | 'output'): void {
             if (targetEl) {
                 targetEl.style.display = 'block';
                 targetEl.textContent = translation.translation;
+            }
+            if (charCountEl) {
+                charCountEl.textContent = `(${translation.source.length}/${translation.translation.length})`;
             }
         }
     }
@@ -424,6 +489,7 @@ export async function retryTranslation(pill: 'input' | 'output', translationId: 
 
         translation.translation = result;
         translation.status = 'complete';
+        saveTranslation(pill, translation);
     } catch (error) {
         translation.status = 'error';
         translation.error = error instanceof Error ? error.message : "Translation failed";
