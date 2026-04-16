@@ -5,6 +5,7 @@
 
 import * as storage from './storage';
 import * as ui from './ui';
+import * as translation from './translation';
 import { DEFAULT_PROMPTS, generateUuid } from './default_prompts';
 import { saveApiKey } from './main';
 import type { Prompt } from './types/prompt';
@@ -21,6 +22,12 @@ let config: Config | null = null;
  * @type {Prompt[]}
  */
 let prompts: Prompt[] = [];
+
+/**
+ * Available models for the model dropdown
+ * @type {VisionModel[]}
+ */
+let models: VisionModel[] = [];
 
 /**
  * Currently selected prompt ID in the settings modal
@@ -63,6 +70,7 @@ interface SettingsReferences {
     saveSettingsButton: HTMLButtonElement;
     sessionListSelect: HTMLSelectElement;
     sessionNameInput: HTMLInputElement;
+    sessionModelSelect: HTMLSelectElement;
     sessionBackgroundInput: HTMLTextAreaElement;
     sessionReasoningSelect: HTMLSelectElement;
     deleteSessionButton: HTMLButtonElement;
@@ -145,6 +153,7 @@ function openSettingsModal(): void {
             saveSettingsButton: settingsModalElement.querySelector('#settings-save-btn') as HTMLButtonElement,
             sessionListSelect: settingsModalElement.querySelector('#settings-session-list') as HTMLSelectElement,
             sessionNameInput: settingsModalElement.querySelector('#settings-session-name') as HTMLInputElement,
+            sessionModelSelect: settingsModalElement.querySelector('#settings-session-model') as HTMLSelectElement,
             sessionBackgroundInput: settingsModalElement.querySelector('#settings-session-background') as HTMLTextAreaElement,
             sessionReasoningSelect: settingsModalElement.querySelector('#settings-session-reasoning') as HTMLSelectElement,
             deleteSessionButton: settingsModalElement.querySelector('#settings-delete-session-btn') as HTMLButtonElement,
@@ -234,6 +243,7 @@ function populateSettingsForm(): void {
 
     renderSessionList();
     clearSessionEditor();
+    populateModelDropdown();
 }
 
 /**
@@ -345,6 +355,44 @@ async function deleteSelectedPrompt(): Promise<void> {
     selectedPromptIdInModal = null;
 
     updatePromptDropdown();
+}
+
+/**
+ * Sets the available models for the session model dropdown
+ * @param {VisionModel[]} availableModels - Array of available models
+ * @returns {void}
+ */
+export function setModels(availableModels: VisionModel[]): void {
+    models = availableModels;
+    populateModelDropdown();
+}
+
+/**
+ * Populates the session model dropdown in conversation settings
+ * @returns {void}
+ */
+function populateModelDropdown(): void {
+    if (!refs) return;
+
+    refs.sessionModelSelect.innerHTML = '';
+
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = 'Select model...';
+    refs.sessionModelSelect.appendChild(placeholder);
+
+    for (const model of models) {
+        const option = document.createElement('option');
+        option.value = model.id;
+        if (model.pricing) {
+            const promptCost = (parseFloat(model.pricing.prompt) * 1_000_000).toFixed(2);
+            const completionCost = (parseFloat(model.pricing.completion) * 1_000_000).toFixed(2);
+            option.textContent = `${model.name} ($${promptCost}/$${completionCost})`;
+        } else {
+            option.textContent = model.name;
+        }
+        refs.sessionModelSelect.appendChild(option);
+    }
 }
 
 /**
@@ -494,10 +542,12 @@ function loadSessionIntoEditor(sessionId: string): void {
     storage.loadSession(sessionId).then(function(session) {
         if (session && refs) {
             refs.sessionNameInput.value = session.name;
+            refs.sessionModelSelect.value = session.model ?? '';
             refs.sessionBackgroundInput.value = session.background ?? '';
             refs.sessionReasoningSelect.value = session.reasoning ?? 'none';
         } else if (refs) {
             refs.sessionNameInput.value = '';
+            refs.sessionModelSelect.value = '';
             refs.sessionBackgroundInput.value = '';
             refs.sessionReasoningSelect.value = 'none';
         }
@@ -533,7 +583,7 @@ function updateDeleteSessionButton(): void {
 }
 
 /**
- * Saves the current session (name and background)
+ * Saves the current session (name, model, background, reasoning)
  * @returns {Promise<void>}
  */
 async function saveSession(): Promise<void> {
@@ -555,13 +605,19 @@ async function saveSession(): Promise<void> {
     }
 
     session.name = newName;
+    session.model = refs.sessionModelSelect.value || null;
     session.background = refs.sessionBackgroundInput.value;
     session.reasoning = refs.sessionReasoningSelect.value as 'none' | 'minimal' | 'low' | 'medium' | 'high';
     await storage.saveSession(session);
 
+    if (config && session.model) {
+        config.selectedModel = session.model;
+    }
+
     await renderSessionList();
 
     await refreshSessionSelector();
+    translation.updateButtonStates();
 }
 
 /**

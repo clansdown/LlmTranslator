@@ -4,6 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LLM Translator</title>
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#212529">
+    <link rel="icon" type="image/png" sizes="32x32" href="/llm_translate-32x32.png">
+    <link rel="apple-touch-icon" href="/llm_translate-180x180.png">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         .toolbar-sticky {
@@ -117,11 +121,6 @@
     <div class="container-fluid">
         <div class="toolbar-sticky">
             <div class="row g-2 align-items-center">
-                <div class="col-md-4">
-                    <select class="form-select" id="model-selector" aria-label="Model selection" disabled>
-                        <option value="">Select model...</option>
-                    </select>
-                </div>
                 <div class="col-auto">
                     <button type="button" class="btn btn-outline-primary btn-sm" id="new-session-btn" aria-label="New conversation" title="Start a new conversation">+</button>
                 </div>
@@ -314,34 +313,44 @@
                             </div>
                             <div class="tab-pane fade" id="conversations-content" role="tabpanel" aria-labelledby="conversations-tab-btn">
                                 <h6>Conversations</h6>
-                                <div class="row mt-3">
-                                    <div class="col-md-5">
-                                        <select id="settings-session-list" class="form-select" size="8">
-                                        </select>
-                                        <div class="mt-2">
-                                            <button type="button" class="btn btn-sm btn-outline-danger" id="settings-delete-session-btn" disabled>Delete</button>
+                                <div class="row g-2 mt-3">
+                                    <div class="col-12">
+                                        <label for="settings-session-list" class="form-label">Conversation</label>
+                                        <div class="row g-2">
+                                            <div class="col">
+                                                <select id="settings-session-list" class="form-select">
+                                                </select>
+                                            </div>
+                                            <div class="col-auto">
+                                                <button type="button" class="btn btn-outline-danger" id="settings-delete-session-btn" disabled title="Delete this conversation">Delete</button>
+                                            </div>
                                         </div>
                                     </div>
-                                    <div class="col-md-7">
-                                        <div class="mb-2">
-                                            <label for="settings-session-name" class="form-label">Conversation Name</label>
-                                            <input type="text" id="settings-session-name" class="form-control" placeholder="Enter conversation name">
-                                        </div>
-                                        <div class="mb-2">
-                                            <label for="settings-session-background" class="form-label">Background</label>
-                                            <textarea id="settings-session-background" class="form-control" rows="4" placeholder="Context for the AI about who you're talking to, what the conversation is about, etc."></textarea>
-                                        </div>
-                                        <div class="mb-2">
-                                            <label for="settings-session-reasoning" class="form-label">Reasoning Level</label>
-                                            <select id="settings-session-reasoning" class="form-select" 
-                                                    title="Controls how much reasoning the model does before responding">
-                                                <option value="none">None</option>
-                                                <option value="minimal">Minimal</option>
-                                                <option value="low">Low</option>
-                                                <option value="medium">Medium</option>
-                                                <option value="high">High</option>
-                                            </select>
-                                        </div>
+                                    <div class="col-12">
+                                        <label for="settings-session-name" class="form-label">Name</label>
+                                        <input type="text" id="settings-session-name" class="form-control" placeholder="Enter conversation name">
+                                    </div>
+                                    <div class="col-12">
+                                        <label for="settings-session-model" class="form-label">LLM Model</label>
+                                        <select id="settings-session-model" class="form-select">
+                                        </select>
+                                    </div>
+                                    <div class="col-12">
+                                        <label for="settings-session-reasoning" class="form-label">Reasoning Level</label>
+                                        <select id="settings-session-reasoning" class="form-select"
+                                                title="Controls how much reasoning the model does before responding">
+                                            <option value="none">None</option>
+                                            <option value="minimal">Minimal</option>
+                                            <option value="low">Low</option>
+                                            <option value="medium">Medium</option>
+                                            <option value="high">High</option>
+                                        </select>
+                                    </div>
+                                    <div class="col-12">
+                                        <label for="settings-session-background" class="form-label">Background</label>
+                                        <textarea id="settings-session-background" class="form-control" rows="4" placeholder="Context for the AI about who you're talking to, what the conversation is about, etc."></textarea>
+                                    </div>
+                                    <div class="col-12">
                                         <button type="button" class="btn btn-sm btn-primary" id="settings-save-session-btn">Save</button>
                                     </div>
                                 </div>
@@ -357,6 +366,11 @@
         </div>
     </template>
 
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/sw.js');
+        }
+    </script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script type="module" src="/src/main.ts"></script>
 </body>

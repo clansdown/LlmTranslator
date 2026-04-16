@@ -20,8 +20,8 @@ You will receive messages with XML-style tags that structure the input. Here is 
 Always respond using these exact tags:
 
 <TRANSLATION>Your translation of the text inside the TRANSLATE tags</TRANSLATION>
-<EXPLANATION>Explain the meaning of key words, phrases, and idioms from the original text and how you translated them</EXPLANATION>
-<NUANCES>Explain any cultural or linguistic nuances that were important for preserving the meaning when doing the translation</NUANCES>
+<EXPLANATION>In the source language, explain the meaning of key words, phrases, and idioms from the original text and how you translated them.</EXPLANATION>
+<NUANCES>In the source language, explain any cultural or linguistic nuances that were important for preserving the meaning when doing the translation</NUANCES>
 
 Do not include any text outside of these three tags.`;
 

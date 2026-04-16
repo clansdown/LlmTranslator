@@ -8,7 +8,6 @@ import * as ui from './ui';
 import * as settings from './settings';
 import * as translation from './translation';
 import type { Config } from './types/config';
-import type { VisionModel } from './types/api';
 
 /**
  * Application configuration object
@@ -41,82 +40,7 @@ async function refreshBalance(): Promise<void> {
 }
 
 /**
- * Converts per-token price to per-million price string
- * @param {string} pricePerToken - Price per token as string
- * @returns {string} Price per million tokens
- */
-function formatCost(pricePerToken: string): string {
-    const perMillion = parseFloat(pricePerToken) * 1_000_000;
-    return perMillion.toFixed(2);
-}
-
-/**
- * Populates the model dropdown with available ZDR models
- * @param {VisionModel[]} models - Array of available vision models
- * @param {string} [selectedId] - Optional model ID to select by default
- * @returns {void}
- */
-function populateModelDropdown(models: VisionModel[], selectedId?: string): void {
-    const dropdown = document.getElementById("model-selector") as HTMLSelectElement | null;
-    if (!dropdown) {
-        return;
-    }
-
-    dropdown.innerHTML = "";
-    const placeholder = document.createElement("option");
-    placeholder.value = "";
-    placeholder.textContent = "Select model...";
-    dropdown.appendChild(placeholder);
-
-    for (const model of models) {
-        const option = document.createElement("option");
-        option.value = model.id;
-
-        if (model.pricing) {
-            const promptCost = formatCost(model.pricing.prompt);
-            const completionCost = formatCost(model.pricing.completion);
-            option.textContent = model.name + " ($" + promptCost + "/$" + completionCost + ")";
-        } else {
-            option.textContent = model.name;
-        }
-
-        dropdown.appendChild(option);
-    }
-
-    dropdown.disabled = false;
-
-    if (selectedId && models.some(m => m.id === selectedId)) {
-        dropdown.value = selectedId;
-        config.selectedModel = selectedId;
-        translation.updateButtonStates();
-    } else if (models.length > 0) {
-        dropdown.value = models[0].id;
-        config.selectedModel = models[0].id;
-        savePreference("selectedModel", models[0].id).catch(() => {});
-        translation.updateButtonStates();
-    }
-}
-
-/**
- * Handles model fetch errors by disabling dropdown with error message
- * @returns {void}
- */
-function handleModelFetchError(): void {
-    const dropdown = document.getElementById("model-selector") as HTMLSelectElement | null;
-    if (!dropdown) {
-        return;
-    }
-
-    dropdown.innerHTML = "";
-    const option = document.createElement("option");
-    option.value = "";
-    option.textContent = "Unable to Fetch Models";
-    dropdown.appendChild(option);
-    dropdown.disabled = true;
-}
-
-/**
- * Fetches and loads ZDR models into the dropdown
+ * Fetches and loads ZDR models and passes them to settings and translation modules
  * @returns {Promise<void>}
  */
 async function loadModels(): Promise<void> {
@@ -133,13 +57,23 @@ async function loadModels(): Promise<void> {
         console.log("[loadModels] Fetched models:", models.length, models);
         models = settings.filterModelsByPrice(models);
         console.log("[loadModels] Models after price filter:", models.length);
+
+        settings.setModels(models);
+        translation.setModelNameMap(models);
+
         const savedModelId = await getPreference("selectedModel");
         console.log("[loadModels] Saved model ID:", savedModelId);
-        populateModelDropdown(models, savedModelId ?? undefined);
+        if (savedModelId && models.some(function(m) { return m.id === savedModelId; })) {
+            config.selectedModel = savedModelId;
+            translation.updateButtonStates();
+        } else if (models.length > 0) {
+            config.selectedModel = models[0].id;
+            savePreference("selectedModel", models[0].id).catch(function() {});
+            translation.updateButtonStates();
+        }
         console.log("[loadModels] Dropdown populated");
     } catch (error) {
         console.error("[loadModels] Error:", error);
-        handleModelFetchError();
         ui.displayError(error instanceof Error ? error.message : "Failed to load models");
     }
 }
@@ -206,30 +140,6 @@ async function loadApiKey(): Promise<void> {
 }
 
 /**
- * Sets up the model selector dropdown change handler
- * @returns {void}
- */
-function setupModelSelector(): void {
-    const dropdown = document.getElementById("model-selector") as HTMLSelectElement | null;
-    if (!dropdown) {
-        return;
-    }
-
-    dropdown.addEventListener("change", function(): void {
-        const selectedId = dropdown.value;
-        if (selectedId) {
-            config.selectedModel = selectedId;
-            savePreference("selectedModel", selectedId).catch(() => {
-                ui.displayError("Failed to save model selection");
-            });
-        } else {
-            config.selectedModel = null;
-        }
-        translation.updateButtonStates();
-    });
-}
-
-/**
  * Loads settings from OPFS into config
  * @returns {Promise<void>}
  */
@@ -290,7 +200,6 @@ export async function init(): Promise<void> {
     settings.setupPromptDropdown();
     settings.updatePromptDropdown();
 
-    setupModelSelector();
     await loadApiKey();
     console.log("LLM Translator initialized");
 }
