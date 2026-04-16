@@ -172,6 +172,15 @@ export async function init(): Promise<void> {
     await loadUrlApiKey();
 
     await translation.initializeDefaultSession();
+
+    const savedSessionId = await getPreference('currentSession');
+    if (savedSessionId) {
+        const sessions = await translation.loadSessionsList();
+        if (sessions.some(function(s) { return s.id === savedSessionId; })) {
+            await translation.setCurrentSession(savedSessionId);
+        }
+    }
+
     await populateSessionSelector();
 
     const sessions = await translation.loadSessionsList();

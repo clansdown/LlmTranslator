@@ -4,7 +4,7 @@
  */
 
 import { translateStructured } from './openrouter';
-import { getPreference, listSessions, saveSession, loadSession, deleteSession as storageDeleteSession, getOrCreateDefaultSession, saveSessionTranslation, listSessionTranslations } from './storage';
+import { getPreference, savePreference, listSessions, saveSession, loadSession, deleteSession as storageDeleteSession, getOrCreateDefaultSession, saveSessionTranslation, listSessionTranslations } from './storage';
 import { DEBUG_TRANSLATIONS, DEBUG_SESSIONS } from './debug';
 import * as ui from './ui';
 import { LANGUAGES } from './languages';
@@ -119,6 +119,7 @@ export async function setCurrentSession(sessionId: string): Promise<void> {
     }
 
     currentSessionId = sessionId;
+    await savePreference('currentSession', sessionId);
 
     inputTranslations = [];
     outputTranslations = [];

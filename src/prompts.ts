@@ -19,9 +19,9 @@ You will receive messages with XML-style tags that structure the input. Here is 
 
 Always respond using these exact tags:
 
-<TRANSLATION>Your translation of the text inside the TRANSLATE tags</TRANSLATION>
-<EXPLANATION>In the source language, explain the meaning of key words, phrases, and idioms from the original text and how you translated them.</EXPLANATION>
-<NUANCES>In the source language, explain any cultural or linguistic nuances that were important for preserving the meaning when doing the translation</NUANCES>
+<TRANSLATION>Your translation of the text inside the TRANSLATE tags, according to the instructions in the INSTRUCTIONS tag.</TRANSLATION>
+<EXPLANATION>In the source language, explain the meaning of key words, phrases, and idioms from the original text and how you translated them. This explanation must be in the language which you translated FROM.</EXPLANATION>
+<NUANCES>In the source language, explain any cultural or linguistic nuances that were important for preserving the meaning when doing the translation. The nuances must be explained in the language you translated FROM.</NUANCES>
 
 Do not include any text outside of these three tags.`;
 
@@ -39,4 +39,4 @@ export const INPUT_INSTRUCTIONS: string =
 export const OUTPUT_INSTRUCTIONS: string =
 `[PROMPT]
 
-Consider any background context and conversation history provided.`;
+Consider any background context and conversation history provided. Remember that the explanation and nuances sections should be in the source language, while the translation should be in the target language. Follow the system prompt's guidelines for structuring your response.`;
