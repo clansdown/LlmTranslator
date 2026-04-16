@@ -1,11 +1,12 @@
 /**
  * Settings Module
- * Handles settings modal dialog and prompt management
+ * Handles settings modal dialog, prompt management, and session management
  */
 
 import * as storage from './storage';
 import * as ui from './ui';
 import { DEFAULT_PROMPTS, generateUuid } from './default_prompts';
+import { saveApiKey } from './main';
 import type { Prompt } from './types/prompt';
 import type { Config } from './types/config';
 import type { VisionModel } from './types/api';
@@ -28,6 +29,12 @@ let prompts: Prompt[] = [];
 let selectedPromptIdInModal: string | null = null;
 
 /**
+ * Currently selected session ID in the settings modal
+ * @type {string | null}
+ */
+let selectedSessionIdInModal: string | null = null;
+
+/**
  * Reference to the settings modal element
  * @type {HTMLDivElement | null}
  */
@@ -45,6 +52,8 @@ let settingsModalInstance: any = null;
 interface SettingsReferences {
     minPriceInput: HTMLInputElement;
     maxPriceInput: HTMLInputElement;
+    apiKeyInput: HTMLInputElement;
+    toggleApiKeyButton: HTMLButtonElement;
     promptListSelect: HTMLSelectElement;
     promptNameInput: HTMLInputElement;
     promptContentTextarea: HTMLTextAreaElement;
@@ -52,6 +61,12 @@ interface SettingsReferences {
     deletePromptButton: HTMLButtonElement;
     savePromptButton: HTMLButtonElement;
     saveSettingsButton: HTMLButtonElement;
+    sessionListSelect: HTMLSelectElement;
+    sessionNameInput: HTMLInputElement;
+    sessionBackgroundInput: HTMLTextAreaElement;
+    sessionReasoningSelect: HTMLSelectElement;
+    deleteSessionButton: HTMLButtonElement;
+    saveSessionButton: HTMLButtonElement;
 }
 
 let refs: SettingsReferences | null = null;
@@ -119,13 +134,21 @@ function openSettingsModal(): void {
         refs = {
             minPriceInput: settingsModalElement.querySelector('#settings-min-price') as HTMLInputElement,
             maxPriceInput: settingsModalElement.querySelector('#settings-max-price') as HTMLInputElement,
+            apiKeyInput: settingsModalElement.querySelector('#settings-api-key') as HTMLInputElement,
+            toggleApiKeyButton: settingsModalElement.querySelector('#settings-toggle-key-visibility') as HTMLButtonElement,
             promptListSelect: settingsModalElement.querySelector('#settings-prompt-list') as HTMLSelectElement,
             promptNameInput: settingsModalElement.querySelector('#settings-prompt-name') as HTMLInputElement,
             promptContentTextarea: settingsModalElement.querySelector('#settings-prompt-content') as HTMLTextAreaElement,
             addPromptButton: settingsModalElement.querySelector('#settings-add-prompt-btn') as HTMLButtonElement,
             deletePromptButton: settingsModalElement.querySelector('#settings-delete-prompt-btn') as HTMLButtonElement,
             savePromptButton: settingsModalElement.querySelector('#settings-save-prompt-btn') as HTMLButtonElement,
-            saveSettingsButton: settingsModalElement.querySelector('#settings-save-btn') as HTMLButtonElement
+            saveSettingsButton: settingsModalElement.querySelector('#settings-save-btn') as HTMLButtonElement,
+            sessionListSelect: settingsModalElement.querySelector('#settings-session-list') as HTMLSelectElement,
+            sessionNameInput: settingsModalElement.querySelector('#settings-session-name') as HTMLInputElement,
+            sessionBackgroundInput: settingsModalElement.querySelector('#settings-session-background') as HTMLTextAreaElement,
+            sessionReasoningSelect: settingsModalElement.querySelector('#settings-session-reasoning') as HTMLSelectElement,
+            deleteSessionButton: settingsModalElement.querySelector('#settings-delete-session-btn') as HTMLButtonElement,
+            saveSessionButton: settingsModalElement.querySelector('#settings-save-session-btn') as HTMLButtonElement
         };
 
         setupEventListeners();
@@ -142,6 +165,19 @@ function openSettingsModal(): void {
  */
 function setupEventListeners(): void {
     if (!refs) return;
+
+    refs.toggleApiKeyButton.addEventListener('click', function() {
+        const isPassword = refs!.apiKeyInput.type === 'password';
+        refs!.apiKeyInput.type = isPassword ? 'text' : 'password';
+        refs!.toggleApiKeyButton.textContent = isPassword ? '🔒' : '👁';
+    });
+
+    refs.apiKeyInput.addEventListener('change', async function() {
+        const key = refs!.apiKeyInput.value.trim();
+        if (key) {
+            await saveApiKey(key);
+        }
+    });
 
     refs.promptListSelect.addEventListener('change', function() {
         const selectedId = refs!.promptListSelect.value;
@@ -165,6 +201,21 @@ function setupEventListeners(): void {
     refs.saveSettingsButton.addEventListener('click', async function() {
         await saveSettings();
     });
+
+    refs.sessionListSelect.addEventListener('change', function() {
+        const selectedId = refs!.sessionListSelect.value;
+        selectedSessionIdInModal = selectedId || null;
+        loadSessionIntoEditor(selectedId);
+        updateDeleteSessionButton();
+    });
+
+    refs.deleteSessionButton.addEventListener('click', async function() {
+        await deleteSelectedSession();
+    });
+
+    refs.saveSessionButton.addEventListener('click', async function() {
+        await saveSession();
+    });
 }
 
 /**
@@ -176,9 +227,13 @@ function populateSettingsForm(): void {
 
     refs.minPriceInput.value = config.minPrice !== null ? String(config.minPrice) : '';
     refs.maxPriceInput.value = config.maxPrice !== null ? String(config.maxPrice) : '';
+    refs.apiKeyInput.value = config.openRouterApiKey ?? '';
 
     renderPromptList();
     clearPromptEditor();
+
+    renderSessionList();
+    clearSessionEditor();
 }
 
 /**
@@ -397,4 +452,169 @@ export function getSelectedPromptContent(): string | null {
     if (!config || !config.selectedPromptId) return null;
     const prompt = prompts.find(function(p) { return p.id === config!.selectedPromptId; });
     return prompt?.content ?? null;
+}
+
+/**
+ * Renders the session list from storage
+ * @returns {Promise<void>}
+ */
+async function renderSessionList(): Promise<void> {
+    if (!refs) return;
+
+    const sessions = await storage.listSessions();
+    refs.sessionListSelect.innerHTML = '';
+
+    for (const session of sessions) {
+        const option = document.createElement('option');
+        option.value = session.id;
+        option.textContent = session.name;
+        refs.sessionListSelect.appendChild(option);
+    }
+
+    if (selectedSessionIdInModal && sessions.some(function(s) { return s.id === selectedSessionIdInModal; })) {
+        refs.sessionListSelect.value = selectedSessionIdInModal;
+        loadSessionIntoEditor(selectedSessionIdInModal);
+    } else if (sessions.length > 0) {
+        refs.sessionListSelect.value = sessions[0].id;
+        selectedSessionIdInModal = sessions[0].id;
+        loadSessionIntoEditor(sessions[0].id);
+    }
+
+    updateDeleteSessionButton();
+}
+
+/**
+ * Loads a session into the editor fields
+ * @param {string} sessionId - Session ID to load
+ * @returns {void}
+ */
+function loadSessionIntoEditor(sessionId: string): void {
+    if (!refs) return;
+
+    storage.loadSession(sessionId).then(function(session) {
+        if (session && refs) {
+            refs.sessionNameInput.value = session.name;
+            refs.sessionBackgroundInput.value = session.background ?? '';
+            refs.sessionReasoningSelect.value = session.reasoning ?? 'none';
+        } else if (refs) {
+            refs.sessionNameInput.value = '';
+            refs.sessionBackgroundInput.value = '';
+            refs.sessionReasoningSelect.value = 'none';
+        }
+    });
+}
+
+/**
+ * Clears the session editor fields
+ * @returns {void}
+ */
+function clearSessionEditor(): void {
+    if (!refs) return;
+    refs.sessionNameInput.value = '';
+    refs.sessionBackgroundInput.value = '';
+    refs.sessionReasoningSelect.value = 'none';
+}
+
+/**
+ * Updates the delete session button state
+ * @returns {void}
+ */
+function updateDeleteSessionButton(): void {
+    if (!refs) return;
+
+    const isDefault = selectedSessionIdInModal === 'default';
+    refs.deleteSessionButton.disabled = !selectedSessionIdInModal || isDefault;
+
+    if (isDefault) {
+        refs.deleteSessionButton.title = 'Cannot delete default session';
+    } else {
+        refs.deleteSessionButton.title = 'Delete this session';
+    }
+}
+
+/**
+ * Saves the current session (name and background)
+ * @returns {Promise<void>}
+ */
+async function saveSession(): Promise<void> {
+    if (!refs || !selectedSessionIdInModal) {
+        ui.displayError('No session selected');
+        return;
+    }
+
+    const newName = refs.sessionNameInput.value.trim();
+    if (!newName) {
+        ui.displayError('Session name is required');
+        return;
+    }
+
+    const session = await storage.loadSession(selectedSessionIdInModal);
+    if (!session) {
+        ui.displayError('Session not found');
+        return;
+    }
+
+    session.name = newName;
+    session.background = refs.sessionBackgroundInput.value;
+    session.reasoning = refs.sessionReasoningSelect.value as 'none' | 'minimal' | 'low' | 'medium' | 'high';
+    await storage.saveSession(session);
+
+    await renderSessionList();
+
+    await refreshSessionSelector();
+}
+
+/**
+ * Deletes the selected session
+ * @returns {Promise<void>}
+ */
+async function deleteSelectedSession(): Promise<void> {
+    if (!refs || !selectedSessionIdInModal) {
+        ui.displayError('No session selected');
+        return;
+    }
+
+    if (selectedSessionIdInModal === 'default') {
+        ui.displayError('Cannot delete the default session');
+        return;
+    }
+
+    const success = await storage.deleteSession(selectedSessionIdInModal);
+    if (!success) {
+        ui.displayError('Failed to delete session');
+        return;
+    }
+
+    const sessions = await storage.listSessions();
+    if (sessions.length > 0) {
+        selectedSessionIdInModal = sessions[0].id;
+    } else {
+        selectedSessionIdInModal = 'default';
+    }
+
+    await renderSessionList();
+    await refreshSessionSelector();
+}
+
+/**
+ * Refreshes the main UI session selector
+ * @returns {Promise<void>}
+ */
+async function refreshSessionSelector(): Promise<void> {
+    const selector = document.getElementById('session-selector') as HTMLSelectElement | null;
+    if (!selector) return;
+
+    const sessions = await storage.listSessions();
+    selector.innerHTML = '';
+
+    for (const session of sessions) {
+        const option = document.createElement('option');
+        option.value = session.id;
+        option.textContent = session.name;
+        selector.appendChild(option);
+    }
+
+    const { getCurrentSessionId } = await import('./translation');
+    const currentId = getCurrentSessionId();
+    selector.value = currentId;
 }

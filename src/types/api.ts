@@ -22,6 +22,8 @@ export interface Message {
     images?: ImageObject[];
     refusal?: string;
     tool_calls?: unknown[];
+    reasoning?: string;
+    reasoning_details?: unknown[];
 }
 
 export interface ImageObject {

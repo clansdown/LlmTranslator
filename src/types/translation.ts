@@ -4,8 +4,13 @@
 
 export interface Translation {
     id: string;
+    pill: 'input' | 'output';
     source: string;
     translation: string;
+    explanation: string;
+    nuances: string;
+    reasoning: string;
+    reasoningDetails: string;
     model: string;
     modelName: string;
     prompt: string;

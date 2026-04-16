@@ -3,14 +3,16 @@
  * Handles translation functionality for input and output panes
  */
 
-import { translateText } from './openrouter';
-import { savePreference, saveTranslation, listTranslations } from './storage';
-import { DEBUG_TRANSLATIONS } from './debug';
+import { translateStructured } from './openrouter';
+import { getPreference, listSessions, saveSession, loadSession, deleteSession as storageDeleteSession, getOrCreateDefaultSession, saveSessionTranslation, listSessionTranslations } from './storage';
+import { DEBUG_TRANSLATIONS, DEBUG_SESSIONS } from './debug';
 import * as ui from './ui';
 import { LANGUAGES } from './languages';
-import { INPUT_PROMPT_TEMPLATE, OUTPUT_PROMPT_TEMPLATE } from './prompts';
+import { SYSTEM_PROMPT, INPUT_INSTRUCTIONS, OUTPUT_INSTRUCTIONS } from './prompts';
+import { renderMarkdown } from './markdown';
 import type { Translation } from './types/translation';
 import type { Config } from './types/config';
+import type { TranslationSession } from './types/session';
 
 /**
  * Generates a UUID for translation IDs
@@ -28,6 +30,12 @@ function generateUuid(): string {
  * Application configuration (injected from main.ts)
  */
 let config: Config | null = null;
+
+/**
+ * Current session ID
+ * @type {string}
+ */
+let currentSessionId: string = 'default';
 
 /**
  * In-memory translation arrays - source of truth for translations
@@ -77,7 +85,255 @@ function getModelName(modelId: string): string {
 }
 
 /**
- * Loads translation history from OPFS into memory
+ * Gets the current session ID
+ * @returns {string} Current session ID
+ */
+export function getCurrentSessionId(): string {
+    return currentSessionId;
+}
+
+/**
+ * Loads all sessions from storage
+ * @returns {Promise<TranslationSession[]>} Array of sessions
+ */
+export async function loadSessionsList(): Promise<TranslationSession[]> {
+    return await listSessions();
+}
+
+/**
+ * Switches to a different session
+ * @param {string} sessionId - Session ID to switch to
+ * @returns {Promise<void>}
+ */
+export async function setCurrentSession(sessionId: string): Promise<void> {
+    if (DEBUG_SESSIONS) {
+        console.log(`[setCurrentSession] Switching to session ${sessionId}`);
+    }
+
+    const session = await loadSession(sessionId);
+    if (!session) {
+        if (DEBUG_SESSIONS) {
+            console.error(`[setCurrentSession] Session ${sessionId} not found`);
+        }
+        return;
+    }
+
+    currentSessionId = sessionId;
+
+    inputTranslations = [];
+    outputTranslations = [];
+    clearTranslationContainers();
+
+    const MAX_HISTORY = 1000;
+    inputTranslations = await listSessionTranslations(sessionId, 'input', MAX_HISTORY);
+    outputTranslations = await listSessionTranslations(sessionId, 'output', MAX_HISTORY);
+
+    renderTranslations('input');
+    renderTranslations('output');
+
+    if (config) {
+        if (session.model) {
+            config.selectedModel = session.model;
+        }
+        if (session.promptId) {
+            config.selectedPromptId = session.promptId;
+        }
+    }
+
+    if (session.inputLanguage) {
+        populateLanguageDropdowns(session.inputLanguage);
+    }
+
+    updateSessionSelector(sessionId);
+
+    if (DEBUG_SESSIONS) {
+        console.log(`[setCurrentSession] Switched to session ${sessionId}: ${session.name}`);
+    }
+}
+
+/**
+ * Creates a new session
+ * @returns {Promise<string>} New session ID
+ */
+export async function createSession(name?: string): Promise<string> {
+    if (DEBUG_SESSIONS) {
+        console.log('[createSession] Creating new session');
+    }
+
+    const now = Date.now();
+    const newSession: TranslationSession = {
+        id: generateUuid(),
+        name: name ?? "New Conversation",
+        model: config?.selectedModel ?? null,
+        inputLanguage: getCurrentInputLanguage(),
+        promptId: config?.selectedPromptId ?? null,
+        background: "",
+        reasoning: "none",
+        createdAt: now
+    };
+
+    await saveSession(newSession);
+
+    if (DEBUG_SESSIONS) {
+        console.log(`[createSession] Created session ${newSession.id}: ${newSession.name}`);
+    }
+
+    await setCurrentSession(newSession.id);
+
+    return newSession.id;
+}
+
+/**
+ * Deletes a session
+ * @param {string} sessionId - Session ID to delete
+ * @returns {Promise<boolean>} True if deleted
+ */
+export async function deleteSession(sessionId: string): Promise<boolean> {
+    if (DEBUG_SESSIONS) {
+        console.log(`[deleteSession] Deleting session ${sessionId}`);
+    }
+
+    const result = await storageDeleteSession(sessionId);
+
+    if (result && currentSessionId === sessionId) {
+        await setCurrentSession('default');
+    }
+
+    return result;
+}
+
+/**
+ * Renames a session
+ * @param {string} sessionId - Session ID
+ * @param {string} newName - New name
+ * @returns {Promise<void>}
+ */
+export async function renameSession(sessionId: string, newName: string): Promise<void> {
+    if (DEBUG_SESSIONS) {
+        console.log(`[renameSession] Renaming session ${sessionId} to ${newName}`);
+    }
+
+    const session = await loadSession(sessionId);
+    if (!session) {
+        return;
+    }
+
+    session.name = newName;
+    await saveSession(session);
+
+    if (DEBUG_SESSIONS) {
+        console.log(`[renameSession] Renamed session ${sessionId} to ${newName}`);
+    }
+}
+
+/**
+ * Saves the current session state (model, language, prompt)
+ * @returns {Promise<void>}
+ */
+export async function saveCurrentSession(): Promise<void> {
+    if (DEBUG_SESSIONS) {
+        console.log(`[saveCurrentSession] Saving current session state`);
+    }
+
+    const session = await loadSession(currentSessionId);
+    if (!session) {
+        return;
+    }
+
+    if (config) {
+        session.model = config.selectedModel;
+        session.promptId = config.selectedPromptId;
+    }
+    session.inputLanguage = getCurrentInputLanguage();
+
+    await saveSession(session);
+}
+
+/**
+ * Saves the background for the current session
+ * @param {string} background - Background text
+ * @returns {Promise<void>}
+ */
+export async function saveBackground(background: string): Promise<void> {
+    const session = await loadSession(currentSessionId);
+    if (!session) {
+        return;
+    }
+
+    session.background = background;
+    await saveSession(session);
+}
+
+/**
+ * Gets the background for the current session
+ * @returns {Promise<string>} Background text or empty string
+ */
+export async function getBackground(): Promise<string> {
+    const session = await loadSession(currentSessionId);
+    return session?.background ?? "";
+}
+
+/**
+ * Clears both translation containers in the DOM
+ * @returns {void}
+ */
+function clearTranslationContainers(): void {
+    const inputContainer = document.getElementById('input-translations-container');
+    const outputContainer = document.getElementById('output-translations-container');
+
+    if (inputContainer) {
+        inputContainer.innerHTML = '';
+    }
+    if (outputContainer) {
+        outputContainer.innerHTML = '';
+    }
+}
+
+/**
+ * Updates the session selector dropdown to show the current session
+ * @param {string} sessionId - Current session ID
+ * @returns {void}
+ */
+function updateSessionSelector(sessionId: string): void {
+    const selector = document.getElementById('session-selector') as HTMLSelectElement | null;
+    if (selector) {
+        selector.value = sessionId;
+    }
+}
+
+/**
+ * Gets the currently selected input language from the dropdown
+ * @returns {string} Language ID
+ */
+function getCurrentInputLanguage(): string {
+    const dropdown = document.getElementById('input-language-dropdown') as HTMLSelectElement | null;
+    return dropdown?.value ?? 'english';
+}
+
+/**
+ * Initializes the default session on startup
+ * @returns {Promise<void>}
+ */
+export async function initializeDefaultSession(): Promise<void> {
+    if (DEBUG_SESSIONS) {
+        console.log('[initializeDefaultSession] Initializing default session');
+    }
+
+    const defaultSession = await getOrCreateDefaultSession(
+        config?.selectedModel ?? null,
+        await getPreference('inputLanguage') ?? 'english',
+        config?.selectedPromptId ?? null
+    );
+
+    currentSessionId = defaultSession.id;
+
+    if (DEBUG_SESSIONS) {
+        console.log(`[initializeDefaultSession] Default session: ${defaultSession.id}: ${defaultSession.name}`);
+    }
+}
+
+/**
+ * Loads translation history for the current session from OPFS into memory
  * @returns {Promise<void>}
  */
 export async function loadTranslationHistory(): Promise<void> {
@@ -86,23 +342,67 @@ export async function loadTranslationHistory(): Promise<void> {
     }
     const MAX_HISTORY = 1000;
 
-    const inputHistory = await listTranslations('input', MAX_HISTORY);
+    inputTranslations = await listSessionTranslations(currentSessionId, 'input', MAX_HISTORY);
     if (DEBUG_TRANSLATIONS) {
-        console.log(`[loadTranslationHistory] Loaded ${inputHistory.length} input translations`);
+        console.log(`[loadTranslationHistory] Loaded ${inputTranslations.length} input translations`);
     }
-    inputTranslations = inputHistory;
     renderTranslations('input');
 
-    const outputHistory = await listTranslations('output', MAX_HISTORY);
+    outputTranslations = await listSessionTranslations(currentSessionId, 'output', MAX_HISTORY);
     if (DEBUG_TRANSLATIONS) {
-        console.log(`[loadTranslationHistory] Loaded ${outputHistory.length} output translations`);
+        console.log(`[loadTranslationHistory] Loaded ${outputTranslations.length} output translations`);
     }
-    outputTranslations = outputHistory;
     renderTranslations('output');
 
     if (DEBUG_TRANSLATIONS) {
         console.log('[loadTranslationHistory] Translation history loaded');
     }
+}
+
+/**
+ * Builds the history section for the user message
+ * Returns history from the last 7 days with activity
+ * @returns {string} History section or empty string
+ */
+function buildHistorySection(): string {
+    const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    const cutoff = now - SEVEN_DAYS_MS;
+
+    const allTranslations: Translation[] = [...inputTranslations, ...outputTranslations];
+
+    const activeDays = new Set<number>();
+    for (const t of allTranslations) {
+        if (t.status === 'complete' && t.timestamp >= cutoff) {
+            const dayStart = new Date(t.timestamp).setHours(0, 0, 0, 0);
+            activeDays.add(dayStart);
+        }
+    }
+
+    if (activeDays.size === 0) {
+        return "";
+    }
+
+    const translationsWithinDays = allTranslations.filter(function(t) {
+        if (t.status !== 'complete') return false;
+        const dayStart = new Date(t.timestamp).setHours(0, 0, 0, 0);
+        return activeDays.has(dayStart);
+    });
+
+    translationsWithinDays.sort(function(a, b) { return a.timestamp - b.timestamp; });
+
+    let history = "<HISTORY>\n";
+    for (const t of translationsWithinDays) {
+        if (t.pill === 'input') {
+            history += `<THEM>${t.source}</THEM>\n`;
+            history += `<THEM>${t.translation}</THEM>\n`;
+        } else {
+            history += `<ME>${t.source}</ME>\n`;
+            history += `<ME>${t.translation}</ME>\n`;
+        }
+    }
+    history += "</HISTORY>";
+    return history;
 }
 
 /**
@@ -185,7 +485,11 @@ export function setupLanguageDropdownHandlers(): void {
     if (inputDropdown) {
         inputDropdown.addEventListener('change', async function() {
             const langId = inputDropdown.value;
-            await savePreference('inputLanguage', langId);
+            const session = await loadSession(currentSessionId);
+            if (session) {
+                session.inputLanguage = langId;
+                await saveSession(session);
+            }
         });
     }
 }
@@ -207,6 +511,33 @@ export function updateButtonStates(): void {
     if (outputBtn) {
         outputBtn.disabled = !hasModel;
     }
+}
+
+/**
+ * Builds the complete user message for structured translation
+ * @param {'input' | 'output'} pill - Which pane
+ * @param {string} sourceText - Text to translate
+ * @param {string} instructions - Instruction text (language or prompt instructions)
+ * @returns {Promise<string>} Complete user message
+ */
+async function buildUserMessage(pill: 'input' | 'output', sourceText: string, instructions: string): Promise<string> {
+    const background = await getBackground();
+
+    let message = "";
+
+    if (background.trim()) {
+        message += `<BACKGROUND>${background}</BACKGROUND>\n\n`;
+    }
+
+    const history = buildHistorySection();
+    if (history) {
+        message += history + "\n\n";
+    }
+
+    message += `<TRANSLATE>${sourceText}</TRANSLATE>\n\n`;
+    message += `<INSTRUCTIONS>${instructions}</INSTRUCTIONS>`;
+
+    return message;
 }
 
 /**
@@ -243,7 +574,7 @@ export async function translate(pill: 'input' | 'output'): Promise<void> {
     const translations = pill === 'input' ? inputTranslations : outputTranslations;
 
     let promptName: string;
-    let promptContent: string;
+    let instructions: string;
 
     if (pill === 'input') {
         const languageDropdown = document.getElementById('input-language-dropdown') as HTMLSelectElement | null;
@@ -260,7 +591,7 @@ export async function translate(pill: 'input' | 'output'): Promise<void> {
         }
 
         promptName = language.name;
-        promptContent = INPUT_PROMPT_TEMPLATE.replace('[LANGUAGE]', language.name);
+        instructions = INPUT_INSTRUCTIONS.replace('[LANGUAGE]', language.name);
     } else {
         const promptDropdown = document.getElementById('prompt-dropdown') as HTMLSelectElement | null;
         if (!promptDropdown) {
@@ -283,17 +614,27 @@ export async function translate(pill: 'input' | 'output'): Promise<void> {
         }
 
         promptName = selectedPrompt.name;
-        promptContent = OUTPUT_PROMPT_TEMPLATE.replace('[PROMPT]', selectedPrompt.content);
+        instructions = OUTPUT_INSTRUCTIONS.replace('[PROMPT]', selectedPrompt.content);
     }
+
+    const userMessage = await buildUserMessage(pill, sourceText, instructions);
+
+    const session = await loadSession(currentSessionId);
+    const reasoningLevel = session?.reasoning ?? 'none';
 
     const translation: Translation = {
         id: generateUuid(),
+        pill: pill,
         source: sourceText,
         translation: '',
+        explanation: '',
+        nuances: '',
+        reasoning: '',
+        reasoningDetails: '',
         model: config.selectedModel,
         modelName: getModelName(config.selectedModel),
         prompt: promptName,
-        promptContent: promptContent,
+        promptContent: instructions,
         timestamp: Date.now(),
         status: 'pending',
         error: null
@@ -303,16 +644,23 @@ export async function translate(pill: 'input' | 'output'): Promise<void> {
     renderTranslations(pill);
 
     try {
-        const result = await translateText(
+        const result = await translateStructured(
             config.openRouterApiKey,
-            translation.source,
-            translation.promptContent,
-            config.selectedModel
+            userMessage,
+            SYSTEM_PROMPT,
+            config.selectedModel,
+            reasoningLevel
         );
 
-        translation.translation = result;
+        translation.translation = result.translation;
+        translation.explanation = result.explanation;
+        translation.nuances = result.nuances;
+        translation.reasoning = result.reasoning;
+        translation.reasoningDetails = result.reasoningDetails;
+        translation.explanation = result.explanation;
+        translation.nuances = result.nuances;
         translation.status = 'complete';
-        saveTranslation(pill, translation);
+        saveSessionTranslation(currentSessionId, translation);
     } catch (error) {
         translation.status = 'error';
         translation.error = error instanceof Error ? error.message : "Translation failed";
@@ -341,6 +689,27 @@ async function refreshBalance(): Promise<void> {
 }
 
 /**
+ * Sets up toggle visibility for explanation/nuances sections
+ * @param {HTMLElement} element - The translation item element
+ * @param {Translation} translation - The translation object
+ * @returns {void}
+ */
+function setupToggleHandler(element: HTMLElement, translation: Translation): void {
+    const toggleBtns = element.querySelectorAll('.toggle-section-btn');
+    toggleBtns.forEach(function(btn) {
+        const targetId = btn.getAttribute('data-target');
+        const targetEl = element.querySelector('.' + targetId);
+        if (targetEl) {
+            btn.addEventListener('click', function() {
+                const isHidden = targetEl.style.display === 'none' || targetEl.style.display === '';
+                targetEl.style.display = isHidden ? 'block' : 'none';
+                btn.textContent = isHidden ? '▲' : '▼';
+            });
+        }
+    });
+}
+
+/**
  * Renders translations for the specified pane
  * @param {'input' | 'output'} pill - Which pane to render
  * @returns {void}
@@ -355,7 +724,7 @@ export function renderTranslations(pill: 'input' | 'output'): void {
 
     const translations = pill === 'input' ? inputTranslations : outputTranslations;
 
-    for (let i = 0; i < translations.length; i++) {
+    for (let i = translations.length - 1; i >= 0; i--) {
         const translation = translations[i];
         const elementId = 'translation-' + translation.id;
         let element = document.getElementById(elementId);
@@ -383,8 +752,7 @@ export function renderTranslations(pill: 'input' | 'output'): void {
 
             if (copySourceBtn) {
                 copySourceBtn.addEventListener('click', function() {
-                    const text = sourceEl?.textContent ?? '';
-                    navigator.clipboard.writeText(text).catch(function() {
+                    navigator.clipboard.writeText(translation.source).catch(function() {
                         console.log('Failed to copy source text');
                     });
                 });
@@ -392,20 +760,21 @@ export function renderTranslations(pill: 'input' | 'output'): void {
 
             if (copyTargetBtn) {
                 copyTargetBtn.addEventListener('click', function() {
-                    const text = targetEl?.textContent ?? '';
-                    if (text) {
-                        navigator.clipboard.writeText(text).catch(function() {
-                            console.log('Failed to copy translation text');
-                        });
-                    }
+                    navigator.clipboard.writeText(translation.translation).catch(function() {
+                        console.log('Failed to copy translation text');
+                    });
                 });
             }
+
+            setupToggleHandler(element, translation);
 
             container.insertBefore(element, container.firstChild);
         }
 
         const sourceEl = element.querySelector('.translation-source') as HTMLElement | null;
         const targetEl = element.querySelector('.translation-target') as HTMLElement | null;
+        const explanationEl = element.querySelector('.translation-explanation') as HTMLElement | null;
+        const nuancesEl = element.querySelector('.translation-nuances') as HTMLElement | null;
         const spinnerEl = element.querySelector('.translation-spinner') as HTMLElement | null;
         const errorEl = element.querySelector('.translation-error') as HTMLElement | null;
         const promptEl = element.querySelector('.translation-prompt') as HTMLElement | null;
@@ -426,12 +795,16 @@ export function renderTranslations(pill: 'input' | 'output'): void {
             if (spinnerEl) spinnerEl.style.display = 'block';
             if (errorEl) errorEl.style.display = 'none';
             if (targetEl) targetEl.style.display = 'none';
+            if (explanationEl) explanationEl.style.display = 'none';
+            if (nuancesEl) nuancesEl.style.display = 'none';
             if (charCountEl) {
                 charCountEl.textContent = `(${translation.source.length}/—)`;
             }
         } else if (translation.status === 'error') {
             if (spinnerEl) spinnerEl.style.display = 'none';
             if (targetEl) targetEl.style.display = 'none';
+            if (explanationEl) explanationEl.style.display = 'none';
+            if (nuancesEl) nuancesEl.style.display = 'none';
             if (charCountEl) {
                 charCountEl.textContent = `(${translation.source.length}/—)`;
             }
@@ -447,10 +820,35 @@ export function renderTranslations(pill: 'input' | 'output'): void {
             if (errorEl) errorEl.style.display = 'none';
             if (targetEl) {
                 targetEl.style.display = 'block';
-                targetEl.textContent = translation.translation;
+                targetEl.innerHTML = renderMarkdown(translation.translation);
             }
             if (charCountEl) {
                 charCountEl.textContent = `(${translation.source.length}/${translation.translation.length})`;
+            }
+
+            if (explanationEl) {
+                if (translation.explanation) {
+                    explanationEl.style.display = 'block';
+                    explanationEl.innerHTML = renderMarkdown(translation.explanation);
+                    const toggleBtn = element.querySelector('.toggle-explanation-btn');
+                    if (toggleBtn) toggleBtn.textContent = '▼';
+                } else {
+                    explanationEl.style.display = 'none';
+                    const toggleBtn = element.querySelector('.toggle-explanation-btn');
+                    if (toggleBtn) toggleBtn.textContent = '▼';
+                }
+            }
+            if (nuancesEl) {
+                if (translation.nuances) {
+                    nuancesEl.style.display = 'block';
+                    nuancesEl.innerHTML = renderMarkdown(translation.nuances);
+                    const toggleBtn = element.querySelector('.toggle-nuances-btn');
+                    if (toggleBtn) toggleBtn.textContent = '▼';
+                } else {
+                    nuancesEl.style.display = 'none';
+                    const toggleBtn = element.querySelector('.toggle-nuances-btn');
+                    if (toggleBtn) toggleBtn.textContent = '▼';
+                }
             }
         }
     }
@@ -479,17 +877,27 @@ export async function retryTranslation(pill: 'input' | 'output', translationId: 
     translation.error = null;
     renderTranslations(pill);
 
+    const instructions = translation.promptContent;
+    const userMessage = await buildUserMessage(pill, translation.source, instructions);
+    const session = await loadSession(currentSessionId);
+    const reasoningLevel = session?.reasoning ?? 'none';
+
     try {
-        const result = await translateText(
+        const result = await translateStructured(
             config.openRouterApiKey,
-            translation.source,
-            translation.promptContent,
-            config.selectedModel
+            userMessage,
+            SYSTEM_PROMPT,
+            config.selectedModel,
+            reasoningLevel
         );
 
-        translation.translation = result;
+        translation.translation = result.translation;
+        translation.explanation = result.explanation;
+        translation.nuances = result.nuances;
+        translation.reasoning = result.reasoning;
+        translation.reasoningDetails = result.reasoningDetails;
         translation.status = 'complete';
-        saveTranslation(pill, translation);
+        saveSessionTranslation(currentSessionId, translation);
     } catch (error) {
         translation.status = 'error';
         translation.error = error instanceof Error ? error.message : "Translation failed";

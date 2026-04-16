@@ -145,25 +145,49 @@ async function loadModels(): Promise<void> {
 }
 
 /**
- * Sets the OpenRouter API key in config and persists it to OPFS
- * @param {string} key - API key to set
+ * Saves the API key to config and storage
+ * @param {string} key - API key to save
  * @returns {Promise<void>}
- * @throws {Error} If saving to OPFS fails
  */
-async function setApiKey(key: string): Promise<void> {
-    console.log("[setApiKey] Called with key length:", key.length);
+export async function saveApiKey(key: string): Promise<void> {
+    console.log("[saveApiKey] Saving API key, length:", key.length);
     config.openRouterApiKey = key;
+    await savePreference("apiKey", key);
+    await refreshBalance();
+    await loadModels();
+}
 
-    try {
-        await savePreference("apiKey", key);
-    } catch (error) {
-        ui.displayError(error instanceof Error ? error.message : "Failed to save API key");
-        throw error;
+/**
+ * Checks the URL for a ?key= parameter and uses it if no key is stored
+ * Strips the key parameter from the URL after reading
+ * @returns {Promise<void>}
+ */
+async function loadUrlApiKey(): Promise<void> {
+    const params = new URLSearchParams(window.location.search);
+    const urlKey = params.get('key');
+
+    if (!urlKey) {
+        return;
     }
 
-    await refreshBalance();
-    console.log("[setApiKey] Calling loadModels...");
-    await loadModels();
+    console.log("[loadUrlApiKey] Found key in URL");
+
+    params.delete('key');
+    const newUrl = window.location.pathname +
+        (params.toString() ? '?' + params.toString() : '') +
+        window.location.hash;
+    history.replaceState(null, '', newUrl);
+
+    if (!config.openRouterApiKey) {
+        try {
+            await saveApiKey(urlKey);
+            console.log("[loadUrlApiKey] API key set from URL");
+        } catch (error) {
+            ui.displayError(error instanceof Error ? error.message : "Failed to set API key from URL");
+        }
+    } else {
+        console.log("[loadUrlApiKey] API key already set, ignoring URL key");
+    }
 }
 
 /**
@@ -173,34 +197,12 @@ async function setApiKey(key: string): Promise<void> {
 async function loadApiKey(): Promise<void> {
     try {
         const key = await getPreference("apiKey");
-        if (key) {
-            await setApiKey(key);
+        if (key && !config.openRouterApiKey) {
+            await saveApiKey(key);
         }
     } catch (error) {
         ui.displayError(error instanceof Error ? error.message : "Failed to load API key");
     }
-}
-
-/**
- * Sets up the API key input change handler
- * @returns {void}
- */
-function setupApiKeyInput(): void {
-    const input = document.getElementById("api-key-input") as HTMLInputElement | null;
-    if (!input) {
-        return;
-    }
-
-    input.addEventListener("change", async function(): Promise<void> {
-        const key = input.value.trim();
-        if (key) {
-            try {
-                await setApiKey(key);
-            } catch (error) {
-                // Error already displayed in setApiKey
-            }
-        }
-    });
 }
 
 /**
@@ -257,11 +259,27 @@ export async function init(): Promise<void> {
 
     await loadSettings();
 
-    const inputLanguage = await getPreference("inputLanguage") ?? "english";
-    translation.populateLanguageDropdowns(inputLanguage);
+    await loadUrlApiKey();
+
+    await translation.initializeDefaultSession();
+    await populateSessionSelector();
+
+    const sessions = await translation.loadSessionsList();
+    if (sessions.length > 0) {
+        const currentId = translation.getCurrentSessionId();
+        const session = sessions.find(function(s) { return s.id === currentId; });
+        if (session) {
+            if (session.inputLanguage) {
+                translation.populateLanguageDropdowns(session.inputLanguage);
+            }
+        }
+    }
+
     translation.setupLanguageDropdownHandlers();
     translation.setupTranslateButtons();
     translation.setupTextareaKeyHandlers();
+    setupSessionSelectorHandler();
+    setupNewSessionButtonHandler();
     await translation.loadTranslationHistory();
 
     settings.setConfig(config);
@@ -272,29 +290,67 @@ export async function init(): Promise<void> {
     settings.setupPromptDropdown();
     settings.updatePromptDropdown();
 
-    setupApiKeyToggle();
-    setupApiKeyInput();
     setupModelSelector();
     await loadApiKey();
     console.log("LLM Translator initialized");
 }
 
 /**
- * Sets up the API key visibility toggle button
- * @returns {void}
+ * Populates the session selector dropdown with available sessions
+ * @returns {Promise<void>}
  */
-function setupApiKeyToggle(): void {
-    const toggleButton = document.getElementById("toggle-key-visibility");
-    const apiKeyInput = document.getElementById("api-key-input") as HTMLInputElement | null;
+async function populateSessionSelector(): Promise<void> {
+    const selector = document.getElementById("session-selector") as HTMLSelectElement | null;
+    if (!selector) return;
 
-    if (!toggleButton || !apiKeyInput) {
-        return;
+    const sessions = await translation.loadSessionsList();
+    selector.innerHTML = "";
+
+    for (const session of sessions) {
+        const option = document.createElement("option");
+        option.value = session.id;
+        option.textContent = session.name;
+        selector.appendChild(option);
     }
 
-    toggleButton.addEventListener("click", function(): void {
-        const isPassword = apiKeyInput.type === "password";
-        apiKeyInput.type = isPassword ? "text" : "password";
-        toggleButton.textContent = isPassword ? "🔒" : "👁";
+    const currentId = translation.getCurrentSessionId();
+    selector.value = currentId;
+}
+
+/**
+ * Sets up the session selector change handler
+ * @returns {void}
+ */
+function setupSessionSelectorHandler(): void {
+    const selector = document.getElementById("session-selector") as HTMLSelectElement | null;
+    if (!selector) return;
+
+    selector.addEventListener("change", async function(): Promise<void> {
+        const newSessionId = selector.value;
+        if (newSessionId) {
+            await translation.saveCurrentSession();
+            await translation.setCurrentSession(newSessionId);
+        }
+    });
+}
+
+/**
+ * Sets up the new session button click handler
+ * @returns {void}
+ */
+function setupNewSessionButtonHandler(): void {
+    const button = document.getElementById("new-session-btn");
+    if (!button) return;
+
+    button.addEventListener("click", async function(): Promise<void> {
+        const name = window.prompt("Enter a name for the new conversation:", "New Conversation");
+        await translation.saveCurrentSession();
+        const newSessionId = await translation.createSession(name ?? undefined);
+        await populateSessionSelector();
+        const selector = document.getElementById("session-selector") as HTMLSelectElement | null;
+        if (selector) {
+            selector.value = newSessionId;
+        }
     });
 }
 

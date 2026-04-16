@@ -4,3 +4,4 @@
  */
 
 export const DEBUG_TRANSLATIONS = true;
+export const DEBUG_SESSIONS = true;

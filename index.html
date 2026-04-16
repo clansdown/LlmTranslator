@@ -46,28 +46,70 @@
             padding: 1rem 0;
         }
 
-        .api-key-wrapper {
-            position: relative;
-        }
-
-        .api-key-wrapper .btn-toggle-visibility {
-            position: absolute;
-            right: 0.25rem;
-            top: 50%;
-            transform: translateY(-50%);
-            padding: 0.25rem 0.5rem;
-            background: transparent;
-            border: none;
-            color: var(--bs-secondary-color);
-            cursor: pointer;
-        }
-
-        .api-key-wrapper .btn-toggle-visibility:hover {
-            color: var(--bs-body-color);
-        }
-
         .text-justify {
             /* text-align: justify; */
+        }
+
+        .translation-target,
+        .translation-explanation,
+        .translation-nuances {
+            font-size: 0.9rem;
+        }
+
+        .translation-target p,
+        .translation-explanation p,
+        .translation-nuances p {
+            margin-bottom: 0.5rem;
+        }
+
+        .translation-target p:last-child,
+        .translation-explanation p:last-child,
+        .translation-nuances p:last-child {
+            margin-bottom: 0;
+        }
+
+        .translation-target code,
+        .translation-explanation code,
+        .translation-nuances code {
+            background: var(--bs-tertiary-bg);
+            padding: 0.125rem 0.25rem;
+            border-radius: 0.25rem;
+            font-size: 0.85em;
+        }
+
+        .translation-target pre,
+        .translation-explanation pre,
+        .translation-nuances pre {
+            background: var(--bs-tertiary-bg);
+            padding: 0.5rem;
+            border-radius: 0.375rem;
+            overflow-x: auto;
+        }
+
+        .translation-target pre code,
+        .translation-explanation pre code,
+        .translation-nuances pre code {
+            background: none;
+            padding: 0;
+        }
+
+        .translation-target ul,
+        .translation-explanation ul,
+        .translation-nuances ul,
+        .translation-target ol,
+        .translation-explanation ol,
+        .translation-nuances ol {
+            margin-bottom: 0.5rem;
+            padding-left: 1.5rem;
+        }
+
+        .translation-target blockquote,
+        .translation-explanation blockquote,
+        .translation-nuances blockquote {
+            border-left: 3px solid var(--bs-border-color);
+            padding-left: 0.75rem;
+            margin-left: 0;
+            color: var(--bs-secondary-color);
         }
     </style>
 </head>
@@ -75,24 +117,24 @@
     <div class="container-fluid">
         <div class="toolbar-sticky">
             <div class="row g-2 align-items-center">
-                <div class="col-md-6">
+                <div class="col-md-4">
                     <select class="form-select" id="model-selector" aria-label="Model selection" disabled>
                         <option value="">Select model...</option>
                     </select>
                 </div>
-                <div class="col-md-4">
-                    <div class="api-key-wrapper">
-                        <label for="api-key-input" class="visually-hidden">OpenRouter API Key</label>
-                        <input type="password" id="api-key-input" class="form-control" placeholder="OpenRouter API Key" aria-label="OpenRouter API Key">
-                        <button type="button" class="btn-toggle-visibility" id="toggle-key-visibility" aria-label="Toggle API key visibility">👁</button>
-                    </div>
+                <div class="col-auto">
+                    <button type="button" class="btn btn-outline-primary btn-sm" id="new-session-btn" aria-label="New conversation" title="Start a new conversation">+</button>
                 </div>
-                <div class="col-md-1 text-end">
-                    <button type="button" class="btn btn-outline-secondary" id="config-button">
+                <div class="col">
+                    <select class="form-select form-select-sm" id="session-selector" aria-label="Conversation selection">
+                    </select>
+                </div>
+                <div class="col-md-auto text-end">
+                    <button type="button" class="btn btn-outline-secondary" id="config-button" title="Open configuration settings">
                         ⚙ 
                     </button>
                 </div>
-                <div class="col-md-1 text-end">
+                <div class="col-md-auto text-end">
                     <span class="balance-display" id="balance-display" title="OpenRouter balance">--</span>
                 </div>
             </div>
@@ -172,7 +214,7 @@
                 </div>
             </div>
             <div class="row px-3">
-                <div class="col text-justify translation-source p-2" style=" border-bottom: 1px solid var(--bs-border-color); white-space: pre-wrap;"></div>
+                <div class="col text-justify translation-source p-2" style="border-bottom: 1px solid var(--bs-border-color); white-space: pre-wrap;"></div>
                 <div class="col-auto p-1">
                     <button type="button" class="btn btn-sm btn-outline-secondary copy-source-btn" title="Copy to clipboard">📋</button>
                 </div>
@@ -181,6 +223,18 @@
                 <div class="col text-justify translation-target p-2" style="white-space: pre-wrap;"></div>
                 <div class="col-auto p-1">
                     <button type="button" class="btn btn-sm btn-outline-secondary copy-target-btn" title="Copy to clipboard">📋</button>
+                </div>
+            </div>
+            <div class="translation-sections px-3 pb-2">
+                <div class="translation-explanation-content mt-2">
+                    <button type="button" class="btn btn-sm btn-link p-0 text-decoration-none toggle-section-btn" data-target="translation-explanation">▼</button>
+                    <span class="ms-1 fw-semibold">Explanation</span>
+                    <div class="translation-explanation small text-justify mt-1 ps-4" style="display: none; white-space: pre-wrap;"></div>
+                </div>
+                <div class="translation-nuances-content mt-2">
+                    <button type="button" class="btn btn-sm btn-link p-0 text-decoration-none toggle-section-btn" data-target="translation-nuances">▼</button>
+                    <span class="ms-1 fw-semibold">Nuances</span>
+                    <div class="translation-nuances small text-justify mt-1 ps-4" style="display: none; white-space: pre-wrap;"></div>
                 </div>
             </div>
             <div class="translation-spinner" style="display: none; padding: 1rem; text-align: center;">
@@ -204,34 +258,93 @@
                         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                     </div>
                     <div class="modal-body">
-                        <h6>Model Price Filter ($ per million tokens)</h6>
-                        <div class="row g-2 mb-4">
-                            <div class="col">
-                                <label for="settings-min-price" class="form-label">Min Price</label>
-                                <input type="number" id="settings-min-price" class="form-control" min="0" step="0.01" placeholder="0.00">
-                            </div>
-                            <div class="col">
-                                <label for="settings-max-price" class="form-label">Max Price</label>
-                                <input type="number" id="settings-max-price" class="form-control" min="0" step="0.01" placeholder="No limit">
-                            </div>
-                        </div>
-                        <hr>
-                        <h6>Prompts</h6>
-                        <div class="row mt-3">
-                            <div class="col-md-4">
-                                <select id="settings-prompt-list" class="form-select" size="8">
-                                </select>
-                                <div class="mt-2">
-                                    <button type="button" class="btn btn-sm btn-outline-primary" id="settings-add-prompt-btn">Add</button>
-                                    <button type="button" class="btn btn-sm btn-outline-danger ms-1" id="settings-delete-prompt-btn">Delete</button>
+                        <ul class="nav nav-tabs mb-3" role="tablist">
+                            <li class="nav-item" role="presentation">
+                                <button type="button" class="nav-link active" id="settings-tab-btn" data-bs-toggle="tab" data-bs-target="#settings-content" role="tab" aria-controls="settings-content" aria-selected="true">Settings</button>
+                            </li>
+                            <li class="nav-item" role="presentation">
+                                <button type="button" class="nav-link" id="conversations-tab-btn" data-bs-toggle="tab" data-bs-target="#conversations-content" role="tab" aria-controls="conversations-content" aria-selected="false">Conversations</button>
+                            </li>
+                        </ul>
+                        <div class="tab-content" id="settings-tab-content">
+                            <div class="tab-pane fade show active" id="settings-content" role="tabpanel" aria-labelledby="settings-tab-btn">
+                                <h6>OpenRouter API Key</h6>
+                                <div class="mb-3">
+                                    <div class="input-group">
+                                        <input type="password" id="settings-api-key" class="form-control" 
+                                               placeholder="Enter your OpenRouter API key"
+                                               title="Your OpenRouter API key for accessing translation models">
+                                        <button type="button" class="btn btn-outline-secondary" 
+                                                id="settings-toggle-key-visibility" 
+                                                title="Show or hide the API key"
+                                                aria-label="Toggle API key visibility">👁</button>
+                                    </div>
+                                </div>
+                                <hr>
+                                <h6>Model Price Filter ($ per million tokens)</h6>
+                                <div class="row g-2 mb-4">
+                                    <div class="col">
+                                        <label for="settings-min-price" class="form-label">Min Price</label>
+                                        <input type="number" id="settings-min-price" class="form-control" min="0" step="0.01" placeholder="0.00">
+                                    </div>
+                                    <div class="col">
+                                        <label for="settings-max-price" class="form-label">Max Price</label>
+                                        <input type="number" id="settings-max-price" class="form-control" min="0" step="0.01" placeholder="No limit">
+                                    </div>
+                                </div>
+                                <hr>
+                                <h6>Prompts</h6>
+                                <div class="row mt-3">
+                                    <div class="col-md-4">
+                                        <select id="settings-prompt-list" class="form-select" size="8">
+                                        </select>
+                                        <div class="mt-2">
+                                            <button type="button" class="btn btn-sm btn-outline-primary" id="settings-add-prompt-btn">Add</button>
+                                            <button type="button" class="btn btn-sm btn-outline-danger ms-1" id="settings-delete-prompt-btn">Delete</button>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-8">
+                                        <div class="mb-2">
+                                            <input type="text" id="settings-prompt-name" class="form-control" placeholder="Prompt name">
+                                        </div>
+                                        <textarea id="settings-prompt-content" class="form-control" rows="6" placeholder="Enter prompt text..."></textarea>
+                                        <button type="button" class="btn btn-sm btn-primary mt-2" id="settings-save-prompt-btn">Save Prompt</button>
+                                    </div>
                                 </div>
                             </div>
-                            <div class="col-md-8">
-                                <div class="mb-2">
-                                    <input type="text" id="settings-prompt-name" class="form-control" placeholder="Prompt name">
+                            <div class="tab-pane fade" id="conversations-content" role="tabpanel" aria-labelledby="conversations-tab-btn">
+                                <h6>Conversations</h6>
+                                <div class="row mt-3">
+                                    <div class="col-md-5">
+                                        <select id="settings-session-list" class="form-select" size="8">
+                                        </select>
+                                        <div class="mt-2">
+                                            <button type="button" class="btn btn-sm btn-outline-danger" id="settings-delete-session-btn" disabled>Delete</button>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-7">
+                                        <div class="mb-2">
+                                            <label for="settings-session-name" class="form-label">Conversation Name</label>
+                                            <input type="text" id="settings-session-name" class="form-control" placeholder="Enter conversation name">
+                                        </div>
+                                        <div class="mb-2">
+                                            <label for="settings-session-background" class="form-label">Background</label>
+                                            <textarea id="settings-session-background" class="form-control" rows="4" placeholder="Context for the AI about who you're talking to, what the conversation is about, etc."></textarea>
+                                        </div>
+                                        <div class="mb-2">
+                                            <label for="settings-session-reasoning" class="form-label">Reasoning Level</label>
+                                            <select id="settings-session-reasoning" class="form-select" 
+                                                    title="Controls how much reasoning the model does before responding">
+                                                <option value="none">None</option>
+                                                <option value="minimal">Minimal</option>
+                                                <option value="low">Low</option>
+                                                <option value="medium">Medium</option>
+                                                <option value="high">High</option>
+                                            </select>
+                                        </div>
+                                        <button type="button" class="btn btn-sm btn-primary" id="settings-save-session-btn">Save</button>
+                                    </div>
                                 </div>
-                                <textarea id="settings-prompt-content" class="form-control" rows="6" placeholder="Enter prompt text..."></textarea>
-                                <button type="button" class="btn btn-sm btn-primary mt-2" id="settings-save-prompt-btn">Save Prompt</button>
                             </div>
                         </div>
                     </div>

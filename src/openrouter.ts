@@ -572,3 +572,113 @@ export async function translateText(
     }
     return "";
 }
+
+/**
+ * Result of a structured translation
+ */
+export interface TranslationResult {
+    translation: string;
+    explanation: string;
+    nuances: string;
+    reasoning: string;
+    reasoningDetails: string;
+}
+
+/**
+ * Parses a tagged section from the response content
+ * @param {string} content - Full response content
+ * @param {string} tag - Tag name to extract (e.g., "TRANSLATION")
+ * @returns {string} Content inside the tag, or empty string if not found
+ */
+function parseTag(content: string, tag: string): string {
+    const regex = new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'i');
+    const match = content.match(regex);
+    return match ? match[1].trim() : '';
+}
+
+/**
+ * Translates text using OpenRouter with structured XML response
+ * @param {string} apiKey - OpenRouter API key
+ * @param {string} userMessage - Complete user message with BACKGROUND, HISTORY, TRANSLATE, INSTRUCTIONS
+ * @param {string} systemPrompt - System prompt
+ * @param {string} model - Model ID to use
+ * @param {string} reasoningLevel - Reasoning effort level ('none' | 'minimal' | 'low' | 'medium' | 'high')
+ * @returns {Promise<TranslationResult>} Object containing translation, explanation, nuances, reasoning
+ * @throws {Error} If API request fails
+ */
+export async function translateStructured(
+    apiKey: string,
+    userMessage: string,
+    systemPrompt: string,
+    model: string,
+    reasoningLevel: string = 'none'
+): Promise<TranslationResult> {
+    /** @type {Array<{role: string; content: string}>} */
+    const messages: Array<{role: string; content: string}> = [];
+
+    messages.push({
+        role: "system",
+        content: systemPrompt
+    });
+
+    messages.push({
+        role: "user",
+        content: userMessage
+    });
+
+    /** @type {object} */
+    const body: Record<string, unknown> = {
+        model: model,
+        messages: messages,
+        provider: {
+            zdr: true
+        }
+    };
+
+    if (reasoningLevel !== 'none') {
+        body.reasoning = {
+            effort: reasoningLevel
+        };
+    }
+
+    const response = await fetch(OPENROUTER_BASE_URL + "/chat/completions", {
+        method: "POST",
+        headers: {
+            "Authorization": "Bearer " + apiKey,
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify(body)
+    });
+
+    if (!response.ok) {
+        const text = await response.text();
+        let errorMessage = "Translation failed: " + response.status;
+
+        try {
+            const errorData = JSON.parse(text);
+            if (errorData.error && errorData.error.message) {
+                errorMessage = errorData.error.message;
+            }
+        } catch (e) {
+            if (text && text.trim().length > 0) {
+                errorMessage = text;
+            }
+        }
+
+        throw new Error(errorMessage);
+    }
+
+    const data = await response.json() as ChatCompletionResponse;
+    const message = data.choices && data.choices.length > 0 ? data.choices[0].message : null;
+    const content = message?.content ?? "";
+    const reasoning = message?.reasoning ?? "";
+    const reasoningDetails = JSON.stringify(message?.reasoning_details ?? []);
+
+    return {
+        translation: parseTag(content, 'TRANSLATION'),
+        explanation: parseTag(content, 'EXPLANATION'),
+        nuances: parseTag(content, 'NUANCES'),
+        reasoning: reasoning,
+        reasoningDetails: reasoningDetails
+    };
+}

@@ -27,7 +27,8 @@
 import type { Conversation, ConversationSummary } from './types/state';
 import type { Prompt } from './types/prompt';
 import type { Translation } from './types/translation';
-import { DEBUG_TRANSLATIONS } from './debug';
+import type { TranslationSession } from './types/session';
+import { DEBUG_TRANSLATIONS, DEBUG_SESSIONS } from './debug';
 import { saveImageToExternal, saveConversationToExternal, saveSummaryToExternal, saveReferenceImageToExternal } from './externalSync';
 
 const STORAGE_PREFERENCES_DIR: string = "preferences";
@@ -38,6 +39,9 @@ const STORAGE_PROMPTS_DIR: string = "prompts";
 const STORAGE_TRANSLATIONS_DIR: string = "translations";
 const STORAGE_INPUT_DIR: string = "input";
 const STORAGE_OUTPUT_DIR: string = "output";
+const STORAGE_SESSIONS_DIR: string = "sessions";
+const STORAGE_SESSION_TRANSLATIONS_DIR: string = "translations";
+const DEFAULT_SESSION_ID: string = "default";
 
 /**
  * Gets the OPFS root directory handle
@@ -920,5 +924,290 @@ export async function listTranslations(pill: 'input' | 'output', limit: number =
             console.error("[listTranslations] Error:", e);
         }
         return [];
+    }
+}
+
+/**
+ * Gets the directory handle for a session
+ * @param {string} sessionId - Session ID
+ * @returns {Promise<FileSystemDirectoryHandle>} Session directory handle
+ */
+async function getSessionDirectory(sessionId: string): Promise<FileSystemDirectoryHandle> {
+    const root = await getOPFSHandle();
+    const sessionsDir = await ensureDirectory(root, STORAGE_SESSIONS_DIR);
+    const sessionDir = await ensureDirectory(sessionsDir, sessionId);
+    return await ensureDirectory(sessionDir, STORAGE_SESSION_TRANSLATIONS_DIR);
+}
+
+/**
+ * Saves a session to OPFS
+ * @param {TranslationSession} session - Session object to save
+ * @returns {Promise<void>}
+ */
+export async function saveSession(session: TranslationSession): Promise<void> {
+    if (DEBUG_SESSIONS) {
+        console.log(`[saveSession] Saving session ${session.id}: ${session.name}`);
+    }
+    try {
+        const root = await getOPFSHandle();
+        const sessionsDir = await ensureDirectory(root, STORAGE_SESSIONS_DIR);
+        const sessionDir = await ensureDirectory(sessionsDir, session.id);
+        const fileHandle = await sessionDir.getFileHandle("session.json", { create: true });
+        const writable = await fileHandle.createWritable();
+        await writable.write(JSON.stringify(session, null, 2));
+        await writable.close();
+        if (DEBUG_SESSIONS) {
+            console.log(`[saveSession] Saved session ${session.id} successfully`);
+        }
+    } catch (e) {
+        if (DEBUG_SESSIONS) {
+            console.error("[saveSession] Error saving session:", e);
+        }
+    }
+}
+
+/**
+ * Loads a session from OPFS
+ * @param {string} sessionId - Session ID to load
+ * @returns {Promise<TranslationSession | null>} Session object or null if not found
+ */
+export async function loadSession(sessionId: string): Promise<TranslationSession | null> {
+    if (DEBUG_SESSIONS) {
+        console.log(`[loadSession] Loading session ${sessionId}`);
+    }
+    try {
+        const root = await getOPFSHandle();
+        const sessionsDir = await ensureDirectory(root, STORAGE_SESSIONS_DIR);
+        const sessionDir = await sessionsDir.getDirectoryHandle(sessionId);
+        const fileHandle = await sessionDir.getFileHandle("session.json");
+        const file = await fileHandle.getFile();
+        const content = await file.text();
+        const session = JSON.parse(content) as TranslationSession;
+        if (DEBUG_SESSIONS) {
+            console.log(`[loadSession] Loaded session ${sessionId}: ${session.name}`);
+        }
+        return session;
+    } catch (e) {
+        if (DEBUG_SESSIONS) {
+            console.error(`[loadSession] Error loading session ${sessionId}:`, e);
+        }
+        return null;
+    }
+}
+
+/**
+ * Lists all sessions from OPFS
+ * @returns {Promise<TranslationSession[]>} Array of sessions sorted by createdAt (newest first)
+ */
+export async function listSessions(): Promise<TranslationSession[]> {
+    if (DEBUG_SESSIONS) {
+        console.log('[listSessions] Listing sessions...');
+    }
+    try {
+        const root = await getOPFSHandle();
+        const sessionsDir = await ensureDirectory(root, STORAGE_SESSIONS_DIR);
+        const sessions: TranslationSession[] = [];
+
+        for await (const entry of (sessionsDir as FileSystemDirectoryHandle & { values(): AsyncIterableIterator<FileSystemHandle> }).values()) {
+            if (entry.kind === "directory") {
+                try {
+                    const session = await loadSession(entry.name);
+                    if (session) {
+                        sessions.push(session);
+                    }
+                } catch (e) {
+                    if (DEBUG_SESSIONS) {
+                        console.warn(`[listSessions] Skipping invalid session: ${entry.name}`);
+                    }
+                }
+            }
+        }
+
+        sessions.sort(function(a: TranslationSession, b: TranslationSession): number {
+            return b.createdAt - a.createdAt;
+        });
+
+        if (DEBUG_SESSIONS) {
+            console.log(`[listSessions] Found ${sessions.length} sessions`);
+        }
+
+        return sessions;
+    } catch (e) {
+        if (DEBUG_SESSIONS) {
+            console.error("[listSessions] Error:", e);
+        }
+        return [];
+    }
+}
+
+/**
+ * Deletes a session and all its translations
+ * @param {string} sessionId - Session ID to delete (cannot be default)
+ * @returns {Promise<boolean>} True if deleted, false if not allowed or error
+ */
+export async function deleteSession(sessionId: string): Promise<boolean> {
+    if (sessionId === DEFAULT_SESSION_ID) {
+        if (DEBUG_SESSIONS) {
+            console.log(`[deleteSession] Cannot delete default session`);
+        }
+        return false;
+    }
+
+    if (DEBUG_SESSIONS) {
+        console.log(`[deleteSession] Deleting session ${sessionId}`);
+    }
+    try {
+        const root = await getOPFSHandle();
+        const sessionsDir = await ensureDirectory(root, STORAGE_SESSIONS_DIR);
+        await sessionsDir.removeEntry(sessionId, { recursive: true });
+        if (DEBUG_SESSIONS) {
+            console.log(`[deleteSession] Deleted session ${sessionId} successfully`);
+        }
+        return true;
+    } catch (e) {
+        if (DEBUG_SESSIONS) {
+            console.error("[deleteSession] Error deleting session:", e);
+        }
+        return false;
+    }
+}
+
+/**
+ * Gets or creates the default session
+ * @param {string} [model] - Optional model to set if creating new default
+ * @param {string} [inputLanguage] - Optional input language to set if creating new default
+ * @param {string} [promptId] - Optional prompt ID to set if creating new default
+ * @returns {Promise<TranslationSession>} Default session object
+ */
+export async function getOrCreateDefaultSession(model?: string | null, inputLanguage?: string, promptId?: string | null): Promise<TranslationSession> {
+    const existing = await loadSession(DEFAULT_SESSION_ID);
+    if (existing) {
+        return existing;
+    }
+
+    if (DEBUG_SESSIONS) {
+        console.log('[getOrCreateDefaultSession] Creating default session');
+    }
+
+    const defaultSession: TranslationSession = {
+        id: DEFAULT_SESSION_ID,
+        name: "Default",
+        model: model ?? null,
+        inputLanguage: inputLanguage ?? "english",
+        promptId: promptId ?? null,
+        background: "",
+        reasoning: "none",
+        createdAt: Date.now()
+    };
+
+    await saveSession(defaultSession);
+    return defaultSession;
+}
+
+/**
+ * Saves a translation for a specific session
+ * @param {string} sessionId - Session ID
+ * @param {Translation} translation - Translation object to save
+ * @returns {Promise<void>}
+ */
+export async function saveSessionTranslation(sessionId: string, translation: Translation): Promise<void> {
+    if (DEBUG_TRANSLATIONS) {
+        console.log(`[saveSessionTranslation] Saving translation ${translation.timestamp} for session ${sessionId}`);
+    }
+    try {
+        const sessionDir = await getSessionDirectory(sessionId);
+        const fileHandle = await sessionDir.getFileHandle(String(translation.timestamp) + ".json", { create: true });
+        const writable = await fileHandle.createWritable();
+        await writable.write(JSON.stringify(translation, null, 2));
+        await writable.close();
+        if (DEBUG_TRANSLATIONS) {
+            console.log(`[saveSessionTranslation] Saved translation ${translation.timestamp} for session ${sessionId}`);
+        }
+    } catch (e) {
+        if (DEBUG_TRANSLATIONS) {
+            console.error("[saveSessionTranslation] Error saving translation:", e);
+        }
+    }
+}
+
+/**
+ * Lists translations for a specific session
+ * @param {string} sessionId - Session ID
+ * @param {'input' | 'output'} pill - Which pane to filter
+ * @param {number} [limit=1000] - Maximum number of translations to load
+ * @returns {Promise<Translation[]>} Array of translation objects sorted by timestamp (newest first)
+ */
+export async function listSessionTranslations(sessionId: string, pill: 'input' | 'output', limit: number = 1000): Promise<Translation[]> {
+    if (DEBUG_TRANSLATIONS) {
+        console.log(`[listSessionTranslations] Loading ${pill} translations for session ${sessionId} (limit: ${limit})...`);
+    }
+    try {
+        const sessionDir = await getSessionDirectory(sessionId);
+        const timestamps: number[] = [];
+
+        for await (const entry of (sessionDir as FileSystemDirectoryHandle & { values(): AsyncIterableIterator<FileSystemHandle> }).values()) {
+            if (entry.kind === "file" && entry.name.endsWith(".json")) {
+                const num = parseInt(entry.name.replace(".json", ""), 10);
+                if (!isNaN(num)) {
+                    timestamps.push(num);
+                }
+            }
+        }
+
+        if (DEBUG_TRANSLATIONS) {
+            console.log(`[listSessionTranslations] Found ${timestamps.length} files for session ${sessionId}`);
+        }
+
+        timestamps.sort(function(a: number, b: number): number { return b - a; });
+
+        const translations: Translation[] = [];
+        const limitedTimestamps = timestamps.slice(0, limit);
+
+        for (const timestamp of limitedTimestamps) {
+            try {
+                const fileHandle = await sessionDir.getFileHandle(String(timestamp) + ".json");
+                const file = await fileHandle.getFile();
+                const content = await file.text();
+                const translation = JSON.parse(content) as Translation;
+                if (translation.status === 'complete' && translation.pill === pill) {
+                    translations.push(translation);
+                }
+            } catch (e) {
+                if (DEBUG_TRANSLATIONS) {
+                    console.warn(`[listSessionTranslations] Skipping invalid translation file: ${timestamp}`);
+                }
+            }
+        }
+
+        if (DEBUG_TRANSLATIONS) {
+            console.log(`[listSessionTranslations] Loaded ${translations.length} ${pill} translations for session ${sessionId}`);
+        }
+
+        return translations;
+    } catch (e) {
+        if (DEBUG_TRANSLATIONS) {
+            console.error("[listSessionTranslations] Error:", e);
+        }
+        return [];
+    }
+}
+
+/**
+ * Clears all translations for a session (used when switching sessions)
+ * @param {string} sessionId - Session ID
+ * @returns {Promise<void>}
+ */
+export async function clearSessionTranslations(sessionId: string): Promise<void> {
+    try {
+        const sessionDir = await getSessionDirectory(sessionId);
+        for await (const entry of (sessionDir as FileSystemDirectoryHandle & { values(): AsyncIterableIterator<FileSystemHandle> }).values()) {
+            if (entry.kind === "file" && entry.name.endsWith(".json")) {
+                await sessionDir.removeEntry(entry.name);
+            }
+        }
+    } catch (e) {
+        if (DEBUG_TRANSLATIONS) {
+            console.error("[clearSessionTranslations] Error:", e);
+        }
     }
 }
