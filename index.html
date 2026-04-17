@@ -128,12 +128,12 @@
                     <select class="form-select form-select-sm" id="session-selector" aria-label="Conversation selection">
                     </select>
                 </div>
-                <div class="col-md-auto text-end">
+                <div class="col-auto text-end">
                     <button type="button" class="btn btn-outline-secondary" id="config-button" title="Open configuration settings">
                         ⚙ 
                     </button>
                 </div>
-                <div class="col-md-auto text-end">
+                <div class="col-auto text-end">
                     <span class="balance-display" id="balance-display" title="OpenRouter balance">--</span>
                 </div>
             </div>
@@ -151,8 +151,16 @@
         </template>
 
         <main>
-            <div class="row g-3 p-3">
-                <div class="col-md-6">
+            <ul class="nav nav-tabs d-md-none px-3" id="pane-tabs" role="tablist">
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link active" id="input-tab-btn" type="button" role="tab" aria-controls="input-pane" aria-selected="true">Input</button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="output-tab-btn" type="button" role="tab" aria-controls="output-pane" aria-selected="false">Output</button>
+                </li>
+            </ul>
+            <div class="tab-content row g-3 p-3">
+                <div class="tab-pane active d-md-block col-md-6" id="input-pane" role="tabpanel" aria-labelledby="input-tab-btn">
                     <div class="input-pane">
                         <div class="pane-toolbar">
                             <div class="row g-2 align-items-center">
@@ -173,7 +181,7 @@
                         </div>
                     </div>
                 </div>
-                <div class="col-md-6">
+                <div class="tab-pane d-md-block col-md-6" id="output-pane" role="tabpanel" aria-labelledby="output-tab-btn">
                     <div class="output-pane">
                         <div class="pane-toolbar">
                             <div class="row g-2 align-items-center">

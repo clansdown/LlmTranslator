@@ -161,6 +161,39 @@ async function loadSettings(): Promise<void> {
 }
 
 /**
+ * Sets up the pane tab buttons for mobile view
+ * @returns {void}
+ */
+function setupPaneTabs(): void {
+    const inputTabBtn = document.getElementById("input-tab-btn") as HTMLButtonElement | null;
+    const outputTabBtn = document.getElementById("output-tab-btn") as HTMLButtonElement | null;
+    const inputPane = document.getElementById("input-pane") as HTMLElement | null;
+    const outputPane = document.getElementById("output-pane") as HTMLElement | null;
+
+    if (!inputTabBtn || !outputTabBtn || !inputPane || !outputPane) {
+        return;
+    }
+
+    inputTabBtn.addEventListener("click", function(): void {
+        inputTabBtn.classList.add("active");
+        inputTabBtn.setAttribute("aria-selected", "true");
+        outputTabBtn.classList.remove("active");
+        outputTabBtn.setAttribute("aria-selected", "false");
+        inputPane.classList.add("active");
+        outputPane.classList.remove("active");
+    });
+
+    outputTabBtn.addEventListener("click", function(): void {
+        outputTabBtn.classList.add("active");
+        outputTabBtn.setAttribute("aria-selected", "true");
+        inputTabBtn.classList.remove("active");
+        inputTabBtn.setAttribute("aria-selected", "false");
+        outputPane.classList.add("active");
+        inputPane.classList.remove("active");
+    });
+}
+
+/**
  * Initializes the application on page load
  * @returns {Promise<void>}
  */
@@ -199,6 +232,7 @@ export async function init(): Promise<void> {
     translation.setupTextareaKeyHandlers();
     setupSessionSelectorHandler();
     setupNewSessionButtonHandler();
+    setupPaneTabs();
     await translation.loadTranslationHistory();
 
     settings.setConfig(config);
