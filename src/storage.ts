@@ -115,7 +115,7 @@ export async function listPreferences(): Promise<string[]> {
         const root = await getOPFSHandle();
         const prefsDir = await ensureDirectory(root, STORAGE_PREFERENCES_DIR);
         const keys: string[] = [];
-        for await (const entry of prefsDir.values()) {
+        for await (const entry of (prefsDir as any).values()) {
             if (entry.kind === "file") {
                 keys.push(entry.name);
             }
@@ -149,7 +149,7 @@ export async function clearAllPreferences(): Promise<void> {
     try {
         const root = await getOPFSHandle();
         const prefsDir = await ensureDirectory(root, STORAGE_PREFERENCES_DIR);
-        for await (const entry of prefsDir.values()) {
+        for await (const entry of (prefsDir as any).values()) {
             await prefsDir.removeEntry(entry.name, { recursive: true });
         }
     } catch (e) {
@@ -186,7 +186,7 @@ export async function listConversations(): Promise<number[]> {
         const root = await getOPFSHandle();
         const convsDir = await ensureDirectory(root, STORAGE_CONVERSATIONS_DIR);
         const timestamps: number[] = [];
-        for await (const entry of convsDir.values()) {
+        for await (const entry of (convsDir as any).values()) {
             if (entry.kind === "directory") {
                 const num = parseInt(entry.name, 10);
                 if (!isNaN(num)) {
@@ -219,7 +219,7 @@ export async function loadConversation(timestamp: number): Promise<Conversation 
         if (conversation.entries) {
             conversation.entries.forEach(function(entry) {
                 if (entry.response?.imageFilenames && !entry.response.imageResolutions) {
-                    entry.response.imageResolutions = entry.response.imageFilenames.map(function(): string { return "1K"; });
+                    entry.response.imageResolutions = entry.response.imageFilenames.map(function(): '1K' | '2K' | '4K' { return "1K"; }) as Array<'1K' | '2K' | '4K'>;
                 }
             });
         }
@@ -317,7 +317,7 @@ export async function saveImage(timestamp: number, imageData: string): Promise<n
  */
 export async function getNextImageIndex(imagesDir: FileSystemDirectoryHandle): Promise<number> {
     let maxIndex = 0;
-    for await (const entry of imagesDir.values()) {
+    for await (const entry of (imagesDir as any).values()) {
         if (entry.kind === "file" && entry.name.endsWith(".png")) {
             const num = parseInt(entry.name.replace(".png", ""), 10);
             if (!isNaN(num) && num > maxIndex) {
@@ -383,7 +383,7 @@ export async function deleteImagesForConversation(timestamp: number): Promise<vo
         const convsDir = await ensureDirectory(root, STORAGE_CONVERSATIONS_DIR);
         const convDir = await convsDir.getDirectoryHandle(String(timestamp));
         const imagesDir = await ensureDirectory(convDir, STORAGE_IMAGES_DIR);
-        for await (const entry of imagesDir.values()) {
+        for await (const entry of (imagesDir as any).values()) {
             await imagesDir.removeEntry(entry.name);
         }
     } catch (e) {
@@ -982,7 +982,11 @@ export async function loadSession(sessionId: string): Promise<TranslationSession
         const fileHandle = await sessionDir.getFileHandle("session.json");
         const file = await fileHandle.getFile();
         const content = await file.text();
-        const session = JSON.parse(content) as TranslationSession;
+        const parsedSession = JSON.parse(content) as TranslationSession;
+        const session: TranslationSession = {
+            ...parsedSession,
+            literalModel: parsedSession.literalModel ?? null
+        };
         if (DEBUG_SESSIONS) {
             console.log(`[loadSession] Loaded session ${sessionId}: ${session.name}`);
         }
@@ -1097,6 +1101,7 @@ export async function getOrCreateDefaultSession(model?: string | null, inputLang
         promptId: promptId ?? null,
         background: "",
         reasoning: "none",
+        literalModel: null,
         createdAt: Date.now()
     };
 

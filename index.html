@@ -238,6 +238,12 @@
                     <span class="ms-1 fw-semibold">Explanation</span>
                     <div class="translation-explanation small text-justify mt-1 ps-4" style="display: none; white-space: pre-wrap;"></div>
                 </div>
+                <div class="translation-literal-content mt-2">
+                    <button type="button" class="btn btn-sm btn-link p-0 text-decoration-none toggle-section-btn" data-target="translation-literal">▼</button>
+                    <span class="ms-1 fw-semibold">Literally</span>
+                    <button type="button" class="btn btn-sm btn-outline-secondary ms-2 regenerate-literal-btn" style="display: none; font-size: 0.7rem;">Regenerate</button>
+                    <div class="translation-literal small text-justify mt-1 ps-4" style="display: none; white-space: pre-wrap;"></div>
+                </div>
                 <div class="translation-nuances-content mt-2">
                     <button type="button" class="btn btn-sm btn-link p-0 text-decoration-none toggle-section-btn" data-target="translation-nuances">▼</button>
                     <span class="ms-1 fw-semibold">Nuances</span>
@@ -352,6 +358,11 @@
                                             <option value="low">Low</option>
                                             <option value="medium">Medium</option>
                                             <option value="high">High</option>
+                                        </select>
+                                    </div>
+                                    <div class="col-12">
+                                        <label for="settings-session-literal-model" class="form-label">Literal Model</label>
+                                        <select id="settings-session-literal-model" class="form-select">
                                         </select>
                                     </div>
                                     <div class="col-12">

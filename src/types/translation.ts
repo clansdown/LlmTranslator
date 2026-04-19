@@ -11,6 +11,8 @@ export interface Translation {
     nuances: string;
     reasoning: string;
     reasoningDetails: string;
+    literalRetranslation?: string;
+    literalPending?: boolean;
     model: string;
     modelName: string;
     prompt: string;

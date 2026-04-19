@@ -71,6 +71,7 @@ interface SettingsReferences {
     sessionListSelect: HTMLSelectElement;
     sessionNameInput: HTMLInputElement;
     sessionModelSelect: HTMLSelectElement;
+    sessionLiteralModelSelect: HTMLSelectElement;
     sessionBackgroundInput: HTMLTextAreaElement;
     sessionReasoningSelect: HTMLSelectElement;
     deleteSessionButton: HTMLButtonElement;
@@ -154,6 +155,7 @@ function openSettingsModal(): void {
             sessionListSelect: settingsModalElement.querySelector('#settings-session-list') as HTMLSelectElement,
             sessionNameInput: settingsModalElement.querySelector('#settings-session-name') as HTMLInputElement,
             sessionModelSelect: settingsModalElement.querySelector('#settings-session-model') as HTMLSelectElement,
+            sessionLiteralModelSelect: settingsModalElement.querySelector('#settings-session-literal-model') as HTMLSelectElement,
             sessionBackgroundInput: settingsModalElement.querySelector('#settings-session-background') as HTMLTextAreaElement,
             sessionReasoningSelect: settingsModalElement.querySelector('#settings-session-reasoning') as HTMLSelectElement,
             deleteSessionButton: settingsModalElement.querySelector('#settings-delete-session-btn') as HTMLButtonElement,
@@ -387,11 +389,33 @@ function populateModelDropdown(): void {
         if (model.pricing) {
             const promptCost = (parseFloat(model.pricing.prompt) * 1_000_000).toFixed(2);
             const completionCost = (parseFloat(model.pricing.completion) * 1_000_000).toFixed(2);
-            option.textContent = `${model.name} ($${promptCost}/$${completionCost})`;
+            const providerPart = model.providerName ? ' by ' + model.providerName : '';
+            option.textContent = `${model.name}${providerPart} ($${promptCost}/$${completionCost})`;
         } else {
             option.textContent = model.name;
         }
         refs.sessionModelSelect.appendChild(option);
+    }
+
+    refs.sessionLiteralModelSelect.innerHTML = '';
+
+    const disabledPlaceholder = document.createElement('option');
+    disabledPlaceholder.value = '';
+    disabledPlaceholder.textContent = 'Disabled';
+    refs.sessionLiteralModelSelect.appendChild(disabledPlaceholder);
+
+    for (const model of models) {
+        const option = document.createElement('option');
+        option.value = model.id;
+        if (model.pricing) {
+            const promptCost = (parseFloat(model.pricing.prompt) * 1_000_000).toFixed(2);
+            const completionCost = (parseFloat(model.pricing.completion) * 1_000_000).toFixed(2);
+            const providerPart = model.providerName ? ' by ' + model.providerName : '';
+            option.textContent = `${model.name}${providerPart} ($${promptCost}/$${completionCost})`;
+        } else {
+            option.textContent = model.name;
+        }
+        refs.sessionLiteralModelSelect.appendChild(option);
     }
 }
 
@@ -543,11 +567,13 @@ function loadSessionIntoEditor(sessionId: string): void {
         if (session && refs) {
             refs.sessionNameInput.value = session.name;
             refs.sessionModelSelect.value = session.model ?? '';
+            refs.sessionLiteralModelSelect.value = session.literalModel ?? '';
             refs.sessionBackgroundInput.value = session.background ?? '';
             refs.sessionReasoningSelect.value = session.reasoning ?? 'none';
         } else if (refs) {
             refs.sessionNameInput.value = '';
             refs.sessionModelSelect.value = '';
+            refs.sessionLiteralModelSelect.value = '';
             refs.sessionBackgroundInput.value = '';
             refs.sessionReasoningSelect.value = 'none';
         }
@@ -606,6 +632,7 @@ async function saveSession(): Promise<void> {
 
     session.name = newName;
     session.model = refs.sessionModelSelect.value || null;
+    session.literalModel = refs.sessionLiteralModelSelect.value || null;
     session.background = refs.sessionBackgroundInput.value;
     session.reasoning = refs.sessionReasoningSelect.value as 'none' | 'minimal' | 'low' | 'medium' | 'high';
     await storage.saveSession(session);

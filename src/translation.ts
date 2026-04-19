@@ -3,13 +3,14 @@
  * Handles translation functionality for input and output panes
  */
 
-import { translateStructured } from './openrouter';
+import { translateStructured, translateRaw } from './openrouter';
 import { getPreference, savePreference, listSessions, saveSession, loadSession, deleteSession as storageDeleteSession, getOrCreateDefaultSession, saveSessionTranslation, listSessionTranslations } from './storage';
 import { DEBUG_TRANSLATIONS, DEBUG_SESSIONS } from './debug';
 import * as ui from './ui';
 import { LANGUAGES } from './languages';
-import { SYSTEM_PROMPT, INPUT_INSTRUCTIONS, OUTPUT_INSTRUCTIONS } from './prompts';
+import { SYSTEM_PROMPT, INPUT_INSTRUCTIONS, OUTPUT_INSTRUCTIONS, LITERAL_RETRANSLATION_PROMPT } from './prompts';
 import { renderMarkdown } from './markdown';
+import * as settings from './settings';
 import type { Translation } from './types/translation';
 import type { Config } from './types/config';
 import type { TranslationSession } from './types/session';
@@ -36,6 +37,12 @@ let config: Config | null = null;
  * @type {string}
  */
 let currentSessionId: string = 'default';
+
+/**
+ * Current session's literal model ID
+ * @type {string | null}
+ */
+let currentLiteralModel: string | null = null;
 
 /**
  * In-memory translation arrays - source of truth for translations
@@ -119,6 +126,7 @@ export async function setCurrentSession(sessionId: string): Promise<void> {
     }
 
     currentSessionId = sessionId;
+    currentLiteralModel = session.literalModel ?? null;
     await savePreference('currentSession', sessionId);
 
     inputTranslations = [];
@@ -145,6 +153,8 @@ export async function setCurrentSession(sessionId: string): Promise<void> {
         populateLanguageDropdowns(session.inputLanguage);
     }
 
+    settings.updatePromptDropdown();
+
     updateSessionSelector(sessionId);
 
     if (DEBUG_SESSIONS) {
@@ -170,6 +180,7 @@ export async function createSession(name?: string): Promise<string> {
         promptId: config?.selectedPromptId ?? null,
         background: "",
         reasoning: "none",
+        literalModel: null,
         createdAt: now
     };
 
@@ -605,8 +616,7 @@ export async function translate(pill: 'input' | 'output'): Promise<void> {
             return;
         }
 
-        const { getPrompts } = await import('./settings');
-        const prompts = getPrompts();
+        const prompts = settings.getPrompts();
         const selectedPrompt = prompts.find(function(p) { return p.id === promptId; });
 
         if (!selectedPrompt) {
@@ -616,12 +626,20 @@ export async function translate(pill: 'input' | 'output'): Promise<void> {
 
         promptName = selectedPrompt.name;
         instructions = OUTPUT_INSTRUCTIONS.replace('[PROMPT]', selectedPrompt.content);
+        const inputLangId = getCurrentInputLanguage();
+        const inputLang = LANGUAGES.find(function(l) { return l.id === inputLangId; });
+        if (inputLang) {
+            instructions = instructions.replace('[LANGUAGE]', inputLang.name);
+        } else {
+            instructions = instructions.replace('[LANGUAGE]', 'the input language');
+        }
     }
 
     const userMessage = await buildUserMessage(pill, sourceText, instructions);
 
     const session = await loadSession(currentSessionId);
     const reasoningLevel = session?.reasoning ?? 'none';
+    currentLiteralModel = session?.literalModel ?? null;
 
     const translation: Translation = {
         id: generateUuid(),
@@ -632,6 +650,7 @@ export async function translate(pill: 'input' | 'output'): Promise<void> {
         nuances: '',
         reasoning: '',
         reasoningDetails: '',
+        literalRetranslation: '',
         model: config.selectedModel,
         modelName: getModelName(config.selectedModel),
         prompt: promptName,
@@ -658,10 +677,38 @@ export async function translate(pill: 'input' | 'output'): Promise<void> {
         translation.nuances = result.nuances;
         translation.reasoning = result.reasoning;
         translation.reasoningDetails = result.reasoningDetails;
-        translation.explanation = result.explanation;
-        translation.nuances = result.nuances;
         translation.status = 'complete';
         saveSessionTranslation(currentSessionId, translation);
+
+        if (session?.literalModel) {
+            try {
+                const sourceLangId = getCurrentInputLanguage();
+                const sourceLang = LANGUAGES.find(function(l) { return l.id === sourceLangId; });
+                const sourceLangName = sourceLang?.name ?? sourceLangId;
+                const literalSystemPrompt = LITERAL_RETRANSLATION_PROMPT.replace(/\[LANGUAGE\]/g, sourceLangName);
+                const literalUserMessage = result.translation;
+                console.log('[translateLiteral] Starting literal retranslation with model:', session.literalModel);
+                console.log('[translateLiteral] Input text length:', result.translation.length);
+                console.log('[translateLiteral] Input text (first 200 chars):', result.translation.substring(0, 200));
+                translation.literalPending = true;
+                renderTranslations(pill);
+                const literalResult = await translateRaw(
+                    config.openRouterApiKey,
+                    literalUserMessage,
+                    literalSystemPrompt,
+                    session.literalModel,
+                    'none'
+                );
+                console.log('[translateLiteral] Literal result:', literalResult.substring(0, 200));
+                console.log('[translateLiteral] Full literal result:', literalResult);
+                translation.literalRetranslation = literalResult;
+                translation.literalPending = false;
+                saveSessionTranslation(currentSessionId, translation);
+            } catch (literalError) {
+                console.error('[translateLiteral] Literal retranslation failed:', literalError);
+                translation.literalPending = false;
+            }
+        }
     } catch (error) {
         translation.status = 'error';
         translation.error = error instanceof Error ? error.message : "Translation failed";
@@ -699,7 +746,7 @@ function setupToggleHandler(element: HTMLElement, translation: Translation): voi
     const toggleBtns = element.querySelectorAll('.toggle-section-btn');
     toggleBtns.forEach(function(btn) {
         const targetId = btn.getAttribute('data-target');
-        const targetEl = element.querySelector('.' + targetId);
+        const targetEl = element.querySelector('.' + targetId) as HTMLElement | null;
         if (targetEl) {
             btn.addEventListener('click', function() {
                 const isHidden = targetEl.style.display === 'none' || targetEl.style.display === '';
@@ -767,6 +814,14 @@ export function renderTranslations(pill: 'input' | 'output'): void {
                 });
             }
 
+            const regenerateLiteralBtn = element.querySelector('.regenerate-literal-btn') as HTMLButtonElement | null;
+            if (regenerateLiteralBtn) {
+                const translationId = translation.id;
+                regenerateLiteralBtn.addEventListener('click', function() {
+                    regenerateLiteralRetranslation(pill, translationId);
+                });
+            }
+
             setupToggleHandler(element, translation);
 
             container.insertBefore(element, container.firstChild);
@@ -775,12 +830,15 @@ export function renderTranslations(pill: 'input' | 'output'): void {
         const sourceEl = element.querySelector('.translation-source') as HTMLElement | null;
         const targetEl = element.querySelector('.translation-target') as HTMLElement | null;
         const explanationEl = element.querySelector('.translation-explanation') as HTMLElement | null;
+        const literalContentEl = element.querySelector('.translation-literal-content') as HTMLElement | null;
+        const literalEl = element.querySelector('.translation-literal') as HTMLElement | null;
         const nuancesEl = element.querySelector('.translation-nuances') as HTMLElement | null;
         const spinnerEl = element.querySelector('.translation-spinner') as HTMLElement | null;
         const errorEl = element.querySelector('.translation-error') as HTMLElement | null;
         const promptEl = element.querySelector('.translation-prompt') as HTMLElement | null;
         const modelNameEl = element.querySelector('.translation-model-name') as HTMLElement | null;
         const charCountEl = element.querySelector('.translation-char-count') as HTMLElement | null;
+        const regenerateLiteralBtn = element.querySelector('.regenerate-literal-btn') as HTMLButtonElement | null;
 
         if (sourceEl) {
             sourceEl.textContent = translation.source;
@@ -797,6 +855,9 @@ export function renderTranslations(pill: 'input' | 'output'): void {
             if (errorEl) errorEl.style.display = 'none';
             if (targetEl) targetEl.style.display = 'none';
             if (explanationEl) explanationEl.style.display = 'none';
+            if (literalEl) literalEl.style.display = 'none';
+            if (literalContentEl) literalContentEl.style.display = 'none';
+            if (regenerateLiteralBtn) regenerateLiteralBtn.style.display = 'none';
             if (nuancesEl) nuancesEl.style.display = 'none';
             if (charCountEl) {
                 charCountEl.textContent = `(${translation.source.length}/—)`;
@@ -805,6 +866,9 @@ export function renderTranslations(pill: 'input' | 'output'): void {
             if (spinnerEl) spinnerEl.style.display = 'none';
             if (targetEl) targetEl.style.display = 'none';
             if (explanationEl) explanationEl.style.display = 'none';
+            if (literalEl) literalEl.style.display = 'none';
+            if (literalContentEl) literalContentEl.style.display = 'none';
+            if (regenerateLiteralBtn) regenerateLiteralBtn.style.display = 'none';
             if (nuancesEl) nuancesEl.style.display = 'none';
             if (charCountEl) {
                 charCountEl.textContent = `(${translation.source.length}/—)`;
@@ -837,6 +901,33 @@ export function renderTranslations(pill: 'input' | 'output'): void {
                     explanationEl.style.display = 'none';
                     const toggleBtn = element.querySelector('.toggle-explanation-btn');
                     if (toggleBtn) toggleBtn.textContent = '▼';
+                }
+            }
+            if (literalEl) {
+                if (translation.literalPending) {
+                    literalEl.style.display = 'block';
+                    literalEl.innerHTML = '<div class="spinner-border spinner-border-sm" role="status"></div><span style="margin-left: 0.5rem;">Retranslating...</span>';
+                    const toggleBtn = element.querySelector('.toggle-literal-btn');
+                    if (toggleBtn) toggleBtn.textContent = '▼';
+                    if (literalContentEl) literalContentEl.style.display = 'block';
+                    if (regenerateLiteralBtn) regenerateLiteralBtn.style.display = 'none';
+                } else if (translation.literalRetranslation) {
+                    literalEl.style.display = 'block';
+                    literalEl.innerHTML = renderMarkdown(translation.literalRetranslation);
+                    const toggleBtn = element.querySelector('.toggle-literal-btn');
+                    if (toggleBtn) toggleBtn.textContent = '▼';
+                    if (literalContentEl) literalContentEl.style.display = 'block';
+                    if (regenerateLiteralBtn) regenerateLiteralBtn.style.display = currentLiteralModel ? 'inline-block' : 'none';
+                } else {
+                    literalEl.style.display = 'none';
+                    const toggleBtn = element.querySelector('.toggle-literal-btn');
+                    if (toggleBtn) toggleBtn.textContent = '▼';
+                    if (literalContentEl) {
+                        literalContentEl.style.display = currentLiteralModel ? 'block' : 'none';
+                    }
+                    if (regenerateLiteralBtn) {
+                        regenerateLiteralBtn.style.display = currentLiteralModel ? 'inline-block' : 'none';
+                    }
                 }
             }
             if (nuancesEl) {
@@ -906,4 +997,64 @@ export async function retryTranslation(pill: 'input' | 'output', translationId: 
 
     renderTranslations(pill);
     await refreshBalance();
+}
+
+/**
+ * Regenerates the literal retranslation for a completed translation
+ * @param {'input' | 'output'} pill - Which pane
+ * @param {string} translationId - ID of translation to regenerate literal for
+ * @returns {Promise<void>}
+ */
+export async function regenerateLiteralRetranslation(pill: 'input' | 'output', translationId: string): Promise<void> {
+    const translations = pill === 'input' ? inputTranslations : outputTranslations;
+    const translation = translations.find(function(t) { return t.id === translationId; });
+
+    if (!translation) {
+        return;
+    }
+
+    if (translation.status !== 'complete') {
+        return;
+    }
+
+    const session = await loadSession(currentSessionId);
+    if (!session?.literalModel) {
+        console.error('[regenerateLiteral] No literal model configured');
+        return;
+    }
+
+    if (!config || !config.openRouterApiKey) {
+        console.error('[regenerateLiteral] No API key');
+        return;
+    }
+
+    const sourceLangId = getCurrentInputLanguage();
+    const sourceLang = LANGUAGES.find(function(l) { return l.id === sourceLangId; });
+    const sourceLangName = sourceLang?.name ?? sourceLangId;
+    const literalSystemPrompt = LITERAL_RETRANSLATION_PROMPT.replace(/\[LANGUAGE\]/g, sourceLangName);
+    const literalUserMessage = translation.translation;
+    console.log('[regenerateLiteral] Starting literal retranslation with model:', session.literalModel);
+    console.log('[regenerateLiteral] Input text:', translation.translation.substring(0, 200));
+
+    translation.literalPending = true;
+    renderTranslations(pill);
+
+    try {
+        const literalResult = await translateRaw(
+            config.openRouterApiKey,
+            literalUserMessage,
+            literalSystemPrompt,
+            session.literalModel,
+            'none'
+        );
+        console.log('[regenerateLiteral] Literal result:', literalResult.substring(0, 200));
+        translation.literalRetranslation = literalResult;
+        translation.literalPending = false;
+        saveSessionTranslation(currentSessionId, translation);
+        renderTranslations(pill);
+    } catch (literalError) {
+        console.error('[regenerateLiteral] Literal retranslation failed:', literalError);
+        translation.literalPending = false;
+        renderTranslations(pill);
+    }
 }

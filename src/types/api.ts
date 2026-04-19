@@ -75,6 +75,7 @@ export interface ImageInput {
 export interface VisionModel {
     id: string;
     name: string;
+    providerName?: string;
     pricing?: {
         prompt: string;
         completion: string;

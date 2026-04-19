@@ -1,5 +1,7 @@
 install.sh
 node_modules/
+dist/
 
 # Local generation statistics
 .commit/
+.opencode/

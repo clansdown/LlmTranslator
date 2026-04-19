@@ -3,7 +3,7 @@
  * Handles communication with OpenRouter for models, balance, and image generation
  */
 
-import { SYSTEM_PROMPT } from './prompt';
+import { SYSTEM_PROMPT } from './prompts';
 import type { 
     ChatCompletionResponse, 
     VisionModel, 
@@ -54,15 +54,24 @@ export async function fetchModels(apiKey: string): Promise<VisionModel[]> {
     const data = await response.json();
     const allModels = data.data || [];
     const imageModels = allModels.filter(function(model: VisionModel): boolean {
-        return model.architecture &&
-               model.architecture.output_modalities &&
-               model.architecture.output_modalities.indexOf("image") !== -1;
+        const hasMod = model.architecture != null;
+        const hasOut = hasMod && model.architecture!.output_modalities != null;
+        const hasImage = hasOut && model.architecture!.output_modalities!.indexOf("image") !== -1;
+        return hasImage;
     });
     imageModels.sort(function(a: VisionModel, b: VisionModel): number {
         const nameA = (a.name || "").toLowerCase();
         const nameB = (b.name || "").toLowerCase();
         if (nameA < nameB) return -1;
         if (nameA > nameB) return 1;
+        const priceA = parseFloat(a.pricing?.prompt || "0");
+        const priceB = parseFloat(b.pricing?.prompt || "0");
+        if (priceA < priceB) return -1;
+        if (priceA > priceB) return 1;
+        const completionA = parseFloat(a.pricing?.completion || "0");
+        const completionB = parseFloat(b.pricing?.completion || "0");
+        if (completionA < completionB) return -1;
+        if (completionA > completionB) return 1;
         return 0;
     });
     return imageModels;
@@ -106,12 +115,10 @@ export async function fetchVisionModels(apiKey: string): Promise<VisionModel[]> 
     const data = await response.json();
     const allModels = data.data || [];
     const visionModels = allModels.filter(function(model: VisionModel): boolean {
-        const hasImageOut = model.architecture &&
-                            model.architecture.output_modalities &&
-                            model.architecture.output_modalities.indexOf("image") !== -1;
-        const hasImageIn = model.architecture &&
-                           model.architecture.input_modalities &&
-                           model.architecture.input_modalities.indexOf("image") !== -1;
+        const hasOut = model.architecture != null && model.architecture!.output_modalities != null;
+        const hasImageOut = hasOut && model.architecture!.output_modalities!.indexOf("image") !== -1;
+        const hasIn = model.architecture != null && model.architecture!.input_modalities != null;
+        const hasImageIn = hasIn && model.architecture!.input_modalities!.indexOf("image") !== -1;
         return hasImageOut && hasImageIn;
     });
     visionModels.sort(function(a: VisionModel, b: VisionModel): number {
@@ -119,6 +126,14 @@ export async function fetchVisionModels(apiKey: string): Promise<VisionModel[]> 
         const nameB = (b.name || "").toLowerCase();
         if (nameA < nameB) return -1;
         if (nameA > nameB) return 1;
+        const priceA = parseFloat(a.pricing?.prompt || "0");
+        const priceB = parseFloat(b.pricing?.prompt || "0");
+        if (priceA < priceB) return -1;
+        if (priceA > priceB) return 1;
+        const completionA = parseFloat(a.pricing?.completion || "0");
+        const completionB = parseFloat(b.pricing?.completion || "0");
+        if (completionA < completionB) return -1;
+        if (completionA > completionB) return 1;
         return 0;
     });
     return visionModels;
@@ -172,11 +187,13 @@ export async function fetchZdrModels(apiKey: string): Promise<VisionModel[]> {
     const models = allModels.map(function(model: {
         model_id?: string;
         model_name?: string;
+        provider_name?: string;
         pricing?: { prompt: string; completion: string };
     }): VisionModel {
         return {
             id: model.model_id ?? "",
             name: model.model_name ?? "",
+            providerName: model.provider_name,
             pricing: model.pricing ? {
                 prompt: model.pricing.prompt,
                 completion: model.pricing.completion
@@ -190,6 +207,14 @@ export async function fetchZdrModels(apiKey: string): Promise<VisionModel[]> {
         const nameB = (b.name ?? "").toLowerCase();
         if (nameA < nameB) return -1;
         if (nameA > nameB) return 1;
+        const priceA = parseFloat(a.pricing?.prompt || "0");
+        const priceB = parseFloat(b.pricing?.prompt || "0");
+        if (priceA < priceB) return -1;
+        if (priceA > priceB) return 1;
+        const completionA = parseFloat(a.pricing?.completion || "0");
+        const completionB = parseFloat(b.pricing?.completion || "0");
+        if (completionA < completionB) return -1;
+        if (completionA > completionB) return 1;
         return 0;
     });
     
@@ -681,4 +706,81 @@ export async function translateStructured(
         reasoning: reasoning,
         reasoningDetails: reasoningDetails
     };
+}
+
+/**
+ * Translates text using OpenRouter and returns the raw response content (no XML parsing)
+ * @param {string} apiKey - OpenRouter API key
+ * @param {string} userMessage - User message content
+ * @param {string} systemPrompt - System prompt
+ * @param {string} model - Model ID to use
+ * @param {string} reasoningLevel - Reasoning effort level ('none' | 'minimal' | 'low' | 'medium' | 'high')
+ * @returns {Promise<string>} Raw content string from the model
+ * @throws {Error} If API request fails
+ */
+export async function translateRaw(
+    apiKey: string,
+    userMessage: string,
+    systemPrompt: string,
+    model: string,
+    reasoningLevel: string = 'none'
+): Promise<string> {
+    /** @type {Array<{role: string; content: string}>} */
+    const messages: Array<{role: string; content: string}> = [];
+
+    messages.push({
+        role: "system",
+        content: systemPrompt
+    });
+
+    messages.push({
+        role: "user",
+        content: userMessage
+    });
+
+    /** @type {object} */
+    const body: Record<string, unknown> = {
+        model: model,
+        messages: messages,
+        provider: {
+            zdr: true
+        }
+    };
+
+    if (reasoningLevel !== 'none') {
+        body.reasoning = {
+            effort: reasoningLevel
+        };
+    }
+
+    const response = await fetch(OPENROUTER_BASE_URL + "/chat/completions", {
+        method: "POST",
+        headers: {
+            "Authorization": "Bearer " + apiKey,
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify(body)
+    });
+
+    if (!response.ok) {
+        const text = await response.text();
+        let errorMessage = "Translation failed: " + response.status;
+
+        try {
+            const errorData = JSON.parse(text);
+            if (errorData.error && errorData.error.message) {
+                errorMessage = errorData.error.message;
+            }
+        } catch (e) {
+            if (text && text.trim().length > 0) {
+                errorMessage = text;
+            }
+        }
+
+        throw new Error(errorMessage);
+    }
+
+    const data = await response.json() as ChatCompletionResponse;
+    const message = data.choices && data.choices.length > 0 ? data.choices[0].message : null;
+    return message?.content ?? "";
 }

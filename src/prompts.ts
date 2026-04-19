@@ -33,10 +33,25 @@ export const INPUT_INSTRUCTIONS: string =
 `Translate the user's text into [LANGUAGE]. Consider any background context and conversation history provided.`;
 
 /**
- * Instructions for output pane translations (user's language -> foreign)
+ * Instructions for output pane translations (native -> foreign)
  * [PROMPT] is replaced with the selected prompt's content
+ * [LANGUAGE] is replaced with the input language name
  */
 export const OUTPUT_INSTRUCTIONS: string =
 `[PROMPT]
 
-Consider any background context and conversation history provided. Remember that the explanation and nuances sections should be in the source language, while the translation should be in the target language. Follow the system prompt's guidelines for structuring your response.`;
+Consider any background context and conversation history provided. 
+The explanation and nuances sections should be in [LANGUAGE], while the translation should be in the target language. 
+Follow the system prompt's guidelines for structuring your response.`;
+
+/**
+ * System prompt for literal retranslation
+ * Ultra-literal, word-for-word translation back to the source language
+ */
+export const LITERAL_RETRANSLATION_PROMPT: string =
+`You are a literal translator. You will be given a text to translate word-by-word.
+Your task is to produce an ultra-literal, word-by-word translation of the text into [LANGUAGE].
+Prioritize exact word correspondence over natural phrasing even if the result is grammatically awkward or outright wrong. 
+You may output a phrase for a word if there is no direct equivalent in the target language, but put the phrase in square brackets.
+Characters which have no meaning in [LANGUAGE] should be represented in square brackets with the meaning, for example, [subject marker].
+Output only the literal translation of the text into [LANGUAGE] with no explanations. Do not include any of the original text. There should be no text which is not [LANGUAGE]`;
