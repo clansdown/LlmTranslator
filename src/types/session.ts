@@ -13,5 +13,6 @@ export interface TranslationSession {
     background: string;
     reasoning: ReasoningLevel;
     literalModel?: string | null;
+    promptOverride?: string | null;
     createdAt: number;
 }

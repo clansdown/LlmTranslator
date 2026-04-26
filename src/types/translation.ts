@@ -21,4 +21,5 @@ export interface Translation {
     status: 'pending' | 'complete' | 'error';
     error: string | null;
     answerCollapsed?: boolean;
+    sectionsCollapsed?: boolean;
 }

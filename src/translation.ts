@@ -720,7 +720,9 @@ export async function translate(pill: 'input' | 'output'): Promise<void> {
         }
 
         promptName = selectedPrompt.name;
-        instructions = OUTPUT_INSTRUCTIONS.replace('[PROMPT]', selectedPrompt.content);
+        const outputSession = await loadSession(currentSessionId);
+        const promptContent = outputSession?.promptOverride ?? selectedPrompt.content;
+        instructions = OUTPUT_INSTRUCTIONS.replace('[PROMPT]', promptContent);
         const inputLangId = getCurrentInputLanguage();
         const inputLang = LANGUAGES.find(function(l) { return l.id === inputLangId; });
         if (inputLang) {
@@ -937,18 +939,23 @@ async function refreshBalance(): Promise<void> {
  * @returns {void}
  */
 function setupToggleHandler(element: HTMLElement, translation: Translation): void {
-    const toggleBtns = element.querySelectorAll('.toggle-section-btn');
-    toggleBtns.forEach(function(btn) {
-        const targetId = btn.getAttribute('data-target');
-        const targetEl = element.querySelector('.' + targetId) as HTMLElement | null;
-        if (targetEl) {
-            btn.addEventListener('click', function() {
-                const isHidden = targetEl.style.display === 'none' || targetEl.style.display === '';
-                targetEl.style.display = isHidden ? 'block' : 'none';
-                btn.textContent = isHidden ? '▲' : '▼';
-            });
-        }
-    });
+    const toggleSectionsBtn = element.querySelector('.toggle-sections-btn') as HTMLButtonElement | null;
+    const sectionsArea = element.querySelector('.translation-sections-area') as HTMLElement | null;
+    if (toggleSectionsBtn && sectionsArea) {
+        toggleSectionsBtn.addEventListener('click', function() {
+            const isCollapsed = sectionsArea.classList.contains('translation-sections-collapsed');
+            if (isCollapsed) {
+                sectionsArea.classList.remove('translation-sections-collapsed');
+                toggleSectionsBtn.textContent = '▼';
+                translation.sectionsCollapsed = false;
+            } else {
+                sectionsArea.classList.add('translation-sections-collapsed');
+                toggleSectionsBtn.textContent = '▲';
+                translation.sectionsCollapsed = true;
+            }
+            saveSessionTranslation(currentSessionId, translation);
+        });
+    }
 
     const toggleAnswerBtn = element.querySelector('.toggle-answer-btn') as HTMLButtonElement | null;
     const answerEl = element.querySelector('.translation-target') as HTMLElement | null;
@@ -1005,6 +1012,40 @@ export function renderTranslations(pill: 'input' | 'output'): void {
             element = clone.firstElementChild as HTMLElement;
             element.id = elementId;
 
+            const literalPane = element.querySelector('#literal-pane');
+            const explanationPane = element.querySelector('#explanation-pane');
+            const nuancesPane = element.querySelector('#nuances-pane');
+            const literalTab = element.querySelector('#literal-tab');
+            const explanationTab = element.querySelector('#explanation-tab');
+            const nuancesTab = element.querySelector('#nuances-tab');
+            if (literalPane) {
+                literalPane.id = 'literal-pane-' + translation.id;
+                literalPane.setAttribute('aria-labelledby', 'literal-tab-' + translation.id);
+            }
+            if (explanationPane) {
+                explanationPane.id = 'explanation-pane-' + translation.id;
+                explanationPane.setAttribute('aria-labelledby', 'explanation-tab-' + translation.id);
+            }
+            if (nuancesPane) {
+                nuancesPane.id = 'nuances-pane-' + translation.id;
+                nuancesPane.setAttribute('aria-labelledby', 'nuances-tab-' + translation.id);
+            }
+            if (literalTab) {
+                literalTab.id = 'literal-tab-' + translation.id;
+                literalTab.setAttribute('data-bs-target', '#literal-pane-' + translation.id);
+                literalTab.setAttribute('aria-controls', 'literal-pane-' + translation.id);
+            }
+            if (explanationTab) {
+                explanationTab.id = 'explanation-tab-' + translation.id;
+                explanationTab.setAttribute('data-bs-target', '#explanation-pane-' + translation.id);
+                explanationTab.setAttribute('aria-controls', 'explanation-pane-' + translation.id);
+            }
+            if (nuancesTab) {
+                nuancesTab.id = 'nuances-tab-' + translation.id;
+                nuancesTab.setAttribute('data-bs-target', '#nuances-pane-' + translation.id);
+                nuancesTab.setAttribute('aria-controls', 'nuances-pane-' + translation.id);
+            }
+
             const retryBtn = element.querySelector('.retry-btn');
             if (retryBtn) {
                 const translationId = translation.id;
@@ -1047,9 +1088,8 @@ export function renderTranslations(pill: 'input' | 'output'): void {
 
         const sourceEl = element.querySelector('.translation-source') as HTMLElement | null;
         const targetEl = element.querySelector('.translation-target') as HTMLElement | null;
-        const explanationEl = element.querySelector('.translation-explanation') as HTMLElement | null;
-        const literalContentEl = element.querySelector('.translation-literal-content') as HTMLElement | null;
         const literalEl = element.querySelector('.translation-literal') as HTMLElement | null;
+        const explanationEl = element.querySelector('.translation-explanation') as HTMLElement | null;
         const nuancesEl = element.querySelector('.translation-nuances') as HTMLElement | null;
         const spinnerEl = element.querySelector('.translation-spinner') as HTMLElement | null;
         const errorEl = element.querySelector('.translation-error') as HTMLElement | null;
@@ -1057,6 +1097,11 @@ export function renderTranslations(pill: 'input' | 'output'): void {
         const modelNameEl = element.querySelector('.translation-model-name') as HTMLElement | null;
         const charCountEl = element.querySelector('.translation-char-count') as HTMLElement | null;
         const regenerateLiteralBtn = element.querySelector('.regenerate-literal-btn') as HTMLButtonElement | null;
+        const sectionsArea = element.querySelector('.translation-sections-area') as HTMLElement | null;
+        const toggleSectionsBtn = element.querySelector('.toggle-sections-btn') as HTMLButtonElement | null;
+        const literalPane = element.querySelector('#literal-pane-' + translation.id) as HTMLElement | null;
+        const explanationPane = element.querySelector('#explanation-pane-' + translation.id) as HTMLElement | null;
+        const nuancesPane = element.querySelector('#nuances-pane-' + translation.id) as HTMLElement | null;
 
         if (sourceEl) {
             sourceEl.textContent = translation.source;
@@ -1072,22 +1117,14 @@ export function renderTranslations(pill: 'input' | 'output'): void {
             if (spinnerEl) spinnerEl.style.display = 'block';
             if (errorEl) errorEl.style.display = 'none';
             if (targetEl) targetEl.style.display = 'none';
-            if (explanationEl) explanationEl.style.display = 'none';
-            if (literalEl) literalEl.style.display = 'none';
-            if (literalContentEl) literalContentEl.style.display = 'none';
             if (regenerateLiteralBtn) regenerateLiteralBtn.style.display = 'none';
-            if (nuancesEl) nuancesEl.style.display = 'none';
             if (charCountEl) {
                 charCountEl.textContent = `(${translation.source.length}/—)`;
             }
         } else if (translation.status === 'error') {
             if (spinnerEl) spinnerEl.style.display = 'none';
             if (targetEl) targetEl.style.display = 'none';
-            if (explanationEl) explanationEl.style.display = 'none';
-            if (literalEl) literalEl.style.display = 'none';
-            if (literalContentEl) literalContentEl.style.display = 'none';
             if (regenerateLiteralBtn) regenerateLiteralBtn.style.display = 'none';
-            if (nuancesEl) nuancesEl.style.display = 'none';
             if (charCountEl) {
                 charCountEl.textContent = `(${translation.source.length}/—)`;
             }
@@ -1121,55 +1158,34 @@ export function renderTranslations(pill: 'input' | 'output'): void {
                 charCountEl.textContent = `(${translation.source.length}/${translation.translation.length})`;
             }
 
-            if (explanationEl) {
-                if (translation.explanation) {
-                    explanationEl.style.display = 'block';
-                    explanationEl.innerHTML = renderMarkdown(translation.explanation);
-                    const toggleBtn = element.querySelector('.toggle-explanation-btn');
-                    if (toggleBtn) toggleBtn.textContent = '▼';
-                } else {
-                    explanationEl.style.display = 'none';
-                    const toggleBtn = element.querySelector('.toggle-explanation-btn');
-                    if (toggleBtn) toggleBtn.textContent = '▼';
-                }
-            }
             if (literalEl) {
                 if (translation.literalPending) {
-                    literalEl.style.display = 'block';
                     literalEl.innerHTML = '<div class="spinner-border spinner-border-sm" role="status"></div><span style="margin-left: 0.5rem;">Retranslating...</span>';
-                    const toggleBtn = element.querySelector('.toggle-literal-btn');
-                    if (toggleBtn) toggleBtn.textContent = '▼';
-                    if (literalContentEl) literalContentEl.style.display = 'block';
                     if (regenerateLiteralBtn) regenerateLiteralBtn.style.display = 'none';
                 } else if (translation.literalRetranslation) {
-                    literalEl.style.display = 'block';
                     literalEl.innerHTML = renderMarkdown(translation.literalRetranslation);
-                    const toggleBtn = element.querySelector('.toggle-literal-btn');
-                    if (toggleBtn) toggleBtn.textContent = '▼';
-                    if (literalContentEl) literalContentEl.style.display = 'block';
                     if (regenerateLiteralBtn) regenerateLiteralBtn.style.display = currentLiteralModel ? 'inline-block' : 'none';
                 } else {
-                    literalEl.style.display = 'none';
-                    const toggleBtn = element.querySelector('.toggle-literal-btn');
-                    if (toggleBtn) toggleBtn.textContent = '▼';
-                    if (literalContentEl) {
-                        literalContentEl.style.display = currentLiteralModel ? 'block' : 'none';
-                    }
-                    if (regenerateLiteralBtn) {
-                        regenerateLiteralBtn.style.display = currentLiteralModel ? 'inline-block' : 'none';
-                    }
+                    literalEl.innerHTML = '';
+                    if (regenerateLiteralBtn) regenerateLiteralBtn.style.display = currentLiteralModel ? 'inline-block' : 'none';
                 }
             }
+            if (explanationEl) {
+                explanationEl.innerHTML = translation.explanation ? renderMarkdown(translation.explanation) : '';
+            }
             if (nuancesEl) {
-                if (translation.nuances) {
-                    nuancesEl.style.display = 'block';
-                    nuancesEl.innerHTML = renderMarkdown(translation.nuances);
-                    const toggleBtn = element.querySelector('.toggle-nuances-btn');
-                    if (toggleBtn) toggleBtn.textContent = '▼';
+                nuancesEl.innerHTML = translation.nuances ? renderMarkdown(translation.nuances) : '';
+            }
+
+            if (regenerateLiteralBtn) regenerateLiteralBtn.style.display = currentLiteralModel ? 'inline-block' : 'none';
+
+            if (sectionsArea && toggleSectionsBtn) {
+                if (translation.sectionsCollapsed) {
+                    sectionsArea.classList.add('translation-sections-collapsed');
+                    toggleSectionsBtn.textContent = '▲';
                 } else {
-                    nuancesEl.style.display = 'none';
-                    const toggleBtn = element.querySelector('.toggle-nuances-btn');
-                    if (toggleBtn) toggleBtn.textContent = '▼';
+                    sectionsArea.classList.remove('translation-sections-collapsed');
+                    toggleSectionsBtn.textContent = '▼';
                 }
             }
         }
@@ -1225,7 +1241,27 @@ export async function retryTranslation(pill: 'input' | 'output', translationId: 
         return;
     }
 
-    const instructions = translation.promptContent;
+    let instructions: string;
+    if (pill === 'input') {
+        const inputLangId = getCurrentInputLanguage();
+        const inputLang = LANGUAGES.find(function(l) { return l.id === inputLangId; });
+        instructions = INPUT_INSTRUCTIONS.replace('[LANGUAGE]', inputLang?.name ?? 'the target language');
+    } else {
+        const promptDropdown = document.getElementById('prompt-dropdown') as HTMLSelectElement | null;
+        const promptId = promptDropdown?.value;
+        const prompts = settings.getPrompts();
+        const selectedPrompt = prompts.find(function(p) { return p.id === promptId; });
+        const promptContent = session?.promptOverride ?? selectedPrompt?.content ?? '';
+        instructions = OUTPUT_INSTRUCTIONS.replace('[PROMPT]', promptContent);
+        const inputLangId = getCurrentInputLanguage();
+        const inputLang = LANGUAGES.find(function(l) { return l.id === inputLangId; });
+        if (inputLang) {
+            instructions = instructions.replace('[LANGUAGE]', inputLang.name);
+        } else {
+            instructions = instructions.replace('[LANGUAGE]', 'the input language');
+        }
+    }
+
     const userMessage = await buildUserMessage(pill, translation.source, instructions);
 
     try {

@@ -158,6 +158,7 @@ function openSettingsModal(): void {
             sessionLiteralModelSelect: settingsModalElement.querySelector('#settings-session-literal-model') as HTMLSelectElement,
             sessionBackgroundInput: settingsModalElement.querySelector('#settings-session-background') as HTMLTextAreaElement,
             sessionReasoningSelect: settingsModalElement.querySelector('#settings-session-reasoning') as HTMLSelectElement,
+            sessionPromptOverrideInput: settingsModalElement.querySelector('#settings-session-prompt-override') as HTMLTextAreaElement,
             deleteSessionButton: settingsModalElement.querySelector('#settings-delete-session-btn') as HTMLButtonElement,
             saveSessionButton: settingsModalElement.querySelector('#settings-save-session-btn') as HTMLButtonElement
         };
@@ -426,6 +427,12 @@ function populateModelDropdown(): void {
 async function saveSettings(): Promise<void> {
     if (!refs || !config) return;
 
+    const conversationsTab = settingsModalElement?.querySelector('#conversations-content');
+    const isConversationsTabActive = conversationsTab?.classList.contains('active');
+    if (isConversationsTabActive && selectedSessionIdInModal) {
+        await saveSession();
+    }
+
     const minPriceStr = refs.minPriceInput.value.trim();
     const maxPriceStr = refs.maxPriceInput.value.trim();
 
@@ -570,12 +577,14 @@ function loadSessionIntoEditor(sessionId: string): void {
             refs.sessionLiteralModelSelect.value = session.literalModel ?? '';
             refs.sessionBackgroundInput.value = session.background ?? '';
             refs.sessionReasoningSelect.value = session.reasoning ?? 'none';
+            refs.sessionPromptOverrideInput.value = session.promptOverride ?? '';
         } else if (refs) {
             refs.sessionNameInput.value = '';
             refs.sessionModelSelect.value = '';
             refs.sessionLiteralModelSelect.value = '';
             refs.sessionBackgroundInput.value = '';
             refs.sessionReasoningSelect.value = 'none';
+            refs.sessionPromptOverrideInput.value = '';
         }
     });
 }
@@ -589,6 +598,7 @@ function clearSessionEditor(): void {
     refs.sessionNameInput.value = '';
     refs.sessionBackgroundInput.value = '';
     refs.sessionReasoningSelect.value = 'none';
+    refs.sessionPromptOverrideInput.value = '';
 }
 
 /**
@@ -635,6 +645,7 @@ async function saveSession(): Promise<void> {
     session.literalModel = refs.sessionLiteralModelSelect.value || null;
     session.background = refs.sessionBackgroundInput.value;
     session.reasoning = refs.sessionReasoningSelect.value as 'none' | 'minimal' | 'low' | 'medium' | 'high';
+    session.promptOverride = refs.sessionPromptOverrideInput.value || null;
     await storage.saveSession(session);
 
     if (config && session.model) {
