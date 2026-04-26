@@ -8,7 +8,7 @@ import { getPreference, savePreference, listSessions, saveSession, loadSession, 
 import { DEBUG_TRANSLATIONS, DEBUG_SESSIONS } from './debug';
 import * as ui from './ui';
 import { LANGUAGES } from './languages';
-import { SYSTEM_PROMPT, INPUT_INSTRUCTIONS, OUTPUT_INSTRUCTIONS, LITERAL_RETRANSLATION_PROMPT } from './prompts';
+import { SYSTEM_PROMPT, INPUT_INSTRUCTIONS, OUTPUT_INSTRUCTIONS, LITERAL_RETRANSLATION_PROMPT, QUESTION_SYSTEM_PROMPT } from './prompts';
 import { renderMarkdown } from './markdown';
 import * as settings from './settings';
 import type { Translation } from './types/translation';
@@ -62,6 +62,55 @@ let outputTranslations: Translation[] = [];
 let modelNameMap: Map<string, string> = new Map();
 
 /**
+ * Temporary model override for input pane (not persisted)
+ * @type {string | null}
+ */
+let inputModelOverride: string | null = null;
+
+/**
+ * Temporary model override for output pane (not persisted)
+ * @type {string | null}
+ */
+let outputModelOverride: string | null = null;
+
+/**
+ * Sets the model override dropdowns with available models
+ * @param {Array<{id: string; name: string; pricing?: {prompt: string; completion: string}; providerName?: string}>} models - Array of model objects
+ * @returns {void}
+ */
+export function setModelOverrideOptions(models: Array<{id: string; name: string; pricing?: {prompt: string; completion: string}; providerName?: string}>): void {
+    const inputOverrideSelect = document.getElementById('input-model-override') as HTMLSelectElement | null;
+    const outputOverrideSelect = document.getElementById('output-model-override') as HTMLSelectElement | null;
+
+    const populateSelect = function(select: HTMLSelectElement | null) {
+        if (!select) return;
+        select.innerHTML = '';
+
+        const defaultOption = document.createElement('option');
+        defaultOption.value = '';
+        defaultOption.textContent = 'Default LLM';
+        select.appendChild(defaultOption);
+
+        for (const model of models) {
+            const option = document.createElement('option');
+            option.value = model.id;
+            if (model.pricing) {
+                const promptCost = (parseFloat(model.pricing.prompt) * 1_000_000).toFixed(2);
+                const completionCost = (parseFloat(model.pricing.completion) * 1_000_000).toFixed(2);
+                const providerPart = model.providerName ? ' by ' + model.providerName : '';
+                option.textContent = `${model.name}${providerPart} ($${promptCost}/$${completionCost})`;
+            } else {
+                option.textContent = model.name;
+            }
+            select.appendChild(option);
+        }
+    };
+
+    populateSelect(inputOverrideSelect);
+    populateSelect(outputOverrideSelect);
+}
+
+/**
  * Sets the application config reference
  * @param {Config} appConfig - Application configuration object
  * @returns {void}
@@ -89,6 +138,18 @@ export function setModelNameMap(models: Array<{id: string; name: string}>): void
  */
 function getModelName(modelId: string): string {
     return modelNameMap.get(modelId) ?? modelId;
+}
+
+/**
+ * Gets the effective model for a translation pill, considering overrides
+ * @param {'input' | 'output'} pill - Which pane
+ * @returns {string | null} The effective model ID to use
+ */
+function getEffectiveModel(pill: 'input' | 'output'): string | null {
+    if (pill === 'input') {
+        return inputModelOverride ?? config?.selectedModel ?? null;
+    }
+    return outputModelOverride ?? config?.selectedModel ?? null;
 }
 
 /**
@@ -408,9 +469,12 @@ function buildHistorySection(): string {
         if (t.pill === 'input') {
             history += `<THEM>${t.source}</THEM>\n`;
             history += `<THEM>${t.translation}</THEM>\n`;
-        } else {
+        } else if (t.pill === 'output') {
             history += `<ME>${t.source}</ME>\n`;
             history += `<ME>${t.translation}</ME>\n`;
+        } else if (t.pill === 'question') {
+            history += `<USERQUESTION>${t.source}</USERQUESTION>\n`;
+            history += `<AGENTANSWER>${t.translation}</AGENTANSWER>\n`;
         }
     }
     history += "</HISTORY>";
@@ -424,6 +488,7 @@ function buildHistorySection(): string {
 export function setupTranslateButtons(): void {
     const inputBtn = document.getElementById("input-translate-btn");
     const outputBtn = document.getElementById("output-translate-btn");
+    const askBtn = document.getElementById("output-ask-btn");
 
     if (inputBtn) {
         inputBtn.addEventListener('click', function() {
@@ -434,6 +499,27 @@ export function setupTranslateButtons(): void {
     if (outputBtn) {
         outputBtn.addEventListener('click', function() {
             translate('output');
+        });
+    }
+
+    if (askBtn) {
+        askBtn.addEventListener('click', function() {
+            askQuestion();
+        });
+    }
+
+    const inputOverrideSelect = document.getElementById('input-model-override') as HTMLSelectElement | null;
+    const outputOverrideSelect = document.getElementById('output-model-override') as HTMLSelectElement | null;
+
+    if (inputOverrideSelect) {
+        inputOverrideSelect.addEventListener('change', function() {
+            inputModelOverride = inputOverrideSelect.value || null;
+        });
+    }
+
+    if (outputOverrideSelect) {
+        outputOverrideSelect.addEventListener('change', function() {
+            outputModelOverride = outputOverrideSelect.value || null;
         });
     }
 
@@ -459,7 +545,10 @@ export function setupTextareaKeyHandlers(): void {
 
     if (outputTextarea) {
         outputTextarea.addEventListener('keydown', function(event: KeyboardEvent): void {
-            if (event.key === 'Enter' && (event.shiftKey || event.ctrlKey)) {
+            if (event.key === 'Enter' && event.ctrlKey && event.shiftKey) {
+                event.preventDefault();
+                askQuestion();
+            } else if (event.key === 'Enter' && (event.shiftKey || event.ctrlKey)) {
                 event.preventDefault();
                 translate('output');
             }
@@ -513,6 +602,7 @@ export function setupLanguageDropdownHandlers(): void {
 export function updateButtonStates(): void {
     const inputBtn = document.getElementById("input-translate-btn") as HTMLButtonElement | null;
     const outputBtn = document.getElementById("output-translate-btn") as HTMLButtonElement | null;
+    const askBtn = document.getElementById("output-ask-btn") as HTMLButtonElement | null;
 
     const hasModel = config !== null && config.selectedModel !== null;
 
@@ -522,6 +612,10 @@ export function updateButtonStates(): void {
 
     if (outputBtn) {
         outputBtn.disabled = !hasModel;
+    }
+
+    if (askBtn) {
+        askBtn.disabled = !hasModel;
     }
 }
 
@@ -558,7 +652,8 @@ async function buildUserMessage(pill: 'input' | 'output', sourceText: string, in
  * @returns {Promise<void>}
  */
 export async function translate(pill: 'input' | 'output'): Promise<void> {
-    if (!config || !config.selectedModel) {
+    const effectiveModel = getEffectiveModel(pill);
+    if (!config || !effectiveModel) {
         ui.displayError("Please select a model first");
         return;
     }
@@ -651,8 +746,8 @@ export async function translate(pill: 'input' | 'output'): Promise<void> {
         reasoning: '',
         reasoningDetails: '',
         literalRetranslation: '',
-        model: config.selectedModel,
-        modelName: getModelName(config.selectedModel),
+        model: effectiveModel,
+        modelName: getModelName(effectiveModel),
         prompt: promptName,
         promptContent: instructions,
         timestamp: Date.now(),
@@ -668,7 +763,7 @@ export async function translate(pill: 'input' | 'output'): Promise<void> {
             config.openRouterApiKey,
             userMessage,
             SYSTEM_PROMPT,
-            config.selectedModel,
+            effectiveModel,
             reasoningLevel
         );
 
@@ -719,6 +814,105 @@ export async function translate(pill: 'input' | 'output'): Promise<void> {
 }
 
 /**
+ * Builds the user message for question answering
+ * @param {string} questionText - The user's question
+ * @returns {Promise<string>} Complete user message
+ */
+async function buildQuestionMessage(questionText: string): Promise<string> {
+    const background = await getBackground();
+
+    let message = "";
+
+    if (background.trim()) {
+        message += `<BACKGROUND>${background}</BACKGROUND>\n\n`;
+    }
+
+    const history = buildHistorySection();
+    if (history) {
+        message += history + "\n\n";
+    }
+
+    message += `<QUESTION>${questionText}</QUESTION>\n\n`;
+    message += `<INSTRUCTIONS>Answer the user's question clearly and helpfully.</INSTRUCTIONS>`;
+
+    return message;
+}
+
+/**
+ * Answers a question about the conversation
+ * @returns {Promise<void>}
+ */
+export async function askQuestion(): Promise<void> {
+    const effectiveModel = getEffectiveModel('output');
+    if (!config || !effectiveModel) {
+        ui.displayError("Please select a model first");
+        return;
+    }
+
+    if (!config.openRouterApiKey) {
+        ui.displayError("Please enter your API key first");
+        return;
+    }
+
+    const textarea = document.getElementById('output-textarea') as HTMLTextAreaElement | null;
+    if (!textarea) {
+        return;
+    }
+
+    const questionText = textarea.value.trim();
+    if (!questionText) {
+        ui.displayError("Please enter a question");
+        return;
+    }
+
+    textarea.value = '';
+
+    const userMessage = await buildQuestionMessage(questionText);
+
+    const session = await loadSession(currentSessionId);
+
+    const translation: Translation = {
+        id: generateUuid(),
+        pill: 'question',
+        source: questionText,
+        translation: '',
+        explanation: '',
+        nuances: '',
+        reasoning: '',
+        reasoningDetails: '',
+        model: effectiveModel,
+        modelName: getModelName(effectiveModel),
+        prompt: 'Question',
+        promptContent: QUESTION_SYSTEM_PROMPT,
+        timestamp: Date.now(),
+        status: 'pending',
+        error: null
+    };
+
+    outputTranslations.push(translation);
+    renderTranslations('output');
+
+    try {
+        const result = await translateRaw(
+            config.openRouterApiKey,
+            userMessage,
+            QUESTION_SYSTEM_PROMPT,
+            effectiveModel,
+            session?.reasoning ?? 'none'
+        );
+        translation.translation = result;
+        translation.status = 'complete';
+        saveSessionTranslation(currentSessionId, translation);
+    } catch (error) {
+        translation.status = 'error';
+        translation.error = error instanceof Error ? error.message : "Failed to get answer";
+    }
+
+    renderTranslations('output');
+    await refreshBalance();
+}
+
+/**
  * Refreshes the account balance display
  * @returns {Promise<void>}
  */
@@ -755,6 +949,24 @@ function setupToggleHandler(element: HTMLElement, translation: Translation): voi
             });
         }
     });
+
+    const toggleAnswerBtn = element.querySelector('.toggle-answer-btn') as HTMLButtonElement | null;
+    const answerEl = element.querySelector('.translation-target') as HTMLElement | null;
+    if (toggleAnswerBtn && answerEl) {
+        toggleAnswerBtn.addEventListener('click', function() {
+            const isCollapsed = answerEl.classList.contains('answer-collapsed');
+            if (isCollapsed) {
+                answerEl.classList.remove('answer-collapsed');
+                toggleAnswerBtn.textContent = '▲';
+                translation.answerCollapsed = false;
+            } else {
+                answerEl.classList.add('answer-collapsed');
+                toggleAnswerBtn.textContent = '▼';
+                translation.answerCollapsed = true;
+            }
+            saveSessionTranslation(currentSessionId, translation);
+        });
+    }
 }
 
 /**
@@ -778,7 +990,13 @@ export function renderTranslations(pill: 'input' | 'output'): void {
         let element = document.getElementById(elementId);
 
         if (!element) {
-            const template = document.getElementById('translation-item-template') as HTMLTemplateElement;
+            let template: HTMLTemplateElement | null = null;
+            if (translation.pill === 'question') {
+                template = document.getElementById('question-item-template') as HTMLTemplateElement | null;
+            }
+            if (!template) {
+                template = document.getElementById('translation-item-template') as HTMLTemplateElement | null;
+            }
             if (!template) {
                 continue;
             }
@@ -884,8 +1102,20 @@ export function renderTranslations(pill: 'input' | 'output'): void {
             if (spinnerEl) spinnerEl.style.display = 'none';
             if (errorEl) errorEl.style.display = 'none';
             if (targetEl) {
-                targetEl.style.display = 'block';
-                targetEl.innerHTML = renderMarkdown(translation.translation);
+                if (translation.pill === 'question') {
+                    targetEl.innerHTML = renderMarkdown(translation.translation);
+                    const toggleAnswerBtn = element.querySelector('.toggle-answer-btn') as HTMLButtonElement | null;
+                    if (translation.answerCollapsed) {
+                        targetEl.classList.add('answer-collapsed');
+                        if (toggleAnswerBtn) toggleAnswerBtn.textContent = '▲';
+                    } else {
+                        targetEl.classList.remove('answer-collapsed');
+                        if (toggleAnswerBtn) toggleAnswerBtn.textContent = '▼';
+                    }
+                } else {
+                    targetEl.style.display = 'block';
+                    targetEl.innerHTML = renderMarkdown(translation.translation);
+                }
             }
             if (charCountEl) {
                 charCountEl.textContent = `(${translation.source.length}/${translation.translation.length})`;
@@ -960,7 +1190,8 @@ export async function retryTranslation(pill: 'input' | 'output', translationId: 
         return;
     }
 
-    if (!config || !config.selectedModel || !config.openRouterApiKey) {
+    const effectiveModel = getEffectiveModel(pill);
+    if (!config || !effectiveModel || !config.openRouterApiKey) {
         ui.displayError("Cannot retry: no model selected or no API key");
         return;
     }
@@ -969,17 +1200,40 @@ export async function retryTranslation(pill: 'input' | 'output', translationId: 
     translation.error = null;
     renderTranslations(pill);
 
-    const instructions = translation.promptContent;
-    const userMessage = await buildUserMessage(pill, translation.source, instructions);
     const session = await loadSession(currentSessionId);
     const reasoningLevel = session?.reasoning ?? 'none';
+
+    if (translation.pill === 'question') {
+        const userMessage = await buildQuestionMessage(translation.source);
+        try {
+            const result = await translateRaw(
+                config.openRouterApiKey,
+                userMessage,
+                QUESTION_SYSTEM_PROMPT,
+                effectiveModel,
+                reasoningLevel
+            );
+            translation.translation = result;
+            translation.status = 'complete';
+            saveSessionTranslation(currentSessionId, translation);
+        } catch (error) {
+            translation.status = 'error';
+            translation.error = error instanceof Error ? error.message : "Failed to get answer";
+        }
+        renderTranslations(pill);
+        await refreshBalance();
+        return;
+    }
+
+    const instructions = translation.promptContent;
+    const userMessage = await buildUserMessage(pill, translation.source, instructions);
 
     try {
         const result = await translateStructured(
             config.openRouterApiKey,
             userMessage,
             SYSTEM_PROMPT,
-            config.selectedModel,
+            effectiveModel,
             reasoningLevel
         );
 

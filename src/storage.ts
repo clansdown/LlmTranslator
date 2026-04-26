@@ -1142,7 +1142,7 @@ export async function saveSessionTranslation(sessionId: string, translation: Tra
  * @param {number} [limit=1000] - Maximum number of translations to load
  * @returns {Promise<Translation[]>} Array of translation objects sorted by timestamp (newest first)
  */
-export async function listSessionTranslations(sessionId: string, pill: 'input' | 'output', limit: number = 1000): Promise<Translation[]> {
+export async function listSessionTranslations(sessionId: string, pill: 'input' | 'output' | 'question', limit: number = 1000): Promise<Translation[]> {
     if (DEBUG_TRANSLATIONS) {
         console.log(`[listSessionTranslations] Loading ${pill} translations for session ${sessionId} (limit: ${limit})...`);
     }
@@ -1174,7 +1174,7 @@ export async function listSessionTranslations(sessionId: string, pill: 'input' |
                 const file = await fileHandle.getFile();
                 const content = await file.text();
                 const translation = JSON.parse(content) as Translation;
-                if (translation.status === 'complete' && translation.pill === pill) {
+                if (translation.status === 'complete' && (translation.pill === pill || (pill === 'output' && translation.pill === 'question'))) {
                     translations.push(translation);
                 }
             } catch (e) {

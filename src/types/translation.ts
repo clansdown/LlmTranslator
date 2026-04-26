@@ -4,7 +4,7 @@
 
 export interface Translation {
     id: string;
-    pill: 'input' | 'output';
+    pill: 'input' | 'output' | 'question';
     source: string;
     translation: string;
     explanation: string;
@@ -20,4 +20,5 @@ export interface Translation {
     timestamp: number;
     status: 'pending' | 'complete' | 'error';
     error: string | null;
+    answerCollapsed?: boolean;
 }

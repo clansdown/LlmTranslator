@@ -1,6 +1,7 @@
 install.sh
 node_modules/
 dist/
+backblaze/
 
 # Local generation statistics
 .commit/

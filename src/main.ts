@@ -60,6 +60,7 @@ async function loadModels(): Promise<void> {
 
         settings.setModels(models);
         translation.setModelNameMap(models);
+        translation.setModelOverrideOptions(models);
 
         const savedModelId = await getPreference("selectedModel");
         console.log("[loadModels] Saved model ID:", savedModelId);
