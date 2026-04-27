@@ -38,13 +38,16 @@ export const INPUT_INSTRUCTIONS: string =
 /**
  * Instructions for output pane translations (native -> foreign)
  * [PROMPT] is replaced with the selected prompt's content
+ * [INTENT] is replaced with the user's intent for this translation
  * [LANGUAGE] is replaced with the input language name
  */
 export const OUTPUT_INSTRUCTIONS: string =
 `[PROMPT]
 
-Consider any background context and conversation history provided. 
-The explanation and nuances sections should be in [LANGUAGE], while the translation should be in the target language. 
+[INTENT]
+
+Consider any background context and conversation history provided.
+The explanation and nuances sections should be in [LANGUAGE], while the translation should be in the target language.
 Follow the system prompt's guidelines for structuring your response.`;
 
 /**

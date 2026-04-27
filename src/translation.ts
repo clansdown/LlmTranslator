@@ -723,6 +723,9 @@ export async function translate(pill: 'input' | 'output'): Promise<void> {
         const outputSession = await loadSession(currentSessionId);
         const promptContent = outputSession?.promptOverride ?? selectedPrompt.content;
         instructions = OUTPUT_INSTRUCTIONS.replace('[PROMPT]', promptContent);
+        const intentTextarea = document.getElementById('output-intent-textarea') as HTMLTextAreaElement | null;
+        const intent = intentTextarea?.value.trim() ?? '';
+        instructions = instructions.replace('[INTENT]', intent ? `Intent: ${intent}` : '');
         const inputLangId = getCurrentInputLanguage();
         const inputLang = LANGUAGES.find(function(l) { return l.id === inputLangId; });
         if (inputLang) {
@@ -738,11 +741,18 @@ export async function translate(pill: 'input' | 'output'): Promise<void> {
     const reasoningLevel = session?.reasoning ?? 'none';
     currentLiteralModel = session?.literalModel ?? null;
 
+    let intentForTranslation = '';
+    if (pill === 'output' && intentTextarea) {
+        intentForTranslation = intent;
+        intentTextarea.value = '';
+    }
+
     const translation: Translation = {
         id: generateUuid(),
         pill: pill,
         source: sourceText,
         translation: '',
+        intent: intentForTranslation,
         explanation: '',
         nuances: '',
         reasoning: '',
@@ -1073,6 +1083,37 @@ export function renderTranslations(pill: 'input' | 'output'): void {
                 });
             }
 
+            const editToggleBtn = element.querySelector('.edit-toggle-btn') as HTMLButtonElement | null;
+            const editArea = element.querySelector('.translation-edit-area') as HTMLElement | null;
+            const editSource = element.querySelector('.translation-edit-source') as HTMLTextAreaElement | null;
+            const editIntent = element.querySelector('.translation-edit-intent') as HTMLTextAreaElement | null;
+            const retranslateBtn = element.querySelector('.retranslate-btn') as HTMLButtonElement | null;
+
+            if (editToggleBtn && editArea) {
+                editToggleBtn.addEventListener('click', function() {
+                    if (editSource) editSource.value = translation.source;
+                    if (editIntent) editIntent.value = translation.intent ?? '';
+                    if (editArea.style.display === 'none') {
+                        editArea.style.display = 'block';
+                    } else {
+                        editArea.style.display = 'none';
+                    }
+                });
+            }
+
+            if (retranslateBtn) {
+                retranslateBtn.addEventListener('click', function() {
+                    const newSource = editSource?.value.trim() ?? '';
+                    if (!newSource) {
+                        ui.displayError("Source text cannot be empty");
+                        return;
+                    }
+                    const newIntent = editIntent?.value.trim() ?? '';
+                    if (editArea) editArea.style.display = 'none';
+                    retranslateFromEdit(pill, translation.id, newSource, newIntent);
+                });
+            }
+
             const regenerateLiteralBtn = element.querySelector('.regenerate-literal-btn') as HTMLButtonElement | null;
             if (regenerateLiteralBtn) {
                 const translationId = translation.id;
@@ -1253,6 +1294,7 @@ export async function retryTranslation(pill: 'input' | 'output', translationId: 
         const selectedPrompt = prompts.find(function(p) { return p.id === promptId; });
         const promptContent = session?.promptOverride ?? selectedPrompt?.content ?? '';
         instructions = OUTPUT_INSTRUCTIONS.replace('[PROMPT]', promptContent);
+        instructions = instructions.replace('[INTENT]', translation.intent ? `Intent: ${translation.intent}` : '');
         const inputLangId = getCurrentInputLanguage();
         const inputLang = LANGUAGES.find(function(l) { return l.id === inputLangId; });
         if (inputLang) {
@@ -1280,6 +1322,119 @@ export async function retryTranslation(pill: 'input' | 'output', translationId: 
         translation.reasoningDetails = result.reasoningDetails;
         translation.status = 'complete';
         saveSessionTranslation(currentSessionId, translation);
+    } catch (error) {
+        translation.status = 'error';
+        translation.error = error instanceof Error ? error.message : "Translation failed";
+    }
+
+    renderTranslations(pill);
+    await refreshBalance();
+}
+
+/**
+ * Retranslates an existing translation with edited source and/or intent
+ * @param {'input' | 'output'} pill - Which pane
+ * @param {string} translationId - ID of translation to retranslate
+ * @param {string} newSource - New source text
+ * @param {string} newIntent - New intent text
+ * @returns {Promise<void>}
+ */
+export async function retranslateFromEdit(pill: 'input' | 'output', translationId: string, newSource: string, newIntent: string): Promise<void> {
+    const translations = pill === 'input' ? inputTranslations : outputTranslations;
+    const translation = translations.find(function(t) { return t.id === translationId; });
+
+    if (!translation) {
+        return;
+    }
+
+    const effectiveModel = getEffectiveModel(pill);
+    if (!config || !effectiveModel || !config.openRouterApiKey) {
+        ui.displayError("Cannot retranslate: no model selected or no API key");
+        return;
+    }
+
+    const session = await loadSession(currentSessionId);
+    const reasoningLevel = session?.reasoning ?? 'none';
+
+    translation.status = 'pending';
+    translation.error = null;
+    translation.source = newSource;
+    translation.intent = newIntent || undefined;
+    translation.translation = '';
+    translation.explanation = '';
+    translation.nuances = '';
+    translation.reasoning = '';
+    translation.reasoningDetails = '';
+    translation.literalRetranslation = '';
+    translation.literalPending = false;
+    renderTranslations(pill);
+
+    let instructions: string;
+    if (pill === 'input') {
+        const inputLangId = getCurrentInputLanguage();
+        const inputLang = LANGUAGES.find(function(l) { return l.id === inputLangId; });
+        instructions = INPUT_INSTRUCTIONS.replace('[LANGUAGE]', inputLang?.name ?? 'the target language');
+    } else {
+        const promptDropdown = document.getElementById('prompt-dropdown') as HTMLSelectElement | null;
+        const promptId = promptDropdown?.value;
+        const prompts = settings.getPrompts();
+        const selectedPrompt = prompts.find(function(p) { return p.id === promptId; });
+        const promptContent = session?.promptOverride ?? selectedPrompt?.content ?? '';
+        instructions = OUTPUT_INSTRUCTIONS.replace('[PROMPT]', promptContent);
+        instructions = instructions.replace('[INTENT]', newIntent ? `Intent: ${newIntent}` : '');
+        const inputLangId = getCurrentInputLanguage();
+        const inputLang = LANGUAGES.find(function(l) { return l.id === inputLangId; });
+        if (inputLang) {
+            instructions = instructions.replace('[LANGUAGE]', inputLang.name);
+        } else {
+            instructions = instructions.replace('[LANGUAGE]', 'the input language');
+        }
+    }
+
+    const userMessage = await buildUserMessage(pill, newSource, instructions);
+
+    try {
+        const result = await translateStructured(
+            config.openRouterApiKey,
+            userMessage,
+            SYSTEM_PROMPT,
+            effectiveModel,
+            reasoningLevel
+        );
+
+        translation.translation = result.translation;
+        translation.explanation = result.explanation;
+        translation.nuances = result.nuances;
+        translation.reasoning = result.reasoning;
+        translation.reasoningDetails = result.reasoningDetails;
+        translation.status = 'complete';
+        saveSessionTranslation(currentSessionId, translation);
+
+        currentLiteralModel = session?.literalModel ?? null;
+        if (session?.literalModel) {
+            try {
+                const sourceLangId = getCurrentInputLanguage();
+                const sourceLang = LANGUAGES.find(function(l) { return l.id === sourceLangId; });
+                const sourceLangName = sourceLang?.name ?? sourceLangId;
+                const literalSystemPrompt = LITERAL_RETRANSLATION_PROMPT.replace(/\[LANGUAGE\]/g, sourceLangName);
+                const literalUserMessage = result.translation;
+                translation.literalPending = true;
+                renderTranslations(pill);
+                const literalResult = await translateRaw(
+                    config.openRouterApiKey,
+                    literalUserMessage,
+                    literalSystemPrompt,
+                    session.literalModel,
+                    'none'
+                );
+                translation.literalRetranslation = literalResult;
+                translation.literalPending = false;
+                saveSessionTranslation(currentSessionId, translation);
+            } catch (literalError) {
+                console.error('[retranslateFromEdit] Literal retranslation failed:', literalError);
+                translation.literalPending = false;
+            }
+        }
     } catch (error) {
         translation.status = 'error';
         translation.error = error instanceof Error ? error.message : "Translation failed";

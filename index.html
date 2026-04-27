@@ -245,6 +245,7 @@
                             </div>
                         </div>
                         <div class="pane-content">
+                            <textarea class="form-control form-control-sm mb-2" id="output-intent-textarea" rows="1" placeholder="Intent (e.g., be friendly, stern tone)..."></textarea>
                             <textarea class="pane-textarea" id="output-textarea" placeholder="Type text to translate..."></textarea>
                             <div id="output-translations-container"></div>
                         </div>
@@ -268,10 +269,16 @@
                     <span class="ms-2 translation-model-name"></span>
                 </div>
             </div>
+            <div class="translation-edit-area px-3 py-2" style="display: none; background: var(--bs-tertiary-bg); border-bottom: 1px solid var(--bs-border-color);">
+                <textarea class="form-control form-control-sm translation-edit-source mb-1" rows="2" placeholder="Edit text..."></textarea>
+                <textarea class="form-control form-control-sm translation-edit-intent mb-1" rows="1" placeholder="Intent (e.g., be friendly, stern tone)..."></textarea>
+                <button type="button" class="btn btn-sm btn-primary retranslate-btn">Retranslate</button>
+            </div>
             <div class="row px-3">
                 <div class="col text-justify translation-source p-2" style="border-bottom: 1px solid var(--bs-border-color); white-space: pre-wrap;"></div>
                 <div class="col-auto p-1">
                     <button type="button" class="btn btn-sm btn-outline-secondary copy-source-btn" title="Copy to clipboard">📋</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary edit-toggle-btn mt-1" title="Edit">✏️</button>
                 </div>
             </div>
             <div class="row px-3">

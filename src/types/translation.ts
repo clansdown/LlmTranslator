@@ -7,6 +7,7 @@ export interface Translation {
     pill: 'input' | 'output' | 'question';
     source: string;
     translation: string;
+    intent?: string;
     explanation: string;
     nuances: string;
     reasoning: string;
