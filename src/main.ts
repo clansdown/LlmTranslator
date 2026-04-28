@@ -18,7 +18,8 @@ const config: Config = {
     selectedModel: null,
     minPrice: null,
     maxPrice: null,
-    selectedPromptId: null
+    selectedPromptId: null,
+    approvedModelIds: null
 };
 
 /**
@@ -53,17 +54,20 @@ async function loadModels(): Promise<void> {
         let models = await fetchZdrModels(apiKey);
         models = settings.filterModelsByPrice(models);
 
-        settings.setModels(models);
-        translation.setModelNameMap(models);
-        translation.setModelOverrideOptions(models);
+        const approvedModels = settings.filterModelsByApproval(models);
+
+        settings.setAllModels(models);
+        settings.setModels(approvedModels);
+        translation.setModelNameMap(approvedModels);
+        translation.setModelOverrideOptions(approvedModels);
 
         const savedModelId = await getPreference("selectedModel");
-        if (savedModelId && models.some(function(m) { return m.id === savedModelId; })) {
+        if (savedModelId && approvedModels.some(function(m) { return m.id === savedModelId; })) {
             config.selectedModel = savedModelId;
             translation.updateButtonStates();
-        } else if (models.length > 0) {
-            config.selectedModel = models[0].id;
-            savePreference("selectedModel", models[0].id).catch(function() {});
+        } else if (approvedModels.length > 0) {
+            config.selectedModel = approvedModels[0].id;
+            savePreference("selectedModel", approvedModels[0].id).catch(function() {});
             translation.updateButtonStates();
         }
     } catch (error) {
@@ -145,6 +149,22 @@ async function loadSettings(): Promise<void> {
     const selectedPromptId = await getPreference("selectedPrompt");
     if (selectedPromptId) {
         config.selectedPromptId = selectedPromptId;
+    }
+
+    const approvedModelsStr = await getPreference("approvedModels");
+    if (approvedModelsStr) {
+        try {
+            const parsed = JSON.parse(approvedModelsStr);
+            const hasOldFormat = Array.isArray(parsed) && parsed.some(function(id) { return typeof id === 'string' && !id.includes('::'); });
+            if (hasOldFormat) {
+                config.approvedModelIds = null;
+                await storage.deletePreference('approvedModels');
+            } else {
+                config.approvedModelIds = parsed;
+            }
+        } catch {
+            config.approvedModelIds = null;
+        }
     }
 }
 

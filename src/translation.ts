@@ -1394,6 +1394,8 @@ async function regenerateTranslationById(translationId: string): Promise<void> {
 
     const session = await loadSession(currentSessionId);
     const effectiveModel = getEffectiveModel();
+    translation.model = effectiveModel;
+    translation.modelName = getModelName(effectiveModel ?? '');
     const reasoningLevel = session?.reasoning ?? 'none';
     const readLang = LANGUAGES.find(function(l) { return l.id === session?.readLanguage; });
     const instructions = INPUT_INSTRUCTIONS.replace('[LANGUAGE]', readLang?.name ?? 'your language');

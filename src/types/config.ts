@@ -11,4 +11,5 @@ export interface Config {
     minPrice: number | null;
     maxPrice: number | null;
     selectedPromptId: string | null;
+    approvedModelIds: string[] | null;
 }

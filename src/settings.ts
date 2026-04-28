@@ -31,6 +31,12 @@ let prompts: Prompt[] = [];
 let models: VisionModel[] = [];
 
 /**
+ * All fetched models (unfiltered) for the Models tab
+ * @type {VisionModel[]}
+ */
+let allModels: VisionModel[] = [];
+
+/**
  * Currently selected prompt ID in the settings modal
  * @type {string | null}
  */
@@ -81,6 +87,11 @@ interface SettingsReferences {
     sessionWritePromptSelect: HTMLSelectElement;
     deleteSessionButton: HTMLButtonElement;
     saveSessionButton: HTMLButtonElement;
+    modelsTabSearchInput: HTMLInputElement;
+    modelsTabListContainer: HTMLDivElement;
+    modelsTabClearButton: HTMLButtonElement;
+    selectAllModelsBtn: HTMLButtonElement;
+    deselectAllModelsBtn: HTMLButtonElement;
 }
 
 let refs: SettingsReferences | null = null;
@@ -168,7 +179,12 @@ function openSettingsModal(): void {
             sessionWriteLanguageSelect: settingsModalElement.querySelector('#settings-session-write-language') as HTMLSelectElement,
             sessionWritePromptSelect: settingsModalElement.querySelector('#settings-session-write-prompt') as HTMLSelectElement,
             deleteSessionButton: settingsModalElement.querySelector('#settings-delete-session-btn') as HTMLButtonElement,
-            saveSessionButton: settingsModalElement.querySelector('#settings-save-session-btn') as HTMLButtonElement
+            saveSessionButton: settingsModalElement.querySelector('#settings-save-session-btn') as HTMLButtonElement,
+            modelsTabSearchInput: settingsModalElement.querySelector('#settings-models-search') as HTMLInputElement,
+            modelsTabListContainer: settingsModalElement.querySelector('#settings-models-list') as HTMLDivElement,
+            modelsTabClearButton: settingsModalElement.querySelector('#settings-models-search-clear') as HTMLButtonElement,
+            selectAllModelsBtn: settingsModalElement.querySelector('#settings-select-all-models') as HTMLButtonElement,
+            deselectAllModelsBtn: settingsModalElement.querySelector('#settings-deselect-all-models') as HTMLButtonElement
         };
 
         setupEventListeners();
@@ -236,6 +252,31 @@ function setupEventListeners(): void {
     refs.saveSessionButton.addEventListener('click', async function() {
         await saveSession();
     });
+
+    refs.modelsTabSearchInput.addEventListener('input', function() {
+        updateModelsTabSearch(refs!.modelsTabSearchInput.value);
+    });
+
+    refs.modelsTabClearButton.addEventListener('click', function() {
+        refs!.modelsTabSearchInput.value = '';
+        updateModelsTabSearch('');
+    });
+
+    refs.selectAllModelsBtn.addEventListener('click', function() {
+        if (config) {
+            config.approvedModelIds = allModels.map(function(m) { return m.id + '::' + (m.providerName ?? ''); });
+        }
+        const checkboxes = refs!.modelsTabListContainer.querySelectorAll('.model-approval-checkbox');
+        checkboxes.forEach(function(cb) { (cb as HTMLInputElement).checked = true; });
+    });
+
+    refs.deselectAllModelsBtn.addEventListener('click', function() {
+        if (config) {
+            config.approvedModelIds = [];
+        }
+        const checkboxes = refs!.modelsTabListContainer.querySelectorAll('.model-approval-checkbox');
+        checkboxes.forEach(function(cb) { (cb as HTMLInputElement).checked = false; });
+    });
 }
 
 /**
@@ -257,6 +298,7 @@ function populateSettingsForm(): void {
     populateModelDropdown();
     populateLanguageDropdowns();
     populateWritePromptDropdown();
+    populateModelsTab();
 }
 
 /**
@@ -380,6 +422,136 @@ async function deleteSelectedPrompt(): Promise<void> {
 export function setModels(availableModels: VisionModel[]): void {
     models = availableModels;
     populateModelDropdown();
+}
+
+/**
+ * Sets all fetched models (unfiltered) for the Models tab
+ * @param {VisionModel[]} fetchedModels - Array of all fetched models
+ * @returns {void}
+ */
+export function setAllModels(fetchedModels: VisionModel[]): void {
+    allModels = fetchedModels;
+}
+
+/**
+ * Filters models by approved list from config
+ * @param {VisionModel[]} availableModels - Array of models to filter
+ * @returns {VisionModel[]} Filtered models (approved only, or all if no approval list)
+ */
+export function filterModelsByApproval(availableModels: VisionModel[]): VisionModel[] {
+    if (!config || config.approvedModelIds === null) {
+        return availableModels;
+    }
+    const approvedSet = new Set(config.approvedModelIds);
+    return availableModels.filter(function(model) {
+        const key = model.id + '::' + (model.providerName ?? '');
+        return approvedSet.has(key);
+    });
+}
+
+/**
+ * Populates the Models tab checkbox list
+ * @returns {void}
+ */
+export function populateModelsTab(): void {
+    if (!refs || allModels.length === 0) return;
+
+    const container = refs.modelsTabListContainer;
+    container.innerHTML = '';
+
+    const approvedSet = new Set<string>(config?.approvedModelIds ?? []);
+
+    const sorted = [...allModels].sort(function(a, b) {
+        const nameA = a.name.toLowerCase();
+        const nameB = b.name.toLowerCase();
+        if (nameA < nameB) return -1;
+        if (nameA > nameB) return 1;
+        return 0;
+    });
+
+    for (const model of sorted) {
+        const div = document.createElement('div');
+        div.className = 'form-check';
+
+        const compositeKey = model.id + '::' + (model.providerName ?? '');
+        const input = document.createElement('input');
+        input.className = 'form-check-input model-approval-checkbox';
+        input.type = 'checkbox';
+        input.value = compositeKey;
+        input.id = 'model-approval-' + compositeKey.replace(/[^a-zA-Z0-9]/g, '_');
+
+        const promptCost = model.pricing ? (parseFloat(model.pricing.prompt) * 1_000_000).toFixed(2) : '?';
+        const completionCost = model.pricing ? (parseFloat(model.pricing.completion) * 1_000_000).toFixed(2) : '?';
+        const providerPart = model.providerName ? ' by ' + model.providerName : '';
+        const label = document.createElement('label');
+        label.className = 'form-check-label small';
+        label.htmlFor = input.id;
+        label.textContent = `${model.name}${providerPart} ($${promptCost}/$${completionCost})`;
+
+        const isApproved = config?.approvedModelIds === null || approvedSet.has(compositeKey);
+        input.checked = isApproved;
+
+        input.addEventListener('change', function() {
+            if (input.checked) {
+                if (config?.approvedModelIds !== null) {
+                    if (!config.approvedModelIds.includes(compositeKey)) {
+                        config.approvedModelIds.push(compositeKey);
+                    }
+                }
+            } else {
+                if (config?.approvedModelIds !== null) {
+                    config.approvedModelIds = config.approvedModelIds.filter(function(id) { return id !== compositeKey; });
+                }
+            }
+        });
+
+        div.appendChild(input);
+        div.appendChild(label);
+        container.appendChild(div);
+    }
+}
+
+/**
+ * Updates the Models tab search filter
+ * @param {string} query - Search query string
+ * @returns {void}
+ */
+export function updateModelsTabSearch(query: string): void {
+    if (!refs) return;
+    const lowerQuery = query.toLowerCase();
+    const checkboxes = refs.modelsTabListContainer.querySelectorAll('.form-check');
+    for (const div of checkboxes) {
+        const label = div.querySelector('label');
+        const text = label?.textContent?.toLowerCase() ?? '';
+        (div as HTMLElement).style.display = text.includes(lowerQuery) ? '' : 'none';
+    }
+}
+
+/**
+ * Saves approved models to storage and refreshes dropdowns
+ * @returns {Promise<void>}
+ */
+export async function saveApprovedModels(): Promise<void> {
+    if (!config) return;
+
+    if (config.approvedModelIds !== null) {
+        await storage.savePreference('approvedModels', JSON.stringify(config.approvedModelIds));
+    } else {
+        await storage.deletePreference('approvedModels');
+    }
+
+    const approvedModels = filterModelsByApproval(models);
+    setModels(approvedModels);
+    translation.setModelNameMap(approvedModels);
+    translation.setModelOverrideOptions(approvedModels);
+
+    if (config.selectedModel && !approvedModels.some(function(m) { return m.id === config!.selectedModel; })) {
+        if (approvedModels.length > 0) {
+            config.selectedModel = approvedModels[0].id;
+            await storage.savePreference('selectedModel', config.selectedModel);
+            translation.updateButtonStates();
+        }
+    }
 }
 
 /**
@@ -507,6 +679,8 @@ async function saveSettings(): Promise<void> {
     } else {
         await storage.deletePreference('maxPrice');
     }
+
+    await saveApprovedModels();
 
     settingsModalInstance.hide();
 }
