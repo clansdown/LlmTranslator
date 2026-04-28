@@ -987,6 +987,16 @@ export async function loadSession(sessionId: string): Promise<TranslationSession
             ...parsedSession,
             literalModel: parsedSession.literalModel ?? null
         };
+        const legacySession = parsedSession as { inputLanguage?: string; promptId?: string };
+        if (!session.readLanguage) {
+            session.readLanguage = legacySession.inputLanguage ?? 'english';
+        }
+        if (!session.writeLanguage) {
+            session.writeLanguage = session.readLanguage;
+        }
+        if (!session.writePromptId && legacySession.promptId) {
+            session.writePromptId = legacySession.promptId;
+        }
         if (DEBUG_SESSIONS) {
             console.log(`[loadSession] Loaded session ${sessionId}: ${session.name}`);
         }
@@ -1079,11 +1089,11 @@ export async function deleteSession(sessionId: string): Promise<boolean> {
 /**
  * Gets or creates the default session
  * @param {string} [model] - Optional model to set if creating new default
- * @param {string} [inputLanguage] - Optional input language to set if creating new default
+ * @param {string} [readLanguage] - Optional read language to set if creating new default
  * @param {string} [promptId] - Optional prompt ID to set if creating new default
  * @returns {Promise<TranslationSession>} Default session object
  */
-export async function getOrCreateDefaultSession(model?: string | null, inputLanguage?: string, promptId?: string | null): Promise<TranslationSession> {
+export async function getOrCreateDefaultSession(model?: string | null, readLanguage?: string, promptId?: string | null): Promise<TranslationSession> {
     const existing = await loadSession(DEFAULT_SESSION_ID);
     if (existing) {
         return existing;
@@ -1097,8 +1107,9 @@ export async function getOrCreateDefaultSession(model?: string | null, inputLang
         id: DEFAULT_SESSION_ID,
         name: "Default",
         model: model ?? null,
-        inputLanguage: inputLanguage ?? "english",
-        promptId: promptId ?? null,
+        readLanguage: readLanguage ?? "english",
+        writeLanguage: readLanguage ?? "english",
+        writePromptId: promptId ?? null,
         background: "",
         reasoning: "none",
         literalModel: null,

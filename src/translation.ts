@@ -45,15 +45,10 @@ let currentSessionId: string = 'default';
 let currentLiteralModel: string | null = null;
 
 /**
- * In-memory translation arrays - source of truth for translations
+ * In-memory translation array - source of truth for translations
  * @type {Translation[]}
  */
-let inputTranslations: Translation[] = [];
-
-/**
- * @type {Translation[]}
- */
-let outputTranslations: Translation[] = [];
+let allTranslations: Translation[] = [];
 
 /**
  * Maps of model IDs to names for display
@@ -62,52 +57,40 @@ let outputTranslations: Translation[] = [];
 let modelNameMap: Map<string, string> = new Map();
 
 /**
- * Temporary model override for input pane (not persisted)
+ * Temporary model override (not persisted)
  * @type {string | null}
  */
-let inputModelOverride: string | null = null;
+let modelOverride: string | null = null;
 
 /**
- * Temporary model override for output pane (not persisted)
- * @type {string | null}
- */
-let outputModelOverride: string | null = null;
-
-/**
- * Sets the model override dropdowns with available models
+ * Sets the model override dropdown with available models
  * @param {Array<{id: string; name: string; pricing?: {prompt: string; completion: string}; providerName?: string}>} models - Array of model objects
  * @returns {void}
  */
 export function setModelOverrideOptions(models: Array<{id: string; name: string; pricing?: {prompt: string; completion: string}; providerName?: string}>): void {
-    const inputOverrideSelect = document.getElementById('input-model-override') as HTMLSelectElement | null;
-    const outputOverrideSelect = document.getElementById('output-model-override') as HTMLSelectElement | null;
+    const overrideSelect = document.getElementById('model-override') as HTMLSelectElement | null;
 
-    const populateSelect = function(select: HTMLSelectElement | null) {
-        if (!select) return;
-        select.innerHTML = '';
+    if (!overrideSelect) return;
+    overrideSelect.innerHTML = '';
 
-        const defaultOption = document.createElement('option');
-        defaultOption.value = '';
-        defaultOption.textContent = 'Default LLM';
-        select.appendChild(defaultOption);
+    const defaultOption = document.createElement('option');
+    defaultOption.value = '';
+    defaultOption.textContent = 'Default LLM';
+    overrideSelect.appendChild(defaultOption);
 
-        for (const model of models) {
-            const option = document.createElement('option');
-            option.value = model.id;
-            if (model.pricing) {
-                const promptCost = (parseFloat(model.pricing.prompt) * 1_000_000).toFixed(2);
-                const completionCost = (parseFloat(model.pricing.completion) * 1_000_000).toFixed(2);
-                const providerPart = model.providerName ? ' by ' + model.providerName : '';
-                option.textContent = `${model.name}${providerPart} ($${promptCost}/$${completionCost})`;
-            } else {
-                option.textContent = model.name;
-            }
-            select.appendChild(option);
+    for (const model of models) {
+        const option = document.createElement('option');
+        option.value = model.id;
+        if (model.pricing) {
+            const promptCost = (parseFloat(model.pricing.prompt) * 1_000_000).toFixed(2);
+            const completionCost = (parseFloat(model.pricing.completion) * 1_000_000).toFixed(2);
+            const providerPart = model.providerName ? ' by ' + model.providerName : '';
+            option.textContent = `${model.name}${providerPart} ($${promptCost}/$${completionCost})`;
+        } else {
+            option.textContent = model.name;
         }
-    };
-
-    populateSelect(inputOverrideSelect);
-    populateSelect(outputOverrideSelect);
+        overrideSelect.appendChild(option);
+    }
 }
 
 /**
@@ -141,15 +124,11 @@ function getModelName(modelId: string): string {
 }
 
 /**
- * Gets the effective model for a translation pill, considering overrides
- * @param {'input' | 'output'} pill - Which pane
+ * Gets the effective model for translation, considering overrides
  * @returns {string | null} The effective model ID to use
  */
-function getEffectiveModel(pill: 'input' | 'output'): string | null {
-    if (pill === 'input') {
-        return inputModelOverride ?? config?.selectedModel ?? null;
-    }
-    return outputModelOverride ?? config?.selectedModel ?? null;
+function getEffectiveModel(): string | null {
+    return modelOverride ?? config?.selectedModel ?? null;
 }
 
 /**
@@ -190,31 +169,23 @@ export async function setCurrentSession(sessionId: string): Promise<void> {
     currentLiteralModel = session.literalModel ?? null;
     await savePreference('currentSession', sessionId);
 
-    inputTranslations = [];
-    outputTranslations = [];
+    allTranslations = [];
     clearTranslationContainers();
 
     const MAX_HISTORY = 1000;
-    inputTranslations = await listSessionTranslations(sessionId, 'input', MAX_HISTORY);
-    outputTranslations = await listSessionTranslations(sessionId, 'output', MAX_HISTORY);
+    const inputItems = await listSessionTranslations(sessionId, 'input', MAX_HISTORY);
+    const outputItems = await listSessionTranslations(sessionId, 'output', MAX_HISTORY);
+    const questionItems = await listSessionTranslations(sessionId, 'question', MAX_HISTORY);
+    allTranslations = [...inputItems, ...outputItems, ...questionItems]
+        .sort(function(a, b) { return b.timestamp - a.timestamp; });
 
-    renderTranslations('input');
-    renderTranslations('output');
+    renderAllTranslations();
 
     if (config) {
         if (session.model) {
             config.selectedModel = session.model;
         }
-        if (session.promptId) {
-            config.selectedPromptId = session.promptId;
-        }
     }
-
-    if (session.inputLanguage) {
-        populateLanguageDropdowns(session.inputLanguage);
-    }
-
-    settings.updatePromptDropdown();
 
     updateSessionSelector(sessionId);
 
@@ -237,8 +208,9 @@ export async function createSession(name?: string): Promise<string> {
         id: generateUuid(),
         name: name ?? "New Conversation",
         model: config?.selectedModel ?? null,
-        inputLanguage: getCurrentInputLanguage(),
-        promptId: config?.selectedPromptId ?? null,
+        readLanguage: 'english',
+        writeLanguage: 'english',
+        writePromptId: config?.selectedPromptId ?? null,
         background: "",
         reasoning: "none",
         literalModel: null,
@@ -300,7 +272,7 @@ export async function renameSession(sessionId: string, newName: string): Promise
 }
 
 /**
- * Saves the current session state (model, language, prompt)
+ * Saves the current session state (model)
  * @returns {Promise<void>}
  */
 export async function saveCurrentSession(): Promise<void> {
@@ -315,9 +287,7 @@ export async function saveCurrentSession(): Promise<void> {
 
     if (config) {
         session.model = config.selectedModel;
-        session.promptId = config.selectedPromptId;
     }
-    session.inputLanguage = getCurrentInputLanguage();
 
     await saveSession(session);
 }
@@ -347,18 +317,13 @@ export async function getBackground(): Promise<string> {
 }
 
 /**
- * Clears both translation containers in the DOM
+ * Clears the translation container in the DOM
  * @returns {void}
  */
 function clearTranslationContainers(): void {
-    const inputContainer = document.getElementById('input-translations-container');
-    const outputContainer = document.getElementById('output-translations-container');
-
-    if (inputContainer) {
-        inputContainer.innerHTML = '';
-    }
-    if (outputContainer) {
-        outputContainer.innerHTML = '';
+    const container = document.getElementById('translations-container');
+    if (container) {
+        container.innerHTML = '';
     }
 }
 
@@ -375,15 +340,6 @@ function updateSessionSelector(sessionId: string): void {
 }
 
 /**
- * Gets the currently selected input language from the dropdown
- * @returns {string} Language ID
- */
-function getCurrentInputLanguage(): string {
-    const dropdown = document.getElementById('input-language-dropdown') as HTMLSelectElement | null;
-    return dropdown?.value ?? 'english';
-}
-
-/**
  * Initializes the default session on startup
  * @returns {Promise<void>}
  */
@@ -394,7 +350,7 @@ export async function initializeDefaultSession(): Promise<void> {
 
     const defaultSession = await getOrCreateDefaultSession(
         config?.selectedModel ?? null,
-        await getPreference('inputLanguage') ?? 'english',
+        'english',
         config?.selectedPromptId ?? null
     );
 
@@ -415,17 +371,16 @@ export async function loadTranslationHistory(): Promise<void> {
     }
     const MAX_HISTORY = 1000;
 
-    inputTranslations = await listSessionTranslations(currentSessionId, 'input', MAX_HISTORY);
-    if (DEBUG_TRANSLATIONS) {
-        console.log(`[loadTranslationHistory] Loaded ${inputTranslations.length} input translations`);
-    }
-    renderTranslations('input');
+    const inputItems = await listSessionTranslations(currentSessionId, 'input', MAX_HISTORY);
+    const outputItems = await listSessionTranslations(currentSessionId, 'output', MAX_HISTORY);
+    const questionItems = await listSessionTranslations(currentSessionId, 'question', MAX_HISTORY);
+    allTranslations = [...inputItems, ...outputItems, ...questionItems]
+        .sort(function(a, b) { return b.timestamp - a.timestamp; });
 
-    outputTranslations = await listSessionTranslations(currentSessionId, 'output', MAX_HISTORY);
     if (DEBUG_TRANSLATIONS) {
-        console.log(`[loadTranslationHistory] Loaded ${outputTranslations.length} output translations`);
+        console.log(`[loadTranslationHistory] Loaded ${allTranslations.length} total translations`);
     }
-    renderTranslations('output');
+    renderAllTranslations();
 
     if (DEBUG_TRANSLATIONS) {
         console.log('[loadTranslationHistory] Translation history loaded');
@@ -441,8 +396,6 @@ function buildHistorySection(): string {
     const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
     const now = Date.now();
     const cutoff = now - SEVEN_DAYS_MS;
-
-    const allTranslations: Translation[] = [...inputTranslations, ...outputTranslations];
 
     const activeDays = new Set<number>();
     for (const t of allTranslations) {
@@ -486,18 +439,12 @@ function buildHistorySection(): string {
  * @returns {void}
  */
 export function setupTranslateButtons(): void {
-    const inputBtn = document.getElementById("input-translate-btn");
-    const outputBtn = document.getElementById("output-translate-btn");
-    const askBtn = document.getElementById("output-ask-btn");
+    const translateBtn = document.getElementById("translate-btn");
+    const askBtn = document.getElementById("ask-btn");
+    const inputBtn = document.getElementById("input-btn");
 
-    if (inputBtn) {
-        inputBtn.addEventListener('click', function() {
-            translate('input');
-        });
-    }
-
-    if (outputBtn) {
-        outputBtn.addEventListener('click', function() {
+    if (translateBtn) {
+        translateBtn.addEventListener('click', function() {
             translate('output');
         });
     }
@@ -508,18 +455,17 @@ export function setupTranslateButtons(): void {
         });
     }
 
-    const inputOverrideSelect = document.getElementById('input-model-override') as HTMLSelectElement | null;
-    const outputOverrideSelect = document.getElementById('output-model-override') as HTMLSelectElement | null;
-
-    if (inputOverrideSelect) {
-        inputOverrideSelect.addEventListener('change', function() {
-            inputModelOverride = inputOverrideSelect.value || null;
+    if (inputBtn) {
+        inputBtn.addEventListener('click', function() {
+            translate('input');
         });
     }
 
-    if (outputOverrideSelect) {
-        outputOverrideSelect.addEventListener('change', function() {
-            outputModelOverride = outputOverrideSelect.value || null;
+    const overrideSelect = document.getElementById('model-override') as HTMLSelectElement | null;
+
+    if (overrideSelect) {
+        overrideSelect.addEventListener('change', function() {
+            modelOverride = overrideSelect.value || null;
         });
     }
 
@@ -531,20 +477,10 @@ export function setupTranslateButtons(): void {
  * @returns {void}
  */
 export function setupTextareaKeyHandlers(): void {
-    const inputTextarea = document.getElementById('input-textarea') as HTMLTextAreaElement | null;
-    const outputTextarea = document.getElementById('output-textarea') as HTMLTextAreaElement | null;
+    const sourceTextarea = document.getElementById('source-textarea') as HTMLTextAreaElement | null;
 
-    if (inputTextarea) {
-        inputTextarea.addEventListener('keydown', function(event: KeyboardEvent): void {
-            if (event.key === 'Enter' && (event.shiftKey || event.ctrlKey)) {
-                event.preventDefault();
-                translate('input');
-            }
-        });
-    }
-
-    if (outputTextarea) {
-        outputTextarea.addEventListener('keydown', function(event: KeyboardEvent): void {
+    if (sourceTextarea) {
+        sourceTextarea.addEventListener('keydown', function(event: KeyboardEvent): void {
             if (event.key === 'Enter' && event.ctrlKey && event.shiftKey) {
                 event.preventDefault();
                 askQuestion();
@@ -557,65 +493,26 @@ export function setupTextareaKeyHandlers(): void {
 }
 
 /**
- * Populates the input language dropdown
- * @param {string} inputLanguage - Pre-selected input language ID
- * @returns {void}
- */
-export function populateLanguageDropdowns(inputLanguage: string): void {
-    const inputDropdown = document.getElementById('input-language-dropdown') as HTMLSelectElement | null;
-
-    if (inputDropdown) {
-        inputDropdown.innerHTML = '';
-        for (const lang of LANGUAGES) {
-            const option = document.createElement('option');
-            option.value = lang.id;
-            option.textContent = lang.name;
-            inputDropdown.appendChild(option);
-        }
-        inputDropdown.value = inputLanguage;
-    }
-}
-
-/**
- * Sets up input language dropdown change handler
- * @returns {void}
- */
-export function setupLanguageDropdownHandlers(): void {
-    const inputDropdown = document.getElementById('input-language-dropdown') as HTMLSelectElement | null;
-
-    if (inputDropdown) {
-        inputDropdown.addEventListener('change', async function() {
-            const langId = inputDropdown.value;
-            const session = await loadSession(currentSessionId);
-            if (session) {
-                session.inputLanguage = langId;
-                await saveSession(session);
-            }
-        });
-    }
-}
-
-/**
  * Updates button enabled/disabled states based on model selection
  * @returns {void}
  */
 export function updateButtonStates(): void {
-    const inputBtn = document.getElementById("input-translate-btn") as HTMLButtonElement | null;
-    const outputBtn = document.getElementById("output-translate-btn") as HTMLButtonElement | null;
-    const askBtn = document.getElementById("output-ask-btn") as HTMLButtonElement | null;
+    const translateBtn = document.getElementById("translate-btn") as HTMLButtonElement | null;
+    const askBtn = document.getElementById("ask-btn") as HTMLButtonElement | null;
+    const inputBtn = document.getElementById("input-btn") as HTMLButtonElement | null;
 
     const hasModel = config !== null && config.selectedModel !== null;
 
-    if (inputBtn) {
-        inputBtn.disabled = !hasModel;
-    }
-
-    if (outputBtn) {
-        outputBtn.disabled = !hasModel;
+    if (translateBtn) {
+        translateBtn.disabled = !hasModel;
     }
 
     if (askBtn) {
         askBtn.disabled = !hasModel;
+    }
+
+    if (inputBtn) {
+        inputBtn.disabled = !hasModel;
     }
 }
 
@@ -626,7 +523,7 @@ export function updateButtonStates(): void {
  * @param {string} instructions - Instruction text (language or prompt instructions)
  * @returns {Promise<string>} Complete user message
  */
-async function buildUserMessage(pill: 'input' | 'output', sourceText: string, instructions: string): Promise<string> {
+async function buildUserMessage(pill: 'input' | 'output' | 'question', sourceText: string, instructions: string): Promise<string> {
     const background = await getBackground();
 
     let message = "";
@@ -647,12 +544,12 @@ async function buildUserMessage(pill: 'input' | 'output', sourceText: string, in
 }
 
 /**
- * Performs translation for the specified pane
- * @param {'input' | 'output'} pill - Which pane to translate
+ * Performs translation for the specified mode
+ * @param {'input' | 'output'} mode - Which mode to translate
  * @returns {Promise<void>}
  */
-export async function translate(pill: 'input' | 'output'): Promise<void> {
-    const effectiveModel = getEffectiveModel(pill);
+export async function translate(mode: 'input' | 'output'): Promise<void> {
+    const effectiveModel = getEffectiveModel();
     if (!config || !effectiveModel) {
         ui.displayError("Please select a model first");
         return;
@@ -663,9 +560,7 @@ export async function translate(pill: 'input' | 'output'): Promise<void> {
         return;
     }
 
-    const textareaId = pill === 'input' ? 'input-textarea' : 'output-textarea';
-    const textarea = document.getElementById(textareaId) as HTMLTextAreaElement | null;
-
+    const textarea = document.getElementById('source-textarea') as HTMLTextAreaElement | null;
     if (!textarea) {
         return;
     }
@@ -678,81 +573,41 @@ export async function translate(pill: 'input' | 'output'): Promise<void> {
 
     textarea.value = '';
 
-    const translations = pill === 'input' ? inputTranslations : outputTranslations;
-
-    let promptName: string;
-    let instructions: string;
-
-    if (pill === 'input') {
-        const languageDropdown = document.getElementById('input-language-dropdown') as HTMLSelectElement | null;
-        if (!languageDropdown) {
-            return;
-        }
-
-        const languageId = languageDropdown.value;
-        const language = LANGUAGES.find(function(l) { return l.id === languageId; });
-
-        if (!language) {
-            ui.displayError("Please select a language");
-            return;
-        }
-
-        promptName = language.name;
-        instructions = INPUT_INSTRUCTIONS.replace('[LANGUAGE]', language.name);
-    } else {
-        const promptDropdown = document.getElementById('prompt-dropdown') as HTMLSelectElement | null;
-        if (!promptDropdown) {
-            return;
-        }
-
-        const promptId = promptDropdown.value;
-        if (!promptId) {
-            ui.displayError("Please select a prompt");
-            return;
-        }
-
-        const prompts = settings.getPrompts();
-        const selectedPrompt = prompts.find(function(p) { return p.id === promptId; });
-
-        if (!selectedPrompt) {
-            ui.displayError("Please select a prompt");
-            return;
-        }
-
-        promptName = selectedPrompt.name;
-        const outputSession = await loadSession(currentSessionId);
-        const promptContent = outputSession?.promptOverride ?? selectedPrompt.content;
-        instructions = OUTPUT_INSTRUCTIONS.replace('[PROMPT]', promptContent);
-        const intentTextarea = document.getElementById('output-intent-textarea') as HTMLTextAreaElement | null;
-        const intent = intentTextarea?.value.trim() ?? '';
-        instructions = instructions.replace('[INTENT]', intent ? `Intent: ${intent}` : '');
-        const inputLangId = getCurrentInputLanguage();
-        const inputLang = LANGUAGES.find(function(l) { return l.id === inputLangId; });
-        if (inputLang) {
-            instructions = instructions.replace('[LANGUAGE]', inputLang.name);
-        } else {
-            instructions = instructions.replace('[LANGUAGE]', 'the input language');
-        }
-    }
-
-    const userMessage = await buildUserMessage(pill, sourceText, instructions);
-
     const session = await loadSession(currentSessionId);
     const reasoningLevel = session?.reasoning ?? 'none';
     currentLiteralModel = session?.literalModel ?? null;
 
-    let intentForTranslation = '';
-    if (pill === 'output' && intentTextarea) {
-        intentForTranslation = intent;
-        intentTextarea.value = '';
+    let promptName: string;
+    let instructions: string;
+
+    if (mode === 'input') {
+        const readLang = LANGUAGES.find(function(l) { return l.id === session?.readLanguage; });
+        promptName = readLang?.name ?? 'Foreign';
+        instructions = INPUT_INSTRUCTIONS.replace('[LANGUAGE]', readLang?.name ?? 'your language');
+    } else {
+        const writeLang = LANGUAGES.find(function(l) { return l.id === session?.writeLanguage; });
+        const prompts = settings.getPrompts();
+        const prompt = prompts.find(function(p) { return p.id === session?.writePromptId; });
+        const promptContent = session?.promptOverride ?? prompt?.content ?? '';
+        instructions = OUTPUT_INSTRUCTIONS.replace('[PROMPT]', promptContent);
+        const intentTextarea = document.getElementById('intent-textarea') as HTMLTextAreaElement | null;
+        const intent = intentTextarea?.value.trim() ?? '';
+        instructions = instructions.replace('[INTENT]', intent ? `Intent: ${intent}` : '');
+        instructions = instructions.replace('[LANGUAGE]', writeLang?.name ?? 'the target language');
+        promptName = prompt?.name ?? 'Translate';
+        if (intentTextarea) {
+            intentTextarea.value = '';
+        }
     }
+
+    const userMessage = await buildUserMessage(mode, sourceText, instructions);
 
     const translation: Translation = {
         id: generateUuid(),
-        pill: pill,
+        pill: mode,
         source: sourceText,
         translation: '',
-        intent: intentForTranslation,
+        intent: '',
         explanation: '',
         nuances: '',
         reasoning: '',
@@ -767,8 +622,8 @@ export async function translate(pill: 'input' | 'output'): Promise<void> {
         error: null
     };
 
-    translations.push(translation);
-    renderTranslations(pill);
+    allTranslations.push(translation);
+    renderAllTranslations();
 
     try {
         const result = await translateStructured(
@@ -789,16 +644,15 @@ export async function translate(pill: 'input' | 'output'): Promise<void> {
 
         if (session?.literalModel) {
             try {
-                const sourceLangId = getCurrentInputLanguage();
-                const sourceLang = LANGUAGES.find(function(l) { return l.id === sourceLangId; });
-                const sourceLangName = sourceLang?.name ?? sourceLangId;
+                const readLang = LANGUAGES.find(function(l) { return l.id === session?.readLanguage; });
+                const sourceLangName = readLang?.name ?? session?.readLanguage ?? 'source';
                 const literalSystemPrompt = LITERAL_RETRANSLATION_PROMPT.replace(/\[LANGUAGE\]/g, sourceLangName);
                 const literalUserMessage = result.translation;
                 console.log('[translateLiteral] Starting literal retranslation with model:', session.literalModel);
                 console.log('[translateLiteral] Input text length:', result.translation.length);
                 console.log('[translateLiteral] Input text (first 200 chars):', result.translation.substring(0, 200));
                 translation.literalPending = true;
-                renderTranslations(pill);
+                renderAllTranslations();
                 const literalResult = await translateRaw(
                     config.openRouterApiKey,
                     literalUserMessage,
@@ -821,7 +675,7 @@ export async function translate(pill: 'input' | 'output'): Promise<void> {
         translation.error = error instanceof Error ? error.message : "Translation failed";
     }
 
-    renderTranslations(pill);
+    renderAllTranslations();
     await refreshBalance();
 }
 
@@ -855,7 +709,7 @@ async function buildQuestionMessage(questionText: string): Promise<string> {
  * @returns {Promise<void>}
  */
 export async function askQuestion(): Promise<void> {
-    const effectiveModel = getEffectiveModel('output');
+    const effectiveModel = getEffectiveModel();
     if (!config || !effectiveModel) {
         ui.displayError("Please select a model first");
         return;
@@ -866,7 +720,7 @@ export async function askQuestion(): Promise<void> {
         return;
     }
 
-    const textarea = document.getElementById('output-textarea') as HTMLTextAreaElement | null;
+    const textarea = document.getElementById('source-textarea') as HTMLTextAreaElement | null;
     if (!textarea) {
         return;
     }
@@ -901,8 +755,8 @@ export async function askQuestion(): Promise<void> {
         error: null
     };
 
-    outputTranslations.push(translation);
-    renderTranslations('output');
+    allTranslations.push(translation);
+    renderAllTranslations();
 
     try {
         const result = await translateRaw(
@@ -920,7 +774,7 @@ export async function askQuestion(): Promise<void> {
         translation.error = error instanceof Error ? error.message : "Failed to get answer";
     }
 
-    renderTranslations('output');
+    renderAllTranslations();
     await refreshBalance();
 }
 
@@ -987,267 +841,279 @@ function setupToggleHandler(element: HTMLElement, translation: Translation): voi
 }
 
 /**
- * Renders translations for the specified pane
- * @param {'input' | 'output'} pill - Which pane to render
+ * Renders a single translation item, creating or updating DOM element
+ * @param {HTMLElement} container - Container element
+ * @param {Translation} translation - Translation object
  * @returns {void}
  */
-export function renderTranslations(pill: 'input' | 'output'): void {
-    const containerId = pill === 'input' ? 'input-translations-container' : 'output-translations-container';
-    const container = document.getElementById(containerId);
+function renderTranslationItem(container: HTMLElement, translation: Translation): void {
+    const elementId = 'translation-' + translation.id;
+    let element = document.getElementById(elementId);
 
-    if (!container) {
-        return;
+    if (!element) {
+        const template = translation.pill === 'question'
+            ? document.getElementById('question-item-template') as HTMLTemplateElement | null
+            : document.getElementById('translation-item-template') as HTMLTemplateElement | null;
+        if (!template) {
+            return;
+        }
+
+        const clone = template.content.cloneNode(true) as DocumentFragment;
+        element = clone.firstElementChild as HTMLElement;
+        element.id = elementId;
+        element.dataset.pill = translation.pill;
+
+        const literalPane = element.querySelector('#literal-pane');
+        const explanationPane = element.querySelector('#explanation-pane');
+        const nuancesPane = element.querySelector('#nuances-pane');
+        const literalTab = element.querySelector('#literal-tab');
+        const explanationTab = element.querySelector('#explanation-tab');
+        const nuancesTab = element.querySelector('#nuances-tab');
+        if (literalPane) {
+            literalPane.id = 'literal-pane-' + translation.id;
+        }
+        if (explanationPane) {
+            explanationPane.id = 'explanation-pane-' + translation.id;
+        }
+        if (nuancesPane) {
+            nuancesPane.id = 'nuances-pane-' + translation.id;
+        }
+        if (literalTab) {
+            literalTab.id = 'literal-tab-' + translation.id;
+            literalTab.setAttribute('data-bs-target', '#literal-pane-' + translation.id);
+        }
+        if (explanationTab) {
+            explanationTab.id = 'explanation-tab-' + translation.id;
+            explanationTab.setAttribute('data-bs-target', '#explanation-pane-' + translation.id);
+        }
+        if (nuancesTab) {
+            nuancesTab.id = 'nuances-tab-' + translation.id;
+            nuancesTab.setAttribute('data-bs-target', '#nuances-pane-' + translation.id);
+        }
+
+        const retryBtn = element.querySelector('.retry-btn');
+        if (retryBtn) {
+            const translationId = translation.id;
+            retryBtn.addEventListener('click', function() {
+                retryTranslation(translationId);
+            });
+        }
+
+        const copySourceBtn = element.querySelector('.copy-source-btn') as HTMLButtonElement | null;
+        const copyTargetBtn = element.querySelector('.copy-target-btn') as HTMLButtonElement | null;
+
+        if (copySourceBtn) {
+            copySourceBtn.addEventListener('click', function() {
+                navigator.clipboard.writeText(translation.source).catch(function() {
+                    console.log('Failed to copy source text');
+                });
+            });
+        }
+
+        if (copyTargetBtn) {
+            copyTargetBtn.addEventListener('click', function() {
+                navigator.clipboard.writeText(translation.translation).catch(function() {
+                    console.log('Failed to copy translation text');
+                });
+            });
+        }
+
+        const editToggleBtn = element.querySelector('.edit-toggle-btn') as HTMLButtonElement | null;
+        const editArea = element.querySelector('.translation-edit-area') as HTMLElement | null;
+        const editSource = element.querySelector('.translation-edit-source') as HTMLTextAreaElement | null;
+        const editIntent = element.querySelector('.translation-edit-intent') as HTMLTextAreaElement | null;
+        const retranslateBtn = element.querySelector('.retranslate-btn') as HTMLButtonElement | null;
+
+        if (editToggleBtn && editArea) {
+            editToggleBtn.addEventListener('click', function() {
+                if (editSource) editSource.value = translation.source;
+                if (editIntent) editIntent.value = translation.intent ?? '';
+                if (editArea.style.display === 'none') {
+                    editArea.style.display = 'block';
+                } else {
+                    editArea.style.display = 'none';
+                }
+            });
+        }
+
+        if (retranslateBtn) {
+            retranslateBtn.addEventListener('click', function() {
+                const newSource = editSource?.value.trim() ?? '';
+                if (!newSource) {
+                    ui.displayError("Source text cannot be empty");
+                    return;
+                }
+                const newIntent = editIntent?.value.trim() ?? '';
+                if (editArea) editArea.style.display = 'none';
+                retranslateFromEdit(translation.id, newSource, newIntent);
+            });
+        }
+
+        const regenerateLiteralBtn = element.querySelector('.regenerate-literal-btn') as HTMLButtonElement | null;
+        if (regenerateLiteralBtn) {
+            const translationId = translation.id;
+            regenerateLiteralBtn.addEventListener('click', function() {
+                regenerateLiteralRetranslation(translationId);
+            });
+        }
+
+        setupToggleHandler(element, translation);
+
+        container.insertBefore(element, container.firstChild);
     }
 
-    const translations = pill === 'input' ? inputTranslations : outputTranslations;
+    element.dataset.pill = translation.pill;
 
-    for (let i = translations.length - 1; i >= 0; i--) {
-        const translation = translations[i];
-        const elementId = 'translation-' + translation.id;
-        let element = document.getElementById(elementId);
+    const sourceEl = element.querySelector('.translation-source') as HTMLElement | null;
+    const targetEl = element.querySelector('.translation-target') as HTMLElement | null;
+    const literalEl = element.querySelector('.translation-literal') as HTMLElement | null;
+    const explanationEl = element.querySelector('.translation-explanation') as HTMLElement | null;
+    const nuancesEl = element.querySelector('.translation-nuances') as HTMLElement | null;
+    const spinnerEl = element.querySelector('.translation-spinner') as HTMLElement | null;
+    const errorEl = element.querySelector('.translation-error') as HTMLElement | null;
+    const promptEl = element.querySelector('.translation-prompt') as HTMLElement | null;
+    const modelNameEl = element.querySelector('.translation-model-name') as HTMLElement | null;
+    const charCountEl = element.querySelector('.translation-char-count') as HTMLElement | null;
+    const regenerateLiteralBtn = element.querySelector('.regenerate-literal-btn') as HTMLButtonElement | null;
+    const sectionsArea = element.querySelector('.translation-sections-area') as HTMLElement | null;
+    const toggleSectionsBtn = element.querySelector('.toggle-sections-btn') as HTMLButtonElement | null;
 
-        if (!element) {
-            let template: HTMLTemplateElement | null = null;
+    if (sourceEl) {
+        sourceEl.textContent = translation.source;
+    }
+    if (promptEl) {
+        promptEl.textContent = translation.prompt;
+    }
+    if (modelNameEl) {
+        modelNameEl.textContent = translation.modelName;
+    }
+
+    if (translation.status === 'pending') {
+        if (spinnerEl) spinnerEl.style.display = 'block';
+        if (errorEl) errorEl.style.display = 'none';
+        if (targetEl) targetEl.style.display = 'none';
+        if (regenerateLiteralBtn) regenerateLiteralBtn.style.display = 'none';
+        if (charCountEl) {
+            charCountEl.textContent = `(${translation.source.length}/—)`;
+        }
+    } else if (translation.status === 'error') {
+        if (spinnerEl) spinnerEl.style.display = 'none';
+        if (targetEl) targetEl.style.display = 'none';
+        if (regenerateLiteralBtn) regenerateLiteralBtn.style.display = 'none';
+        if (charCountEl) {
+            charCountEl.textContent = `(${translation.source.length}/—)`;
+        }
+        if (errorEl) {
+            errorEl.style.display = 'block';
+            const errorMsg = errorEl.querySelector('.error-message') as HTMLElement | null;
+            if (errorMsg) {
+                errorMsg.textContent = translation.error ?? "Translation failed";
+            }
+        }
+    } else {
+        if (spinnerEl) spinnerEl.style.display = 'none';
+        if (errorEl) errorEl.style.display = 'none';
+        if (targetEl) {
             if (translation.pill === 'question') {
-                template = document.getElementById('question-item-template') as HTMLTemplateElement | null;
-            }
-            if (!template) {
-                template = document.getElementById('translation-item-template') as HTMLTemplateElement | null;
-            }
-            if (!template) {
-                continue;
-            }
-
-            const clone = template.content.cloneNode(true) as DocumentFragment;
-            element = clone.firstElementChild as HTMLElement;
-            element.id = elementId;
-
-            const literalPane = element.querySelector('#literal-pane');
-            const explanationPane = element.querySelector('#explanation-pane');
-            const nuancesPane = element.querySelector('#nuances-pane');
-            const literalTab = element.querySelector('#literal-tab');
-            const explanationTab = element.querySelector('#explanation-tab');
-            const nuancesTab = element.querySelector('#nuances-tab');
-            if (literalPane) {
-                literalPane.id = 'literal-pane-' + translation.id;
-                literalPane.setAttribute('aria-labelledby', 'literal-tab-' + translation.id);
-            }
-            if (explanationPane) {
-                explanationPane.id = 'explanation-pane-' + translation.id;
-                explanationPane.setAttribute('aria-labelledby', 'explanation-tab-' + translation.id);
-            }
-            if (nuancesPane) {
-                nuancesPane.id = 'nuances-pane-' + translation.id;
-                nuancesPane.setAttribute('aria-labelledby', 'nuances-tab-' + translation.id);
-            }
-            if (literalTab) {
-                literalTab.id = 'literal-tab-' + translation.id;
-                literalTab.setAttribute('data-bs-target', '#literal-pane-' + translation.id);
-                literalTab.setAttribute('aria-controls', 'literal-pane-' + translation.id);
-            }
-            if (explanationTab) {
-                explanationTab.id = 'explanation-tab-' + translation.id;
-                explanationTab.setAttribute('data-bs-target', '#explanation-pane-' + translation.id);
-                explanationTab.setAttribute('aria-controls', 'explanation-pane-' + translation.id);
-            }
-            if (nuancesTab) {
-                nuancesTab.id = 'nuances-tab-' + translation.id;
-                nuancesTab.setAttribute('data-bs-target', '#nuances-pane-' + translation.id);
-                nuancesTab.setAttribute('aria-controls', 'nuances-pane-' + translation.id);
-            }
-
-            const retryBtn = element.querySelector('.retry-btn');
-            if (retryBtn) {
-                const translationId = translation.id;
-                retryBtn.addEventListener('click', function() {
-                    retryTranslation(pill, translationId);
-                });
-            }
-
-            const copySourceBtn = element.querySelector('.copy-source-btn') as HTMLButtonElement | null;
-            const copyTargetBtn = element.querySelector('.copy-target-btn') as HTMLButtonElement | null;
-
-            if (copySourceBtn) {
-                copySourceBtn.addEventListener('click', function() {
-                    navigator.clipboard.writeText(translation.source).catch(function() {
-                        console.log('Failed to copy source text');
-                    });
-                });
-            }
-
-            if (copyTargetBtn) {
-                copyTargetBtn.addEventListener('click', function() {
-                    navigator.clipboard.writeText(translation.translation).catch(function() {
-                        console.log('Failed to copy translation text');
-                    });
-                });
-            }
-
-            const editToggleBtn = element.querySelector('.edit-toggle-btn') as HTMLButtonElement | null;
-            const editArea = element.querySelector('.translation-edit-area') as HTMLElement | null;
-            const editSource = element.querySelector('.translation-edit-source') as HTMLTextAreaElement | null;
-            const editIntent = element.querySelector('.translation-edit-intent') as HTMLTextAreaElement | null;
-            const retranslateBtn = element.querySelector('.retranslate-btn') as HTMLButtonElement | null;
-
-            if (editToggleBtn && editArea) {
-                editToggleBtn.addEventListener('click', function() {
-                    if (editSource) editSource.value = translation.source;
-                    if (editIntent) editIntent.value = translation.intent ?? '';
-                    if (editArea.style.display === 'none') {
-                        editArea.style.display = 'block';
-                    } else {
-                        editArea.style.display = 'none';
-                    }
-                });
-            }
-
-            if (retranslateBtn) {
-                retranslateBtn.addEventListener('click', function() {
-                    const newSource = editSource?.value.trim() ?? '';
-                    if (!newSource) {
-                        ui.displayError("Source text cannot be empty");
-                        return;
-                    }
-                    const newIntent = editIntent?.value.trim() ?? '';
-                    if (editArea) editArea.style.display = 'none';
-                    retranslateFromEdit(pill, translation.id, newSource, newIntent);
-                });
-            }
-
-            const regenerateLiteralBtn = element.querySelector('.regenerate-literal-btn') as HTMLButtonElement | null;
-            if (regenerateLiteralBtn) {
-                const translationId = translation.id;
-                regenerateLiteralBtn.addEventListener('click', function() {
-                    regenerateLiteralRetranslation(pill, translationId);
-                });
-            }
-
-            setupToggleHandler(element, translation);
-
-            container.insertBefore(element, container.firstChild);
-        }
-
-        const sourceEl = element.querySelector('.translation-source') as HTMLElement | null;
-        const targetEl = element.querySelector('.translation-target') as HTMLElement | null;
-        const literalEl = element.querySelector('.translation-literal') as HTMLElement | null;
-        const explanationEl = element.querySelector('.translation-explanation') as HTMLElement | null;
-        const nuancesEl = element.querySelector('.translation-nuances') as HTMLElement | null;
-        const spinnerEl = element.querySelector('.translation-spinner') as HTMLElement | null;
-        const errorEl = element.querySelector('.translation-error') as HTMLElement | null;
-        const promptEl = element.querySelector('.translation-prompt') as HTMLElement | null;
-        const modelNameEl = element.querySelector('.translation-model-name') as HTMLElement | null;
-        const charCountEl = element.querySelector('.translation-char-count') as HTMLElement | null;
-        const regenerateLiteralBtn = element.querySelector('.regenerate-literal-btn') as HTMLButtonElement | null;
-        const sectionsArea = element.querySelector('.translation-sections-area') as HTMLElement | null;
-        const toggleSectionsBtn = element.querySelector('.toggle-sections-btn') as HTMLButtonElement | null;
-        const literalPane = element.querySelector('#literal-pane-' + translation.id) as HTMLElement | null;
-        const explanationPane = element.querySelector('#explanation-pane-' + translation.id) as HTMLElement | null;
-        const nuancesPane = element.querySelector('#nuances-pane-' + translation.id) as HTMLElement | null;
-
-        if (sourceEl) {
-            sourceEl.textContent = translation.source;
-        }
-        if (promptEl) {
-            promptEl.textContent = translation.prompt;
-        }
-        if (modelNameEl) {
-            modelNameEl.textContent = translation.modelName;
-        }
-
-        if (translation.status === 'pending') {
-            if (spinnerEl) spinnerEl.style.display = 'block';
-            if (errorEl) errorEl.style.display = 'none';
-            if (targetEl) targetEl.style.display = 'none';
-            if (regenerateLiteralBtn) regenerateLiteralBtn.style.display = 'none';
-            if (charCountEl) {
-                charCountEl.textContent = `(${translation.source.length}/—)`;
-            }
-        } else if (translation.status === 'error') {
-            if (spinnerEl) spinnerEl.style.display = 'none';
-            if (targetEl) targetEl.style.display = 'none';
-            if (regenerateLiteralBtn) regenerateLiteralBtn.style.display = 'none';
-            if (charCountEl) {
-                charCountEl.textContent = `(${translation.source.length}/—)`;
-            }
-            if (errorEl) {
-                errorEl.style.display = 'block';
-                const errorMsg = errorEl.querySelector('.error-message') as HTMLElement | null;
-                if (errorMsg) {
-                    errorMsg.textContent = translation.error ?? "Translation failed";
-                }
-            }
-        } else {
-            if (spinnerEl) spinnerEl.style.display = 'none';
-            if (errorEl) errorEl.style.display = 'none';
-            if (targetEl) {
-                if (translation.pill === 'question') {
-                    targetEl.innerHTML = renderMarkdown(translation.translation);
-                    const toggleAnswerBtn = element.querySelector('.toggle-answer-btn') as HTMLButtonElement | null;
-                    if (translation.answerCollapsed) {
-                        targetEl.classList.add('answer-collapsed');
-                        if (toggleAnswerBtn) toggleAnswerBtn.textContent = '▲';
-                    } else {
-                        targetEl.classList.remove('answer-collapsed');
-                        if (toggleAnswerBtn) toggleAnswerBtn.textContent = '▼';
-                    }
+                targetEl.innerHTML = renderMarkdown(translation.translation);
+                const toggleAnswerBtn = element.querySelector('.toggle-answer-btn') as HTMLButtonElement | null;
+                if (translation.answerCollapsed) {
+                    targetEl.classList.add('answer-collapsed');
+                    if (toggleAnswerBtn) toggleAnswerBtn.textContent = '▲';
                 } else {
-                    targetEl.style.display = 'block';
-                    targetEl.innerHTML = renderMarkdown(translation.translation);
+                    targetEl.classList.remove('answer-collapsed');
+                    if (toggleAnswerBtn) toggleAnswerBtn.textContent = '▼';
                 }
+            } else {
+                targetEl.style.display = 'block';
+                targetEl.innerHTML = renderMarkdown(translation.translation);
             }
-            if (charCountEl) {
-                charCountEl.textContent = `(${translation.source.length}/${translation.translation.length})`;
-            }
+        }
+        if (charCountEl) {
+            charCountEl.textContent = `(${translation.source.length}/${translation.translation.length})`;
+        }
 
-            if (literalEl) {
-                if (translation.literalPending) {
-                    literalEl.innerHTML = '<div class="spinner-border spinner-border-sm" role="status"></div><span style="margin-left: 0.5rem;">Retranslating...</span>';
-                    if (regenerateLiteralBtn) regenerateLiteralBtn.style.display = 'none';
-                } else if (translation.literalRetranslation) {
-                    literalEl.innerHTML = renderMarkdown(translation.literalRetranslation);
-                    if (regenerateLiteralBtn) regenerateLiteralBtn.style.display = currentLiteralModel ? 'inline-block' : 'none';
-                } else {
-                    literalEl.innerHTML = '';
-                    if (regenerateLiteralBtn) regenerateLiteralBtn.style.display = currentLiteralModel ? 'inline-block' : 'none';
-                }
+        if (literalEl) {
+            if (translation.literalPending) {
+                literalEl.innerHTML = '<div class="spinner-border spinner-border-sm" role="status"></div><span style="margin-left: 0.5rem;">Retranslating...</span>';
+                if (regenerateLiteralBtn) regenerateLiteralBtn.style.display = 'none';
+            } else if (translation.literalRetranslation) {
+                literalEl.innerHTML = renderMarkdown(translation.literalRetranslation);
+                if (regenerateLiteralBtn) regenerateLiteralBtn.style.display = currentLiteralModel ? 'inline-block' : 'none';
+            } else {
+                literalEl.innerHTML = '';
+                if (regenerateLiteralBtn) regenerateLiteralBtn.style.display = currentLiteralModel ? 'inline-block' : 'none';
             }
-            if (explanationEl) {
-                explanationEl.innerHTML = translation.explanation ? renderMarkdown(translation.explanation) : '';
-            }
-            if (nuancesEl) {
-                nuancesEl.innerHTML = translation.nuances ? renderMarkdown(translation.nuances) : '';
-            }
+        }
+        if (explanationEl) {
+            explanationEl.innerHTML = translation.explanation ? renderMarkdown(translation.explanation) : '';
+        }
+        if (nuancesEl) {
+            nuancesEl.innerHTML = translation.nuances ? renderMarkdown(translation.nuances) : '';
+        }
 
-            if (regenerateLiteralBtn) regenerateLiteralBtn.style.display = currentLiteralModel ? 'inline-block' : 'none';
+        if (regenerateLiteralBtn) regenerateLiteralBtn.style.display = currentLiteralModel ? 'inline-block' : 'none';
 
-            if (sectionsArea && toggleSectionsBtn) {
-                if (translation.sectionsCollapsed) {
-                    sectionsArea.classList.add('translation-sections-collapsed');
-                    toggleSectionsBtn.textContent = '▲';
-                } else {
-                    sectionsArea.classList.remove('translation-sections-collapsed');
-                    toggleSectionsBtn.textContent = '▼';
-                }
+        if (sectionsArea && toggleSectionsBtn) {
+            if (translation.sectionsCollapsed) {
+                sectionsArea.classList.add('translation-sections-collapsed');
+                toggleSectionsBtn.textContent = '▲';
+            } else {
+                sectionsArea.classList.remove('translation-sections-collapsed');
+                toggleSectionsBtn.textContent = '▼';
             }
         }
     }
 }
 
 /**
+ * Renders all translations in the single pane, sorted by timestamp descending
+ * @returns {void}
+ */
+export function renderAllTranslations(): void {
+    const container = document.getElementById('translations-container');
+    if (!container) {
+        return;
+    }
+
+    const sorted = [...allTranslations].sort(function(a, b) { return b.timestamp - a.timestamp; });
+    const neededIds = new Set(sorted.map(function(t) { return 'translation-' + t.id; }));
+
+    const existing = container.querySelectorAll('.translation-item');
+    existing.forEach(function(el) {
+        if (!neededIds.has(el.id)) {
+            el.remove();
+        }
+    });
+
+    const oldestFirst = [...sorted].reverse();
+    for (const translation of oldestFirst) {
+        renderTranslationItem(container, translation);
+    }
+}
+
+/**
+ * Renders translations for the specified pane (legacy, redirects to renderAllTranslations)
+ * @param {'input' | 'output'} _pill - Ignored
+ * @returns {void}
+ */
+export function renderTranslations(_pill: 'input' | 'output'): void {
+    renderAllTranslations();
+}
+
+/**
  * Retries a failed translation
- * @param {'input' | 'output'} pill - Which pane
  * @param {string} translationId - ID of translation to retry
  * @returns {Promise<void>}
  */
-export async function retryTranslation(pill: 'input' | 'output', translationId: string): Promise<void> {
-    const translations = pill === 'input' ? inputTranslations : outputTranslations;
-    const translation = translations.find(function(t) { return t.id === translationId; });
+export async function retryTranslation(translationId: string): Promise<void> {
+    const translation = allTranslations.find(function(t) { return t.id === translationId; });
 
     if (!translation) {
         return;
     }
 
-    const effectiveModel = getEffectiveModel(pill);
+    const effectiveModel = getEffectiveModel();
     if (!config || !effectiveModel || !config.openRouterApiKey) {
         ui.displayError("Cannot retry: no model selected or no API key");
         return;
@@ -1255,7 +1121,7 @@ export async function retryTranslation(pill: 'input' | 'output', translationId: 
 
     translation.status = 'pending';
     translation.error = null;
-    renderTranslations(pill);
+    renderAllTranslations();
 
     const session = await loadSession(currentSessionId);
     const reasoningLevel = session?.reasoning ?? 'none';
@@ -1277,34 +1143,30 @@ export async function retryTranslation(pill: 'input' | 'output', translationId: 
             translation.status = 'error';
             translation.error = error instanceof Error ? error.message : "Failed to get answer";
         }
-        renderTranslations(pill);
+        renderAllTranslations();
         await refreshBalance();
         return;
     }
 
     let instructions: string;
-    if (pill === 'input') {
-        const inputLangId = getCurrentInputLanguage();
-        const inputLang = LANGUAGES.find(function(l) { return l.id === inputLangId; });
-        instructions = INPUT_INSTRUCTIONS.replace('[LANGUAGE]', inputLang?.name ?? 'the target language');
+    if (translation.pill === 'input') {
+        const readLang = LANGUAGES.find(function(l) { return l.id === session?.readLanguage; });
+        instructions = INPUT_INSTRUCTIONS.replace('[LANGUAGE]', readLang?.name ?? 'the target language');
     } else {
-        const promptDropdown = document.getElementById('prompt-dropdown') as HTMLSelectElement | null;
-        const promptId = promptDropdown?.value;
         const prompts = settings.getPrompts();
-        const selectedPrompt = prompts.find(function(p) { return p.id === promptId; });
-        const promptContent = session?.promptOverride ?? selectedPrompt?.content ?? '';
+        const prompt = prompts.find(function(p) { return p.id === session?.writePromptId; });
+        const promptContent = session?.promptOverride ?? prompt?.content ?? '';
         instructions = OUTPUT_INSTRUCTIONS.replace('[PROMPT]', promptContent);
         instructions = instructions.replace('[INTENT]', translation.intent ? `Intent: ${translation.intent}` : '');
-        const inputLangId = getCurrentInputLanguage();
-        const inputLang = LANGUAGES.find(function(l) { return l.id === inputLangId; });
-        if (inputLang) {
-            instructions = instructions.replace('[LANGUAGE]', inputLang.name);
+        const readLang = LANGUAGES.find(function(l) { return l.id === session?.readLanguage; });
+        if (readLang) {
+            instructions = instructions.replace('[LANGUAGE]', readLang.name);
         } else {
             instructions = instructions.replace('[LANGUAGE]', 'the input language');
         }
     }
 
-    const userMessage = await buildUserMessage(pill, translation.source, instructions);
+    const userMessage = await buildUserMessage(translation.pill, translation.source, instructions);
 
     try {
         const result = await translateStructured(
@@ -1327,27 +1189,25 @@ export async function retryTranslation(pill: 'input' | 'output', translationId: 
         translation.error = error instanceof Error ? error.message : "Translation failed";
     }
 
-    renderTranslations(pill);
+    renderAllTranslations();
     await refreshBalance();
 }
 
 /**
  * Retranslates an existing translation with edited source and/or intent
- * @param {'input' | 'output'} pill - Which pane
  * @param {string} translationId - ID of translation to retranslate
  * @param {string} newSource - New source text
  * @param {string} newIntent - New intent text
  * @returns {Promise<void>}
  */
-export async function retranslateFromEdit(pill: 'input' | 'output', translationId: string, newSource: string, newIntent: string): Promise<void> {
-    const translations = pill === 'input' ? inputTranslations : outputTranslations;
-    const translation = translations.find(function(t) { return t.id === translationId; });
+export async function retranslateFromEdit(translationId: string, newSource: string, newIntent: string): Promise<void> {
+    const translation = allTranslations.find(function(t) { return t.id === translationId; });
 
     if (!translation) {
         return;
     }
 
-    const effectiveModel = getEffectiveModel(pill);
+    const effectiveModel = getEffectiveModel();
     if (!config || !effectiveModel || !config.openRouterApiKey) {
         ui.displayError("Cannot retranslate: no model selected or no API key");
         return;
@@ -1367,31 +1227,27 @@ export async function retranslateFromEdit(pill: 'input' | 'output', translationI
     translation.reasoningDetails = '';
     translation.literalRetranslation = '';
     translation.literalPending = false;
-    renderTranslations(pill);
+    renderAllTranslations();
 
     let instructions: string;
-    if (pill === 'input') {
-        const inputLangId = getCurrentInputLanguage();
-        const inputLang = LANGUAGES.find(function(l) { return l.id === inputLangId; });
-        instructions = INPUT_INSTRUCTIONS.replace('[LANGUAGE]', inputLang?.name ?? 'the target language');
+    if (translation.pill === 'input') {
+        const readLang = LANGUAGES.find(function(l) { return l.id === session?.readLanguage; });
+        instructions = INPUT_INSTRUCTIONS.replace('[LANGUAGE]', readLang?.name ?? 'the target language');
     } else {
-        const promptDropdown = document.getElementById('prompt-dropdown') as HTMLSelectElement | null;
-        const promptId = promptDropdown?.value;
         const prompts = settings.getPrompts();
-        const selectedPrompt = prompts.find(function(p) { return p.id === promptId; });
-        const promptContent = session?.promptOverride ?? selectedPrompt?.content ?? '';
+        const prompt = prompts.find(function(p) { return p.id === session?.writePromptId; });
+        const promptContent = session?.promptOverride ?? prompt?.content ?? '';
         instructions = OUTPUT_INSTRUCTIONS.replace('[PROMPT]', promptContent);
         instructions = instructions.replace('[INTENT]', newIntent ? `Intent: ${newIntent}` : '');
-        const inputLangId = getCurrentInputLanguage();
-        const inputLang = LANGUAGES.find(function(l) { return l.id === inputLangId; });
-        if (inputLang) {
-            instructions = instructions.replace('[LANGUAGE]', inputLang.name);
+        const readLang = LANGUAGES.find(function(l) { return l.id === session?.readLanguage; });
+        if (readLang) {
+            instructions = instructions.replace('[LANGUAGE]', readLang.name);
         } else {
             instructions = instructions.replace('[LANGUAGE]', 'the input language');
         }
     }
 
-    const userMessage = await buildUserMessage(pill, newSource, instructions);
+    const userMessage = await buildUserMessage(translation.pill, newSource, instructions);
 
     try {
         const result = await translateStructured(
@@ -1413,13 +1269,12 @@ export async function retranslateFromEdit(pill: 'input' | 'output', translationI
         currentLiteralModel = session?.literalModel ?? null;
         if (session?.literalModel) {
             try {
-                const sourceLangId = getCurrentInputLanguage();
-                const sourceLang = LANGUAGES.find(function(l) { return l.id === sourceLangId; });
-                const sourceLangName = sourceLang?.name ?? sourceLangId;
+                const readLang = LANGUAGES.find(function(l) { return l.id === session?.readLanguage; });
+                const sourceLangName = readLang?.name ?? session?.readLanguage ?? 'source';
                 const literalSystemPrompt = LITERAL_RETRANSLATION_PROMPT.replace(/\[LANGUAGE\]/g, sourceLangName);
                 const literalUserMessage = result.translation;
                 translation.literalPending = true;
-                renderTranslations(pill);
+                renderAllTranslations();
                 const literalResult = await translateRaw(
                     config.openRouterApiKey,
                     literalUserMessage,
@@ -1440,19 +1295,17 @@ export async function retranslateFromEdit(pill: 'input' | 'output', translationI
         translation.error = error instanceof Error ? error.message : "Translation failed";
     }
 
-    renderTranslations(pill);
+    renderAllTranslations();
     await refreshBalance();
 }
 
 /**
  * Regenerates the literal retranslation for a completed translation
- * @param {'input' | 'output'} pill - Which pane
  * @param {string} translationId - ID of translation to regenerate literal for
  * @returns {Promise<void>}
  */
-export async function regenerateLiteralRetranslation(pill: 'input' | 'output', translationId: string): Promise<void> {
-    const translations = pill === 'input' ? inputTranslations : outputTranslations;
-    const translation = translations.find(function(t) { return t.id === translationId; });
+export async function regenerateLiteralRetranslation(translationId: string): Promise<void> {
+    const translation = allTranslations.find(function(t) { return t.id === translationId; });
 
     if (!translation) {
         return;
@@ -1473,16 +1326,15 @@ export async function regenerateLiteralRetranslation(pill: 'input' | 'output', t
         return;
     }
 
-    const sourceLangId = getCurrentInputLanguage();
-    const sourceLang = LANGUAGES.find(function(l) { return l.id === sourceLangId; });
-    const sourceLangName = sourceLang?.name ?? sourceLangId;
+    const readLang = LANGUAGES.find(function(l) { return l.id === session?.readLanguage; });
+    const sourceLangName = readLang?.name ?? session?.readLanguage ?? 'source';
     const literalSystemPrompt = LITERAL_RETRANSLATION_PROMPT.replace(/\[LANGUAGE\]/g, sourceLangName);
     const literalUserMessage = translation.translation;
     console.log('[regenerateLiteral] Starting literal retranslation with model:', session.literalModel);
     console.log('[regenerateLiteral] Input text:', translation.translation.substring(0, 200));
 
     translation.literalPending = true;
-    renderTranslations(pill);
+    renderAllTranslations();
 
     try {
         const literalResult = await translateRaw(
@@ -1496,10 +1348,10 @@ export async function regenerateLiteralRetranslation(pill: 'input' | 'output', t
         translation.literalRetranslation = literalResult;
         translation.literalPending = false;
         saveSessionTranslation(currentSessionId, translation);
-        renderTranslations(pill);
+        renderAllTranslations();
     } catch (literalError) {
         console.error('[regenerateLiteral] Literal retranslation failed:', literalError);
         translation.literalPending = false;
-        renderTranslations(pill);
+        renderAllTranslations();
     }
 }

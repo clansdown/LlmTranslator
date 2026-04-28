@@ -150,6 +150,24 @@
         .translation-sections-area.translation-sections-collapsed .toggle-sections-btn {
             transform: rotate(-90deg);
         }
+
+        .translation-item[data-pill="input"] {
+            border-color: var(--bs-info-border-color) !important;
+        }
+        .translation-item[data-pill="input"] > .row:first-child {
+            background: var(--bs-info-bg-subtle) !important;
+        }
+        .translation-item[data-pill="question"] {
+            border-color: var(--bs-success-border-color) !important;
+        }
+        .translation-item[data-pill="question"] > .row:first-child {
+            background: var(--bs-success-bg-subtle) !important;
+        }
+
+        .conversation-wrapper {
+            max-width: 46rem;
+            margin: 0 auto;
+        }
     </style>
 </head>
 <body>
@@ -185,74 +203,41 @@
             </div>
         </template>
 
-        <main>
-            <ul class="nav nav-tabs d-md-none px-3" id="pane-tabs" role="tablist">
-                <li class="nav-item" role="presentation">
-                    <button class="nav-link active" id="input-tab-btn" type="button" role="tab" aria-controls="input-pane" aria-selected="true">Input</button>
-                </li>
-                <li class="nav-item" role="presentation">
-                    <button class="nav-link" id="output-tab-btn" type="button" role="tab" aria-controls="output-pane" aria-selected="false">Output</button>
-                </li>
-            </ul>
-            <div class="tab-content row g-3 p-3">
-                <div class="tab-pane active d-md-block col-md-6" id="input-pane" role="tabpanel" aria-labelledby="input-tab-btn">
-                    <div class="input-pane">
-                        <div class="pane-toolbar">
-                            <div class="row g-2 align-items-center">
-                                <div class="col-auto">
-                                    <button type="button" class="btn btn-primary" id="input-translate-btn" disabled>
-                                        Translate
-                                    </button>
-                                </div>
-                                <div class="col">
-                                    <select class="form-select" id="input-language-dropdown" aria-label="Target language">
-                                    </select>
-                                </div>
-                                <div class="col-auto">
-                                    <select class="form-select form-select-sm" id="input-model-override" aria-label="Override model" style="width: auto;">
-                                        <option value="">Default LLM</option>
-                                    </select>
+        <div class="conversation-wrapper">
+            <main>
+                <div class="tab-content row g-3 p-3">
+                    <div class="col-12" id="translation-pane">
+                        <div class="translation-pane">
+                            <div class="pane-toolbar">
+                                <div class="row g-2 align-items-center">
+                                    <div class="col-auto">
+                                        <button type="button" class="btn btn-primary" id="translate-btn" disabled>
+                                            Me
+                                        </button>
+                                        <button type="button" class="btn btn-secondary ms-1" id="ask-btn" disabled>
+                                            Ask
+                                        </button>
+                                        <button type="button" class="btn btn-primary ms-1" id="input-btn" disabled>
+                                            Them
+                                        </button>
+                                    </div>
+                                    <div class="col">
+                                        <select class="form-select form-select-sm ms-2" id="model-override" aria-label="Override model" style="width: auto;">
+                                            <option value="">Default LLM</option>
+                                        </select>
+                                    </div>
                                 </div>
                             </div>
-                        </div>
-                        <div class="pane-content">
-                            <textarea class="pane-textarea" id="input-textarea" placeholder="Paste text to translate..."></textarea>
-                            <div id="input-translations-container"></div>
+                            <div class="pane-content">
+                                <textarea class="form-control form-control-sm mb-2" id="intent-textarea" rows="1" placeholder="Intent (e.g., be friendly, stern tone)..."></textarea>
+                                <textarea class="pane-textarea" id="source-textarea" placeholder="Type text to translate..."></textarea>
+                                <div id="translations-container"></div>
+                            </div>
                         </div>
                     </div>
                 </div>
-                <div class="tab-pane d-md-block col-md-6" id="output-pane" role="tabpanel" aria-labelledby="output-tab-btn">
-                    <div class="output-pane">
-                        <div class="pane-toolbar">
-                            <div class="row g-2 align-items-center">
-                                <div class="col-auto">
-                                    <button type="button" class="btn btn-primary" id="output-translate-btn" disabled>
-                                        Translate
-                                    </button>
-                                    <button type="button" class="btn btn-outline-secondary ms-1" id="output-ask-btn" disabled>
-                                        Ask
-                                    </button>
-                                </div>
-                                <div class="col">
-                                    <select class="form-select" id="prompt-dropdown" aria-label="Prompt selection">
-                                    </select>
-                                </div>
-                                <div class="col-auto">
-                                    <select class="form-select form-select-sm" id="output-model-override" aria-label="Override model" style="width: auto;">
-                                        <option value="">Default LLM</option>
-                                    </select>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="pane-content">
-                            <textarea class="form-control form-control-sm mb-2" id="output-intent-textarea" rows="1" placeholder="Intent (e.g., be friendly, stern tone)..."></textarea>
-                            <textarea class="pane-textarea" id="output-textarea" placeholder="Type text to translate..."></textarea>
-                            <div id="output-translations-container"></div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </main>
+            </main>
+        </div>
     </div>
 
     <!-- translation-item-template: Template for displaying a translation pair -->
@@ -467,6 +452,18 @@
                                         <label for="settings-session-literal-model" class="form-label">Literal Model</label>
                                         <select id="settings-session-literal-model" class="form-select">
                                         </select>
+                                    </div>
+                                    <div class="col-12">
+                                        <label for="settings-session-read-language" class="form-label">Read Language</label>
+                                        <select id="settings-session-read-language" class="form-select"></select>
+                                    </div>
+                                    <div class="col-12">
+                                        <label for="settings-session-write-language" class="form-label">Write Language</label>
+                                        <select id="settings-session-write-language" class="form-select"></select>
+                                    </div>
+                                    <div class="col-12">
+                                        <label for="settings-session-write-prompt" class="form-label">Write Prompt</label>
+                                        <select id="settings-session-write-prompt" class="form-select"></select>
                                     </div>
                                     <div class="col-12">
                                         <label for="settings-session-background" class="form-label">Background</label>
