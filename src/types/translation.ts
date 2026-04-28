@@ -2,6 +2,24 @@
  * Translation data types
  */
 
+export interface WordItem {
+    type: 'word';
+    word: string;
+    def: string;
+    exp: string;
+}
+
+export interface PunctItem {
+    type: 'punct';
+    text: string;
+}
+
+export interface NewlineItem {
+    type: 'nl';
+}
+
+export type TranslationWordItem = WordItem | PunctItem | NewlineItem;
+
 export interface Translation {
     id: string;
     pill: 'input' | 'output' | 'question';
@@ -14,6 +32,9 @@ export interface Translation {
     reasoningDetails: string;
     literalRetranslation?: string;
     literalPending?: boolean;
+    wordDefinitions?: string;
+    wordData?: TranslationWordItem[];
+    wordPending?: boolean;
     model: string;
     modelName: string;
     prompt: string;

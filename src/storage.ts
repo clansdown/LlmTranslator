@@ -1227,3 +1227,14 @@ export async function clearSessionTranslations(sessionId: string): Promise<void>
         }
     }
 }
+
+export async function deleteSessionTranslation(sessionId: string, timestamp: number): Promise<void> {
+    try {
+        const sessionDir = await getSessionDirectory(sessionId);
+        await sessionDir.removeEntry(String(timestamp) + ".json");
+    } catch (e) {
+        if (DEBUG_TRANSLATIONS) {
+            console.error("[deleteSessionTranslation] Error:", e);
+        }
+    }
+}

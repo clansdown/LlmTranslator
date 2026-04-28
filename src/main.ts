@@ -45,25 +45,19 @@ async function refreshBalance(): Promise<void> {
  */
 async function loadModels(): Promise<void> {
     const apiKey = config.openRouterApiKey;
-    console.log("[loadModels] Called, apiKey:", apiKey ? "exists" : "null");
     if (!apiKey) {
-        console.log("[loadModels] No API key, returning early");
         return;
     }
 
     try {
-        console.log("[loadModels] Fetching ZDR models...");
         let models = await fetchZdrModels(apiKey);
-        console.log("[loadModels] Fetched models:", models.length, models);
         models = settings.filterModelsByPrice(models);
-        console.log("[loadModels] Models after price filter:", models.length);
 
         settings.setModels(models);
         translation.setModelNameMap(models);
         translation.setModelOverrideOptions(models);
 
         const savedModelId = await getPreference("selectedModel");
-        console.log("[loadModels] Saved model ID:", savedModelId);
         if (savedModelId && models.some(function(m) { return m.id === savedModelId; })) {
             config.selectedModel = savedModelId;
             translation.updateButtonStates();
@@ -72,7 +66,6 @@ async function loadModels(): Promise<void> {
             savePreference("selectedModel", models[0].id).catch(function() {});
             translation.updateButtonStates();
         }
-        console.log("[loadModels] Dropdown populated");
     } catch (error) {
         console.error("[loadModels] Error:", error);
         ui.displayError(error instanceof Error ? error.message : "Failed to load models");
@@ -85,7 +78,6 @@ async function loadModels(): Promise<void> {
  * @returns {Promise<void>}
  */
 export async function saveApiKey(key: string): Promise<void> {
-    console.log("[saveApiKey] Saving API key, length:", key.length);
     config.openRouterApiKey = key;
     await savePreference("apiKey", key);
     await refreshBalance();
@@ -105,8 +97,6 @@ async function loadUrlApiKey(): Promise<void> {
         return;
     }
 
-    console.log("[loadUrlApiKey] Found key in URL");
-
     params.delete('key');
     const newUrl = window.location.pathname +
         (params.toString() ? '?' + params.toString() : '') +
@@ -116,12 +106,9 @@ async function loadUrlApiKey(): Promise<void> {
     if (!config.openRouterApiKey) {
         try {
             await saveApiKey(urlKey);
-            console.log("[loadUrlApiKey] API key set from URL");
         } catch (error) {
             ui.displayError(error instanceof Error ? error.message : "Failed to set API key from URL");
         }
-    } else {
-        console.log("[loadUrlApiKey] API key already set, ignoring URL key");
     }
 }
 

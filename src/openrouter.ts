@@ -146,7 +146,6 @@ export async function fetchVisionModels(apiKey: string): Promise<VisionModel[]> 
  * @throws {Error} If API request fails
  */
 export async function fetchZdrModels(apiKey: string): Promise<VisionModel[]> {
-    console.log("[fetchZdrModels] Fetching from:", OPENROUTER_BASE_URL + "/endpoints/zdr");
     const response = await fetch(OPENROUTER_BASE_URL + "/endpoints/zdr", {
         method: "GET",
         headers: {
@@ -154,8 +153,6 @@ export async function fetchZdrModels(apiKey: string): Promise<VisionModel[]> {
             "Content-Type": "application/json"
         }
     });
-
-    console.log("[fetchZdrModels] Response status:", response.status);
 
     if (!response.ok) {
         const text = await response.text();
@@ -178,8 +175,6 @@ export async function fetchZdrModels(apiKey: string): Promise<VisionModel[]> {
     }
 
     const data = await response.json();
-    console.log("[fetchZdrModels] Raw response data:", data);
-    console.log("[fetchZdrModels] Models count:", data.data?.length);
     
     const allModels = data.data || [];
     

@@ -66,6 +66,29 @@ Output only the literal translation of the text into [LANGUAGE] with no explanat
  * System prompt for question answering
  * Assists the user with questions about the conversation using history context
  */
+/**
+ * Prompt for word-by-word definitions and explanations
+ * [TEXT] is replaced with the translation text to analyze
+ */
+export const WORD_DEFINITIONS_PROMPT: string =
+`You will be given a text. For each word and punctuation in the text, output an XML entry describing it.
+
+Use these tags:
+- <ITEM><WORD>word</WORD><DEF>concise dictionary definition</DEF><EXP>explanation of how the word is used in this specific context</EXP></ITEM> for each word
+- <P>punctuation</P> for each punctuation mark (include the punctuation inside the P tag)
+- <NL /> for each newline
+
+Important rules:
+1. Preserve the exact order of words and punctuation from the input text
+2. Include ALL words and ALL punctuation marks - nothing should be skipped
+3. The <WORD> tag should contain the exact word from the text
+4. The <DEF> tag should contain a brief dictionary definition
+5. The <EXP> tag should explain how this word is used in context
+6. Do not output anything except the XML structure
+
+Input text:
+[TEXT]`;
+
 export const QUESTION_SYSTEM_PROMPT: string =
 `You are an expert linguist and cultural advisor assisting someone working with a foreign language. They have a question about the conversation context, grammar, vocabulary, cultural nuances, or anything else related to the language they are working with.
 
