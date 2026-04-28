@@ -33,7 +33,7 @@ async function refreshBalance(): Promise<void> {
 
     try {
         const balanceInfo = await fetchBalance(apiKey);
-        ui.updateBalanceDisplay("$" + balanceInfo.totalCredits.toFixed(2));
+        ui.updateBalanceDisplay("$" + (balanceInfo.totalCredits - balanceInfo.totalUsage).toFixed(2));
     } catch (error) {
         ui.displayError(error instanceof Error ? error.message : "Failed to fetch balance");
     }

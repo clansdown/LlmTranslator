@@ -790,7 +790,7 @@ async function refreshBalance(): Promise<void> {
     try {
         const { fetchBalance } = await import('./openrouter');
         const balanceInfo = await fetchBalance(config.openRouterApiKey);
-        ui.updateBalanceDisplay("$" + balanceInfo.totalCredits.toFixed(2));
+        ui.updateBalanceDisplay("$" + (balanceInfo.totalCredits - balanceInfo.totalUsage).toFixed(2));
     } catch (error) {
         console.error("Failed to refresh balance:", error);
     }
