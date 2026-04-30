@@ -81,6 +81,8 @@ interface SettingsReferences {
     sessionNameInput: HTMLInputElement;
     sessionModelSelect: HTMLSelectElement;
     sessionLiteralModelSelect: HTMLSelectElement;
+    sessionInterpretationModelSelect: HTMLSelectElement;
+    sessionInterpretationReasoningSelect: HTMLSelectElement;
     sessionBackgroundInput: HTMLTextAreaElement;
     sessionReasoningSelect: HTMLSelectElement;
     sessionPromptOverrideInput: HTMLTextAreaElement;
@@ -176,6 +178,8 @@ function openSettingsModal(): void {
             sessionNameInput: settingsModalElement.querySelector('#settings-session-name') as HTMLInputElement,
             sessionModelSelect: settingsModalElement.querySelector('#settings-session-model') as HTMLSelectElement,
             sessionLiteralModelSelect: settingsModalElement.querySelector('#settings-session-literal-model') as HTMLSelectElement,
+            sessionInterpretationModelSelect: settingsModalElement.querySelector('#settings-session-interpretation-model') as HTMLSelectElement,
+            sessionInterpretationReasoningSelect: settingsModalElement.querySelector('#settings-session-interpretation-reasoning') as HTMLSelectElement,
             sessionBackgroundInput: settingsModalElement.querySelector('#settings-session-background') as HTMLTextAreaElement,
             sessionReasoningSelect: settingsModalElement.querySelector('#settings-session-reasoning') as HTMLSelectElement,
             sessionPromptOverrideInput: settingsModalElement.querySelector('#settings-session-prompt-override') as HTMLTextAreaElement,
@@ -608,6 +612,27 @@ function populateModelDropdown(): void {
         }
         refs.sessionLiteralModelSelect.appendChild(option);
     }
+
+    refs.sessionInterpretationModelSelect.innerHTML = '';
+
+    const interpDisabledPlaceholder = document.createElement('option');
+    interpDisabledPlaceholder.value = '';
+    interpDisabledPlaceholder.textContent = 'Disabled';
+    refs.sessionInterpretationModelSelect.appendChild(interpDisabledPlaceholder);
+
+    for (const model of models) {
+        const option = document.createElement('option');
+        option.value = model.id;
+        if (model.pricing) {
+            const promptCost = (parseFloat(model.pricing.prompt) * 1_000_000).toFixed(2);
+            const completionCost = (parseFloat(model.pricing.completion) * 1_000_000).toFixed(2);
+            const providerPart = model.providerName ? ' by ' + model.providerName : '';
+            option.textContent = `${model.name}${providerPart} ($${promptCost}/$${completionCost})`;
+        } else {
+            option.textContent = model.name;
+        }
+        refs.sessionInterpretationModelSelect.appendChild(option);
+    }
 }
 
 /**
@@ -826,6 +851,8 @@ function loadSessionIntoEditor(sessionId: string): void {
             refs.sessionNameInput.value = session.name;
             refs.sessionModelSelect.value = session.model ?? '';
             refs.sessionLiteralModelSelect.value = session.literalModel ?? '';
+            refs.sessionInterpretationModelSelect.value = session.interpretationModel ?? '';
+            refs.sessionInterpretationReasoningSelect.value = session.interpretationReasoning ?? 'none';
             refs.sessionBackgroundInput.value = session.background ?? '';
             refs.sessionReasoningSelect.value = session.reasoning ?? 'none';
             refs.sessionPromptOverrideInput.value = session.promptOverride ?? '';
@@ -836,6 +863,8 @@ function loadSessionIntoEditor(sessionId: string): void {
             refs.sessionNameInput.value = '';
             refs.sessionModelSelect.value = '';
             refs.sessionLiteralModelSelect.value = '';
+            refs.sessionInterpretationModelSelect.value = '';
+            refs.sessionInterpretationReasoningSelect.value = 'none';
             refs.sessionBackgroundInput.value = '';
             refs.sessionReasoningSelect.value = 'none';
             refs.sessionPromptOverrideInput.value = '';
@@ -903,6 +932,8 @@ async function saveSession(): Promise<void> {
     session.name = newName;
     session.model = refs.sessionModelSelect.value || null;
     session.literalModel = refs.sessionLiteralModelSelect.value || null;
+    session.interpretationModel = refs.sessionInterpretationModelSelect.value || null;
+    session.interpretationReasoning = refs.sessionInterpretationReasoningSelect.value as 'none' | 'minimal' | 'low' | 'medium' | 'high';
     session.background = refs.sessionBackgroundInput.value;
     session.reasoning = refs.sessionReasoningSelect.value as 'none' | 'minimal' | 'low' | 'medium' | 'high';
     session.promptOverride = refs.sessionPromptOverrideInput.value || null;

@@ -2,8 +2,6 @@
  * OpenRouter API functions
  * Handles communication with OpenRouter for models, balance, and image generation
  */
-
-import { SYSTEM_PROMPT } from './prompts';
 import type { 
     ChatCompletionResponse, 
     VisionModel, 

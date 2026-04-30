@@ -8,7 +8,7 @@ import { getPreference, savePreference, listSessions, saveSession, loadSession, 
 import { DEBUG_TRANSLATIONS, DEBUG_SESSIONS } from './debug';
 import * as ui from './ui';
 import { LANGUAGES } from './languages';
-import { SYSTEM_PROMPT, INPUT_INSTRUCTIONS, OUTPUT_INSTRUCTIONS, LITERAL_RETRANSLATION_PROMPT, OUTPUT_LITERAL_RETRANSLATION_PROMPT, QUESTION_SYSTEM_PROMPT, WORD_DEFINITIONS_PROMPT } from './prompts';
+import { INPUT_SYSTEM_PROMPT, OUTPUT_SYSTEM_PROMPT, INPUT_INSTRUCTIONS, OUTPUT_INSTRUCTIONS, LITERAL_RETRANSLATION_PROMPT, OUTPUT_LITERAL_RETRANSLATION_PROMPT, QUESTION_SYSTEM_PROMPT, WORD_DEFINITIONS_PROMPT, INTERPRETATION_PROMPT } from './prompts';
 import { renderMarkdown } from './markdown';
 import * as settings from './settings';
 import type { Translation, TranslationWordItem, WordItem, PunctItem, NewlineItem } from './types/translation';
@@ -43,6 +43,11 @@ let currentSessionId: string = 'default';
  * @type {string | null}
  */
 let currentLiteralModel: string | null = null;
+/**
+ * Currently active interpretation model from the active session
+ * @type {string | null}
+ */
+let currentInterpretationModel: string | null = null;
 
 /**
  * In-memory translation array - source of truth for translations
@@ -167,6 +172,7 @@ export async function setCurrentSession(sessionId: string): Promise<void> {
 
     currentSessionId = sessionId;
     currentLiteralModel = session.literalModel ?? null;
+    currentInterpretationModel = session.interpretationModel ?? null;
     await savePreference('currentSession', sessionId);
 
     allTranslations = [];
@@ -390,9 +396,10 @@ export async function loadTranslationHistory(): Promise<void> {
 /**
  * Builds the history section for the user message
  * Returns history from the last 7 days with activity
+ * @param {boolean} includeQuestions - Whether to include question/answer pairs in history
  * @returns {string} History section or empty string
  */
-function buildHistorySection(): string {
+function buildHistorySection(includeQuestions: boolean = true): string {
     const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
     const now = Date.now();
     const cutoff = now - SEVEN_DAYS_MS;
@@ -425,13 +432,89 @@ function buildHistorySection(): string {
         } else if (t.pill === 'output') {
             history += `<ME>${t.source}</ME>\n`;
             history += `<ME>${t.translation}</ME>\n`;
-        } else if (t.pill === 'question') {
+        } else if (t.pill === 'question' && includeQuestions) {
             history += `<USERQUESTION>${t.source}</USERQUESTION>\n`;
             history += `<AGENTANSWER>${t.translation}</AGENTANSWER>\n`;
         }
     }
     history += "</HISTORY>";
     return history;
+}
+
+/**
+ * Builds history section for interpretation - last 2 days with input/output translations
+ * Excludes questions
+ * @returns {string} History section or empty string
+ */
+function buildInterpretationHistory(): string {
+    const TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    const cutoff = now - TWO_DAYS_MS;
+
+    const dayMap = new Map<number, Translation[]>();
+    for (const t of allTranslations) {
+        if (t.status !== 'complete') continue;
+        if (t.pill === 'question') continue;
+        if (t.timestamp < cutoff) continue;
+        const dayStart = new Date(t.timestamp).setHours(0, 0, 0, 0);
+        if (!dayMap.has(dayStart)) {
+            dayMap.set(dayStart, []);
+        }
+        dayMap.get(dayStart)!.push(t);
+    }
+
+    if (dayMap.size === 0) {
+        return "";
+    }
+
+    const sortedDays = Array.from(dayMap.keys()).sort(function(a, b) { return b - a; });
+    const lastTwoDays = sortedDays.slice(0, 2);
+
+    /** @type {Translation[]} */
+    const translationsForHistory: Translation[] = [];
+    for (const day of lastTwoDays) {
+        const dayTranslations = dayMap.get(day) ?? [];
+        dayTranslations.sort(function(a, b) { return a.timestamp - b.timestamp; });
+        translationsForHistory.push(...dayTranslations);
+    }
+
+    let history = "<HISTORY>\n";
+    for (const t of translationsForHistory) {
+        if (t.pill === 'input') {
+            history += `<THEM>${t.source}</THEM>\n`;
+            history += `<THEM>${t.translation}</THEM>\n`;
+        } else if (t.pill === 'output') {
+            history += `<ME>${t.source}</ME>\n`;
+            history += `<ME>${t.translation}</ME>\n`;
+        }
+    }
+    history += "</HISTORY>";
+    return history;
+}
+
+/**
+ * Builds the user message for interpretation
+ * @param {Translation} translation - Translation to interpret
+ * @returns {Promise<string>} Formatted message
+ */
+async function buildInterpretationMessage(translation: Translation): Promise<string> {
+    const background = await getBackground();
+
+    let message = "";
+
+    if (background.trim()) {
+        message += `<BACKGROUND>${background}</BACKGROUND>\n\n`;
+    }
+
+    const history = buildInterpretationHistory();
+    if (history) {
+        message += history + "\n\n";
+    }
+
+    message += `<INTERPRET>${translation.translation}</INTERPRET>\n\n`;
+    message += `<INSTRUCTIONS>Explain how the listener will understand this message — both text and subtext — given their linguistic and cultural context.</INSTRUCTIONS>`;
+
+    return message;
 }
 
 /**
@@ -532,7 +615,7 @@ async function buildUserMessage(pill: 'input' | 'output' | 'question', sourceTex
         message += `<BACKGROUND>${background}</BACKGROUND>\n\n`;
     }
 
-    const history = buildHistorySection();
+    const history = buildHistorySection(pill !== 'input');
     if (history) {
         message += history + "\n\n";
     }
@@ -691,13 +774,16 @@ export async function translate(mode: 'input' | 'output'): Promise<void> {
             .catch(() => updateTranslationItem(translation));
     }
 
+    const systemPrompt = mode === 'input' ? INPUT_SYSTEM_PROMPT : OUTPUT_SYSTEM_PROMPT;
+
     try {
         const result = await translateStructured(
             config.openRouterApiKey,
             userMessage,
-            SYSTEM_PROMPT,
+            systemPrompt,
             effectiveModel,
-            reasoningLevel
+            reasoningLevel,
+            config.temperature
         );
 
         translation.translation = result.translation;
@@ -756,6 +842,31 @@ export async function translate(mode: 'input' | 'output'): Promise<void> {
                 } catch (wordDefError) {
                     console.error('[wordDefinitions] Failed:', wordDefError);
                     translation.wordPending = false;
+                }
+            })());
+        }
+
+        if (mode === 'output' && session?.interpretationModel) {
+            translation.interpretationPending = true;
+            backgroundTasks.push((async () => {
+                try {
+                    const message = await buildInterpretationMessage(translation);
+                    console.log('[interpretation] Starting interpretation with model:', session.interpretationModel);
+                    const interpretationResult = await translateRaw(
+                        config.openRouterApiKey,
+                        message,
+                        INTERPRETATION_PROMPT,
+                        session.interpretationModel,
+                        session?.interpretationReasoning ?? 'none',
+                        config.temperature
+                    );
+                    translation.interpretation = interpretationResult;
+                    translation.interpretationPending = false;
+                    saveSessionTranslation(currentSessionId, translation);
+                    updateTranslationItem(translation);
+                } catch (interpretationError) {
+                    console.error('[interpretation] Failed:', interpretationError);
+                    translation.interpretationPending = false;
                 }
             })());
         }
@@ -973,10 +1084,12 @@ function renderTranslationItem(container: HTMLElement, translation: Translation)
         const explanationPane = element.querySelector('#explanation-pane');
         const nuancesPane = element.querySelector('#nuances-pane');
         const wordsPane = element.querySelector('#words-pane');
+        const interpretationPane = element.querySelector('#interpretation-pane');
         const literalTab = element.querySelector('#literal-tab');
         const explanationTab = element.querySelector('#explanation-tab');
         const nuancesTab = element.querySelector('#nuances-tab');
         const wordsTab = element.querySelector('#words-tab');
+        const interpretationTab = element.querySelector('#interpretation-tab');
         if (literalPane) {
             literalPane.id = 'literal-pane-' + translation.id;
         }
@@ -988,6 +1101,9 @@ function renderTranslationItem(container: HTMLElement, translation: Translation)
         }
         if (wordsPane) {
             wordsPane.id = 'words-pane-' + translation.id;
+        }
+        if (interpretationPane) {
+            interpretationPane.id = 'interpretation-pane-' + translation.id;
         }
         if (literalTab) {
             literalTab.id = 'literal-tab-' + translation.id;
@@ -1005,6 +1121,11 @@ function renderTranslationItem(container: HTMLElement, translation: Translation)
             wordsTab.id = 'words-tab-' + translation.id;
             wordsTab.setAttribute('data-bs-target', '#words-pane-' + translation.id);
             wordsTab.setAttribute('aria-controls', 'words-pane-' + translation.id);
+        }
+        if (interpretationTab) {
+            interpretationTab.id = 'interpretation-tab-' + translation.id;
+            interpretationTab.setAttribute('data-bs-target', '#interpretation-pane-' + translation.id);
+            interpretationTab.setAttribute('aria-controls', 'interpretation-pane-' + translation.id);
         }
 
         const retryBtn = element.querySelector('.retry-btn');
@@ -1089,6 +1210,14 @@ function renderTranslationItem(container: HTMLElement, translation: Translation)
             });
         }
 
+        const regenerateInterpretationBtn = element.querySelector('.regenerate-interpretation-btn') as HTMLButtonElement | null;
+        if (regenerateInterpretationBtn) {
+            const translationId = translation.id;
+            regenerateInterpretationBtn.addEventListener('click', function() {
+                regenerateInterpretation(translationId);
+            });
+        }
+
         setupToggleHandler(element, translation);
 
         container.insertBefore(element, container.firstChild);
@@ -1132,8 +1261,10 @@ function updateTranslationItem(translation: Translation): void {
     const modelNameEl = element.querySelector('.translation-model-name') as HTMLElement | null;
     const charCountEl = element.querySelector('.translation-char-count') as HTMLElement | null;
     const regenerateLiteralBtn = element.querySelector('.regenerate-literal-btn') as HTMLButtonElement | null;
+    const regenerateInterpretationBtn = element.querySelector('.regenerate-interpretation-btn') as HTMLButtonElement | null;
     const sectionsArea = element.querySelector('.translation-sections-area') as HTMLElement | null;
     const toggleSectionsBtn = element.querySelector('.toggle-sections-btn') as HTMLButtonElement | null;
+    const interpretationEl = element.querySelector('.translation-interpretation') as HTMLElement | null;
     const wordsPane = element.querySelector('#words-pane-' + translation.id) as HTMLElement | null;
     const wordsContent = element.querySelector('.translation-words') as HTMLElement | null;
 
@@ -1210,7 +1341,21 @@ function updateTranslationItem(translation: Translation): void {
             nuancesEl.innerHTML = translation.nuances ? renderMarkdown(translation.nuances) : '';
         }
 
+        if (interpretationEl) {
+            if (translation.interpretationPending) {
+                interpretationEl.innerHTML = '<div class="spinner-border spinner-border-sm" role="status"></div><span style="margin-left: 0.5rem;">Interpreting...</span>';
+                if (regenerateInterpretationBtn) regenerateInterpretationBtn.style.display = 'none';
+            } else if (translation.interpretation) {
+                interpretationEl.innerHTML = renderMarkdown(translation.interpretation);
+                if (regenerateInterpretationBtn) regenerateInterpretationBtn.style.display = currentInterpretationModel ? 'inline-block' : 'none';
+            } else {
+                interpretationEl.innerHTML = '';
+                if (regenerateInterpretationBtn) regenerateInterpretationBtn.style.display = currentInterpretationModel ? 'inline-block' : 'none';
+            }
+        }
+
         if (regenerateLiteralBtn) regenerateLiteralBtn.style.display = currentLiteralModel ? 'inline-block' : 'none';
+        if (regenerateInterpretationBtn) regenerateInterpretationBtn.style.display = currentInterpretationModel ? 'inline-block' : 'none';
 
         if (sectionsArea && toggleSectionsBtn) {
             if (translation.sectionsCollapsed) {
@@ -1333,11 +1478,13 @@ export async function retryTranslation(translationId: string): Promise<void> {
 
     const userMessage = await buildUserMessage(translation.pill, translation.source, instructions);
 
+    const systemPrompt = translation.pill === 'input' ? INPUT_SYSTEM_PROMPT : OUTPUT_SYSTEM_PROMPT;
+
     try {
         const result = await translateStructured(
             config.openRouterApiKey,
             userMessage,
-            SYSTEM_PROMPT,
+            systemPrompt,
             effectiveModel,
             reasoningLevel,
             config.temperature
@@ -1405,12 +1552,12 @@ async function regenerateTranslationById(translationId: string): Promise<void> {
     const readLang = LANGUAGES.find(function(l) { return l.id === session?.readLanguage; });
     const instructions = INPUT_INSTRUCTIONS.replace('[LANGUAGE]', readLang?.name ?? 'your language');
     const userMessage = await buildUserMessage('input', translation.source, instructions);
-
+    const systemPrompt = translation.pill === 'input' ? INPUT_SYSTEM_PROMPT : OUTPUT_SYSTEM_PROMPT;
     try {
-const result = await translateStructured(
+        const result = await translateStructured(
             config.openRouterApiKey,
             userMessage,
-            SYSTEM_PROMPT,
+            systemPrompt,
             effectiveModel,
             reasoningLevel,
             config.temperature
@@ -1470,6 +1617,8 @@ export async function retranslateFromEdit(translationId: string, newSource: stri
     translation.wordDefinitions = undefined;
     translation.wordData = undefined;
     translation.wordPending = false;
+    translation.interpretation = '';
+    translation.interpretationPending = false;
     updateTranslationItem(translation);
 
     let instructions: string;
@@ -1490,13 +1639,16 @@ export async function retranslateFromEdit(translationId: string, newSource: stri
 
     const userMessage = await buildUserMessage(translation.pill, newSource, instructions);
 
+    const systemPrompt = translation.pill === 'input' ? INPUT_SYSTEM_PROMPT : OUTPUT_SYSTEM_PROMPT;
+
     try {
         const result = await translateStructured(
             config.openRouterApiKey,
             userMessage,
-            SYSTEM_PROMPT,
+            systemPrompt,
             effectiveModel,
-            reasoningLevel
+            reasoningLevel,
+            config.temperature
         );
 
         translation.translation = result.translation;
@@ -1555,6 +1707,30 @@ export async function retranslateFromEdit(translationId: string, newSource: stri
                 } catch (wordDefError) {
                     console.error('[wordDefinitions] Failed:', wordDefError);
                     translation.wordPending = false;
+                }
+            })());
+        }
+
+        if (session?.interpretationModel && result.translation) {
+            translation.interpretationPending = true;
+            tasks.push((async () => {
+                try {
+                    const message = await buildInterpretationMessage(translation);
+                    console.log('[interpretation] Starting interpretation with model:', session.interpretationModel);
+                    const interpretationResult = await translateRaw(
+                        config.openRouterApiKey,
+                        message,
+                        INTERPRETATION_PROMPT,
+                        session.interpretationModel,
+                        session?.interpretationReasoning ?? 'none',
+                        config.temperature
+                    );
+                    translation.interpretation = interpretationResult;
+                    translation.interpretationPending = false;
+                    saveSessionTranslation(currentSessionId, translation);
+                } catch (interpretationError) {
+                    console.error('[interpretation] Failed:', interpretationError);
+                    translation.interpretationPending = false;
                 }
             })());
         }
@@ -1672,6 +1848,30 @@ export async function regenerateLiteralRetranslation(translationId: string): Pro
         })());
     }
 
+    if (session?.interpretationModel && translation.translation) {
+        translation.interpretationPending = true;
+        tasks.push((async () => {
+            try {
+                const message = await buildInterpretationMessage(translation);
+                console.log('[interpretation] Starting interpretation with model:', session.interpretationModel);
+                const interpretationResult = await translateRaw(
+                    config.openRouterApiKey,
+                    message,
+                    INTERPRETATION_PROMPT,
+                    session.interpretationModel,
+                    session?.interpretationReasoning ?? 'none',
+                    config.temperature
+                );
+                translation.interpretation = interpretationResult;
+                translation.interpretationPending = false;
+                saveSessionTranslation(currentSessionId, translation);
+            } catch (interpretationError) {
+                console.error('[interpretation] Failed:', interpretationError);
+                translation.interpretationPending = false;
+            }
+        })());
+    }
+
     if (tasks.length > 0) {
         updateTranslationItem(translation);
         Promise.all(tasks)
@@ -1700,6 +1900,57 @@ async function fetchWordDefinitions(model: string, text: string): Promise<string
     );
     console.log('[wordDefinitions] API response length:', result.length, 'first 200 chars:', result.substring(0, 200));
     return result;
+}
+
+/**
+ * Regenerates the interpretation for a completed output translation
+ * @param {string} translationId - ID of translation to regenerate interpretation for
+ * @returns {Promise<void>}
+ */
+export async function regenerateInterpretation(translationId: string): Promise<void> {
+    const translation = allTranslations.find(function(t) { return t.id === translationId; });
+
+    if (!translation) {
+        return;
+    }
+
+    if (translation.status !== 'complete') {
+        return;
+    }
+
+    const session = await loadSession(currentSessionId);
+    if (!session?.interpretationModel) {
+        console.error('[regenerateInterpretation] No interpretation model configured');
+        return;
+    }
+
+    if (!config || !config.openRouterApiKey) {
+        console.error('[regenerateInterpretation] No API key');
+        return;
+    }
+
+    translation.interpretationPending = true;
+    updateTranslationItem(translation);
+
+    try {
+        const message = await buildInterpretationMessage(translation);
+        console.log('[regenerateInterpretation] Starting interpretation with model:', session.interpretationModel);
+        const interpretationResult = await translateRaw(
+            config.openRouterApiKey,
+            message,
+            INTERPRETATION_PROMPT,
+            session.interpretationModel,
+            session?.interpretationReasoning ?? 'none',
+            config.temperature
+        );
+        translation.interpretation = interpretationResult;
+        translation.interpretationPending = false;
+        saveSessionTranslation(currentSessionId, translation);
+        updateTranslationItem(translation);
+    } catch (interpretationError) {
+        console.error('[regenerateInterpretation] Failed:', interpretationError);
+        translation.interpretationPending = false;
+    }
 }
 
 /**

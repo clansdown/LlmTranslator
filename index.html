@@ -319,11 +319,15 @@
                             <li class="nav-item" role="presentation">
                                 <button type="button" class="nav-link translation-section-tab" id="nuances-tab" data-bs-toggle="tab" data-bs-target="#nuances-pane" role="tab" aria-controls="nuances-pane" aria-selected="false">Nuances</button>
                             </li>
+                            <li class="nav-item" role="presentation">
+                                <button type="button" class="nav-link translation-section-tab" id="interpretation-tab" data-bs-toggle="tab" data-bs-target="#interpretation-pane" role="tab" aria-controls="interpretation-pane" aria-selected="false">Interpretation</button>
+                            </li>
                         </ul>
                     </div>
                     <div class="col-auto">
                         <button type="button" class="btn btn-sm btn-outline-secondary toggle-sections-btn" title="Toggle sections">▼</button>
                         <button type="button" class="btn btn-sm btn-outline-secondary regenerate-literal-btn" style="display: none;">Regenerate</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary regenerate-interpretation-btn" style="display: none;">Regen</button>
                     </div>
                 </div>
                 <div class="tab-content translation-sections-content">
@@ -338,6 +342,9 @@
                     </div>
                     <div class="tab-pane fade" id="nuances-pane" role="tabpanel" aria-labelledby="nuances-tab">
                         <div class="translation-nuances p-2 small text-justify" style="white-space: pre-wrap;"></div>
+                    </div>
+                    <div class="tab-pane fade" id="interpretation-pane" role="tabpanel" aria-labelledby="interpretation-tab">
+                        <div class="translation-interpretation p-2 small text-justify" style="white-space: pre-wrap;"></div>
                     </div>
                 </div>
             </div>
@@ -579,6 +586,21 @@
                                     <div class="col-12">
                                         <label for="settings-session-literal-model" class="form-label">Literal Model</label>
                                         <select id="settings-session-literal-model" class="form-select">
+                                        </select>
+                                    </div>
+                                    <div class="col-12">
+                                        <label for="settings-session-interpretation-model" class="form-label">Interpretation Model</label>
+                                        <select id="settings-session-interpretation-model" class="form-select">
+                                        </select>
+                                    </div>
+                                    <div class="col-12">
+                                        <label for="settings-session-interpretation-reasoning" class="form-label">Interpretation Reasoning</label>
+                                        <select id="settings-session-interpretation-reasoning" class="form-select">
+                                            <option value="none">None</option>
+                                            <option value="minimal">Minimal</option>
+                                            <option value="low">Low</option>
+                                            <option value="medium">Medium</option>
+                                            <option value="high">High</option>
                                         </select>
                                     </div>
                                     <div class="col-12">

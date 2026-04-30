@@ -35,6 +35,8 @@ export interface Translation {
     wordDefinitions?: string;
     wordData?: TranslationWordItem[];
     wordPending?: boolean;
+    interpretation?: string;
+    interpretationPending?: boolean;
     model: string;
     modelName: string;
     prompt: string;
