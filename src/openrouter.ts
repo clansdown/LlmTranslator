@@ -631,7 +631,8 @@ export async function translateStructured(
     userMessage: string,
     systemPrompt: string,
     model: string,
-    reasoningLevel: string = 'none'
+    reasoningLevel: string = 'none',
+    temperature: number = 0.2
 ): Promise<TranslationResult> {
     /** @type {Array<{role: string; content: string}>} */
     const messages: Array<{role: string; content: string}> = [];
@@ -660,6 +661,8 @@ export async function translateStructured(
             effort: reasoningLevel
         };
     }
+
+    body.temperature = temperature;
 
     const response = await fetch(OPENROUTER_BASE_URL + "/chat/completions", {
         method: "POST",
@@ -718,7 +721,8 @@ export async function translateRaw(
     userMessage: string,
     systemPrompt: string,
     model: string,
-    reasoningLevel: string = 'none'
+    reasoningLevel: string = 'none',
+    temperature: number = 0.2
 ): Promise<string> {
     /** @type {Array<{role: string; content: string}>} */
     const messages: Array<{role: string; content: string}> = [];
@@ -747,6 +751,8 @@ export async function translateRaw(
             effort: reasoningLevel
         };
     }
+
+    body.temperature = temperature;
 
     const response = await fetch(OPENROUTER_BASE_URL + "/chat/completions", {
         method: "POST",

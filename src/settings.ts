@@ -66,6 +66,8 @@ let settingsModalInstance: any = null;
 interface SettingsReferences {
     minPriceInput: HTMLInputElement;
     maxPriceInput: HTMLInputElement;
+    temperatureInput: HTMLInputElement;
+    questionTemperatureInput: HTMLInputElement;
     apiKeyInput: HTMLInputElement;
     toggleApiKeyButton: HTMLButtonElement;
     promptListSelect: HTMLSelectElement;
@@ -159,6 +161,8 @@ function openSettingsModal(): void {
         refs = {
             minPriceInput: settingsModalElement.querySelector('#settings-min-price') as HTMLInputElement,
             maxPriceInput: settingsModalElement.querySelector('#settings-max-price') as HTMLInputElement,
+            temperatureInput: settingsModalElement.querySelector('#settings-temperature') as HTMLInputElement,
+            questionTemperatureInput: settingsModalElement.querySelector('#settings-question-temperature') as HTMLInputElement,
             apiKeyInput: settingsModalElement.querySelector('#settings-api-key') as HTMLInputElement,
             toggleApiKeyButton: settingsModalElement.querySelector('#settings-toggle-key-visibility') as HTMLButtonElement,
             promptListSelect: settingsModalElement.querySelector('#settings-prompt-list') as HTMLSelectElement,
@@ -288,6 +292,8 @@ function populateSettingsForm(): void {
 
     refs.minPriceInput.value = config.minPrice !== null ? String(config.minPrice) : '';
     refs.maxPriceInput.value = config.maxPrice !== null ? String(config.maxPrice) : '';
+    refs.temperatureInput.value = String(config.temperature);
+    refs.questionTemperatureInput.value = String(config.questionTemperature);
     refs.apiKeyInput.value = config.openRouterApiKey ?? '';
 
     renderPromptList();
@@ -678,6 +684,20 @@ async function saveSettings(): Promise<void> {
         await storage.savePreference('maxPrice', String(config.maxPrice));
     } else {
         await storage.deletePreference('maxPrice');
+    }
+
+    const temperatureStr = refs.temperatureInput.value.trim();
+    const temperature = parseFloat(temperatureStr);
+    if (!isNaN(temperature) && temperature >= 0 && temperature <= 2) {
+        config.temperature = temperature;
+        await storage.savePreference('temperature', String(temperature));
+    }
+
+    const questionTemperatureStr = refs.questionTemperatureInput.value.trim();
+    const questionTemperature = parseFloat(questionTemperatureStr);
+    if (!isNaN(questionTemperature) && questionTemperature >= 0 && questionTemperature <= 2) {
+        config.questionTemperature = questionTemperature;
+        await storage.savePreference('questionTemperature', String(questionTemperature));
     }
 
     await saveApprovedModels();

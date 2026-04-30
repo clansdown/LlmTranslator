@@ -8,7 +8,7 @@ import { getPreference, savePreference, listSessions, saveSession, loadSession, 
 import { DEBUG_TRANSLATIONS, DEBUG_SESSIONS } from './debug';
 import * as ui from './ui';
 import { LANGUAGES } from './languages';
-import { SYSTEM_PROMPT, INPUT_INSTRUCTIONS, OUTPUT_INSTRUCTIONS, LITERAL_RETRANSLATION_PROMPT, QUESTION_SYSTEM_PROMPT, WORD_DEFINITIONS_PROMPT } from './prompts';
+import { SYSTEM_PROMPT, INPUT_INSTRUCTIONS, OUTPUT_INSTRUCTIONS, LITERAL_RETRANSLATION_PROMPT, OUTPUT_LITERAL_RETRANSLATION_PROMPT, QUESTION_SYSTEM_PROMPT, WORD_DEFINITIONS_PROMPT } from './prompts';
 import { renderMarkdown } from './markdown';
 import * as settings from './settings';
 import type { Translation, TranslationWordItem, WordItem, PunctItem, NewlineItem } from './types/translation';
@@ -586,6 +586,7 @@ export async function translate(mode: 'input' | 'output'): Promise<void> {
         instructions = INPUT_INSTRUCTIONS.replace('[LANGUAGE]', readLang?.name ?? 'your language');
     } else {
         const writeLang = LANGUAGES.find(function(l) { return l.id === session?.writeLanguage; });
+        const readLang = LANGUAGES.find(function(l) { return l.id === session?.readLanguage; });
         const prompts = settings.getPrompts();
         const prompt = prompts.find(function(p) { return p.id === session?.writePromptId; });
         const promptContent = session?.promptOverride ?? prompt?.content ?? '';
@@ -593,7 +594,8 @@ export async function translate(mode: 'input' | 'output'): Promise<void> {
         const intentTextarea = document.getElementById('intent-textarea') as HTMLTextAreaElement | null;
         const intent = intentTextarea?.value.trim() ?? '';
         instructions = instructions.replace('[INTENT]', intent ? `Intent: ${intent}` : '');
-        instructions = instructions.replace('[LANGUAGE]', writeLang?.name ?? 'the target language');
+        instructions = instructions.replace('[LANGUAGE]', writeLang?.name ?? 'the source language');
+        instructions = instructions.replace('[TARGET_LANGUAGE]', readLang?.name ?? 'the target language');
         promptName = prompt?.name ?? 'Translate';
         if (intentTextarea) {
             intentTextarea.value = '';
@@ -644,7 +646,8 @@ export async function translate(mode: 'input' | 'output'): Promise<void> {
                     sourceText,
                     literalSystemPrompt,
                     session.literalModel,
-                    'none'
+                    'none',
+                    config.temperature
                 );
                 translation.literalRetranslation = literalResult;
                 translation.literalPending = false;
@@ -711,7 +714,7 @@ export async function translate(mode: 'input' | 'output'): Promise<void> {
                 try {
                     const readLang = LANGUAGES.find(function(l) { return l.id === session?.readLanguage; });
                     const sourceLangName = readLang?.name ?? session?.readLanguage ?? 'source';
-                    const literalSystemPrompt = LITERAL_RETRANSLATION_PROMPT.replace(/\[LANGUAGE\]/g, sourceLangName);
+                    const literalSystemPrompt = OUTPUT_LITERAL_RETRANSLATION_PROMPT.replace(/\[LANGUAGE\]/g, sourceLangName);
                     const literalUserMessage = result.translation;
                     console.log('[translateLiteral] Starting literal retranslation with model:', session.literalModel);
                     const literalResult = await translateRaw(
@@ -719,7 +722,8 @@ export async function translate(mode: 'input' | 'output'): Promise<void> {
                         literalUserMessage,
                         literalSystemPrompt,
                         session.literalModel,
-                        'none'
+                        'none',
+                        config.temperature
                     );
                     translation.literalRetranslation = literalResult;
                     translation.literalPending = false;
@@ -863,7 +867,8 @@ export async function askQuestion(): Promise<void> {
             userMessage,
             QUESTION_SYSTEM_PROMPT,
             effectiveModel,
-            session?.reasoning ?? 'none'
+            session?.reasoning ?? 'none',
+            config.questionTemperature
         );
         translation.translation = result;
         translation.status = 'complete';
@@ -1295,7 +1300,8 @@ export async function retryTranslation(translationId: string): Promise<void> {
                 userMessage,
                 QUESTION_SYSTEM_PROMPT,
                 effectiveModel,
-                reasoningLevel
+                reasoningLevel,
+                config.questionTemperature
             );
             translation.translation = result;
             translation.status = 'complete';
@@ -1314,17 +1320,15 @@ export async function retryTranslation(translationId: string): Promise<void> {
         const readLang = LANGUAGES.find(function(l) { return l.id === session?.readLanguage; });
         instructions = INPUT_INSTRUCTIONS.replace('[LANGUAGE]', readLang?.name ?? 'the target language');
     } else {
+        const writeLang = LANGUAGES.find(function(l) { return l.id === session?.writeLanguage; });
+        const readLang = LANGUAGES.find(function(l) { return l.id === session?.readLanguage; });
         const prompts = settings.getPrompts();
         const prompt = prompts.find(function(p) { return p.id === session?.writePromptId; });
         const promptContent = session?.promptOverride ?? prompt?.content ?? '';
         instructions = OUTPUT_INSTRUCTIONS.replace('[PROMPT]', promptContent);
         instructions = instructions.replace('[INTENT]', translation.intent ? `Intent: ${translation.intent}` : '');
-        const readLang = LANGUAGES.find(function(l) { return l.id === session?.readLanguage; });
-        if (readLang) {
-            instructions = instructions.replace('[LANGUAGE]', readLang.name);
-        } else {
-            instructions = instructions.replace('[LANGUAGE]', 'the input language');
-        }
+        instructions = instructions.replace('[LANGUAGE]', writeLang?.name ?? 'the source language');
+        instructions = instructions.replace('[TARGET_LANGUAGE]', readLang?.name ?? 'the target language');
     }
 
     const userMessage = await buildUserMessage(translation.pill, translation.source, instructions);
@@ -1335,7 +1339,8 @@ export async function retryTranslation(translationId: string): Promise<void> {
             userMessage,
             SYSTEM_PROMPT,
             effectiveModel,
-            reasoningLevel
+            reasoningLevel,
+            config.temperature
         );
 
         translation.translation = result.translation;
@@ -1402,12 +1407,13 @@ async function regenerateTranslationById(translationId: string): Promise<void> {
     const userMessage = await buildUserMessage('input', translation.source, instructions);
 
     try {
-        const result = await translateStructured(
-            config!.openRouterApiKey!,
+const result = await translateStructured(
+            config.openRouterApiKey,
             userMessage,
             SYSTEM_PROMPT,
-            effectiveModel!,
-            reasoningLevel
+            effectiveModel,
+            reasoningLevel,
+            config.temperature
         );
 
         translation.translation = result.translation;
@@ -1471,17 +1477,15 @@ export async function retranslateFromEdit(translationId: string, newSource: stri
         const readLang = LANGUAGES.find(function(l) { return l.id === session?.readLanguage; });
         instructions = INPUT_INSTRUCTIONS.replace('[LANGUAGE]', readLang?.name ?? 'the target language');
     } else {
+        const writeLang = LANGUAGES.find(function(l) { return l.id === session?.writeLanguage; });
+        const readLang = LANGUAGES.find(function(l) { return l.id === session?.readLanguage; });
         const prompts = settings.getPrompts();
         const prompt = prompts.find(function(p) { return p.id === session?.writePromptId; });
         const promptContent = session?.promptOverride ?? prompt?.content ?? '';
         instructions = OUTPUT_INSTRUCTIONS.replace('[PROMPT]', promptContent);
         instructions = instructions.replace('[INTENT]', newIntent ? `Intent: ${newIntent}` : '');
-        const readLang = LANGUAGES.find(function(l) { return l.id === session?.readLanguage; });
-        if (readLang) {
-            instructions = instructions.replace('[LANGUAGE]', readLang.name);
-        } else {
-            instructions = instructions.replace('[LANGUAGE]', 'the input language');
-        }
+        instructions = instructions.replace('[LANGUAGE]', writeLang?.name ?? 'the source language');
+        instructions = instructions.replace('[TARGET_LANGUAGE]', readLang?.name ?? 'the target language');
     }
 
     const userMessage = await buildUserMessage(translation.pill, newSource, instructions);
@@ -1513,14 +1517,18 @@ export async function retranslateFromEdit(translationId: string, newSource: stri
                 try {
                     const readLang = LANGUAGES.find(function(l) { return l.id === session?.readLanguage; });
                     const sourceLangName = readLang?.name ?? session?.readLanguage ?? 'source';
-                    const literalSystemPrompt = LITERAL_RETRANSLATION_PROMPT.replace(/\[LANGUAGE\]/g, sourceLangName);
+                    const literalPrompt = translation.pill === 'input'
+                        ? LITERAL_RETRANSLATION_PROMPT
+                        : OUTPUT_LITERAL_RETRANSLATION_PROMPT;
+                    const literalSystemPrompt = literalPrompt.replace(/\[LANGUAGE\]/g, sourceLangName);
                     const literalUserMessage = result.translation;
                     const literalResult = await translateRaw(
                         config.openRouterApiKey,
                         literalUserMessage,
                         literalSystemPrompt,
                         session.literalModel,
-                        'none'
+                        'none',
+                        config.temperature
                     );
                     translation.literalRetranslation = literalResult;
                     translation.literalPending = false;
@@ -1596,7 +1604,10 @@ export async function regenerateLiteralRetranslation(translationId: string): Pro
 
     const readLang = LANGUAGES.find(function(l) { return l.id === session?.readLanguage; });
     const sourceLangName = readLang?.name ?? session?.readLanguage ?? 'source';
-    const literalSystemPrompt = LITERAL_RETRANSLATION_PROMPT.replace(/\[LANGUAGE\]/g, sourceLangName);
+    const literalPrompt = translation.pill === 'input'
+        ? LITERAL_RETRANSLATION_PROMPT
+        : OUTPUT_LITERAL_RETRANSLATION_PROMPT;
+    const literalSystemPrompt = literalPrompt.replace(/\[LANGUAGE\]/g, sourceLangName);
     const literalUserMessage = translation.pill === 'input'
         ? translation.source
         : translation.translation;
@@ -1617,7 +1628,8 @@ export async function regenerateLiteralRetranslation(translationId: string): Pro
                     literalUserMessage,
                     literalSystemPrompt,
                     session.literalModel,
-                    'none'
+                    'none',
+                    config.temperature
                 );
                 console.log('[regenerateLiteral] Literal result:', literalResult.substring(0, 200));
                 translation.literalRetranslation = literalResult;
@@ -1683,7 +1695,8 @@ async function fetchWordDefinitions(model: string, text: string): Promise<string
         prompt,
         'You are a linguistic analysis tool. Output only the requested XML structure with no additional text.',
         model,
-        'none'
+        'none',
+        config!.temperature
     );
     console.log('[wordDefinitions] API response length:', result.length, 'first 200 chars:', result.substring(0, 200));
     return result;

@@ -19,7 +19,9 @@ const config: Config = {
     minPrice: null,
     maxPrice: null,
     selectedPromptId: null,
-    approvedModelIds: null
+    approvedModelIds: null,
+    temperature: 0.2,
+    questionTemperature: 0.35
 };
 
 /**
@@ -164,6 +166,22 @@ async function loadSettings(): Promise<void> {
             }
         } catch {
             config.approvedModelIds = null;
+        }
+    }
+
+    const temperatureStr = await getPreference("temperature");
+    if (temperatureStr) {
+        const parsed = parseFloat(temperatureStr);
+        if (!isNaN(parsed) && parsed >= 0 && parsed <= 2) {
+            config.temperature = parsed;
+        }
+    }
+
+    const questionTemperatureStr = await getPreference("questionTemperature");
+    if (questionTemperatureStr) {
+        const parsed = parseFloat(questionTemperatureStr);
+        if (!isNaN(parsed) && parsed >= 0 && parsed <= 2) {
+            config.questionTemperature = parsed;
         }
     }
 }

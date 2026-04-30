@@ -17,14 +17,13 @@ You will receive messages with XML-style tags that structure the input. Here is 
 - <USERQUESTION> - Previous questions from the user about the conversation. Use these for context but do not answer them here.
 - <AGENTANSWER> - Answers to previous questions. Use these for context but do not translate them.
 - <TRANSLATE> - The text to be translated. This is the ONLY section you should translate.
-- <QUESTION> - The user's question. Answer it directly in your response.
 - <INSTRUCTIONS> - Specific directions for this translation, such as the target language. Follow these instructions but do not translate them.
 
 Always respond using these exact tags:
 
 <TRANSLATION>Your translation of the text inside the TRANSLATE tags, according to the instructions in the INSTRUCTIONS tag.</TRANSLATION>
-<EXPLANATION>In the source language, explain the meaning of key words, phrases, and idioms from the original text and how you translated them. This explanation must be in the language which you translated FROM.</EXPLANATION>
-<NUANCES>In the source language, explain any cultural or linguistic nuances that were important for preserving the meaning when doing the translation. The nuances must be explained in the language you translated FROM.</NUANCES>
+<EXPLANATION>Explain the meaning of key words, phrases, and idioms from the original text and how you translated them.</EXPLANATION>
+<NUANCES>Explain any cultural or linguistic nuances that were important for preserving the meaning when doing the translation.</NUANCES>
 
 Do not include any text outside of these three tags.`;
 
@@ -33,13 +32,17 @@ Do not include any text outside of these three tags.`;
  * [LANGUAGE] is replaced with the target language name
  */
 export const INPUT_INSTRUCTIONS: string =
-`Translate the user's text into [LANGUAGE]. Consider any background context and conversation history provided.`;
+`Translate the user's text into [LANGUAGE]. Consider any background context and conversation history provided.
+The <EXPLANATION> and <NUANCES> sections should be in [LANGUAGE].
+Follow the system prompt's guidelines for structuring your response.
+`;
 
 /**
  * Instructions for output pane translations (native -> foreign)
  * [PROMPT] is replaced with the selected prompt's content
  * [INTENT] is replaced with the user's intent for this translation
- * [LANGUAGE] is replaced with the input language name
+ * [LANGUAGE] is replaced with the source/input language name
+ * [TARGET_LANGUAGE] is replaced with the target/foreign language name
  */
 export const OUTPUT_INSTRUCTIONS: string =
 `[PROMPT]
@@ -47,12 +50,12 @@ export const OUTPUT_INSTRUCTIONS: string =
 [INTENT]
 
 Consider any background context and conversation history provided.
-The explanation and nuances sections should be in [LANGUAGE], while the translation should be in the target language.
+The explanation and nuances sections should be in [LANGUAGE], while the translation should be in [TARGET_LANGUAGE].
 Follow the system prompt's guidelines for structuring your response.`;
 
 /**
- * System prompt for literal retranslation
- * Ultra-literal, word-for-word translation back to the source language
+ * System prompt for literal retranslation (input mode)
+ * Ultra-literal, word-for-word translation of user-provided foreign text
  */
 export const LITERAL_RETRANSLATION_PROMPT: string =
 `You are a literal translator. You will be given a text to translate word-by-word.
@@ -60,6 +63,17 @@ Your task is to produce an ultra-literal, word-by-word translation of the text i
 Prioritize exact word correspondence over natural phrasing even if the result is grammatically awkward or outright wrong.
 You may output a phrase for a word if there is no direct equivalent in the target language, but put the phrase in square brackets.
 Characters which have no meaning in [LANGUAGE] should be represented in square brackets with the meaning, for example, [subject marker].
+Output only the literal translation of the text into [LANGUAGE] with no explanations. Do not include any of the original text. There should be no text which is not [LANGUAGE]`;
+
+/**
+ * System prompt for literal back-translation (output mode)
+ * Ultra-literal translation back to source language to verify output translation
+ */
+export const OUTPUT_LITERAL_RETRANSLATION_PROMPT: string =
+`You are a literal translator. You will be given a text to translate word-by-word.
+Your task is to produce an ultra-literal, word-by-word translation of the text into [LANGUAGE].
+Prioritize exact word correspondence over natural phrasing even if the result is grammatically awkward or outright wrong.
+You may output a phrase for a word if there is no direct equivalent in the target language, but put the phrase in square brackets [].
 Output only the literal translation of the text into [LANGUAGE] with no explanations. Do not include any of the original text. There should be no text which is not [LANGUAGE]`;
 
 /**

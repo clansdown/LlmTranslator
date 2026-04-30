@@ -12,4 +12,6 @@ export interface Config {
     maxPrice: number | null;
     selectedPromptId: string | null;
     approvedModelIds: string[] | null;
+    temperature: number;
+    questionTemperature: number;
 }
