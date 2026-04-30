@@ -2,7 +2,7 @@
  * Main application initialization module
  */
 
-import { savePreference, getPreference } from './storage';
+import { savePreference, getPreference, deletePreference } from './storage';
 import { fetchBalance, fetchZdrModels } from './openrouter';
 import * as ui from './ui';
 import * as settings from './settings';
@@ -160,7 +160,7 @@ async function loadSettings(): Promise<void> {
             const hasOldFormat = Array.isArray(parsed) && parsed.some(function(id) { return typeof id === 'string' && !id.includes('::'); });
             if (hasOldFormat) {
                 config.approvedModelIds = null;
-                await storage.deletePreference('approvedModels');
+                await deletePreference('approvedModels');
             } else {
                 config.approvedModelIds = parsed;
             }

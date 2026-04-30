@@ -9,7 +9,7 @@ import { DEBUG_TRANSLATIONS, DEBUG_SESSIONS } from './debug';
 import * as ui from './ui';
 import { LANGUAGES } from './languages';
 import { INPUT_SYSTEM_PROMPT, OUTPUT_SYSTEM_PROMPT, INPUT_INSTRUCTIONS, OUTPUT_INSTRUCTIONS, LITERAL_RETRANSLATION_PROMPT, OUTPUT_LITERAL_RETRANSLATION_PROMPT, QUESTION_SYSTEM_PROMPT, WORD_DEFINITIONS_PROMPT, INTERPRETATION_PROMPT } from './prompts';
-import { renderMarkdown } from './markdown';
+import { renderMarkdown, normalizeForMarkdown } from './markdown';
 import * as settings from './settings';
 import type { Translation, TranslationEntry, TranslationWordItem, WordItem, PunctItem, NewlineItem } from './types/translation';
 import type { Config } from './types/config';
@@ -779,7 +779,7 @@ export async function translate(mode: 'input' | 'output'): Promise<void> {
     let instructions: string;
 
     if (mode === 'input') {
-        promptName = theirLang?.name ?? 'Foreign';
+        promptName = session?.interlocutorName ?? theirLang?.name ?? 'Foreign';
         instructions = INPUT_INSTRUCTIONS.replace('[LANGUAGE]', myLangName);
     } else {
         const prompts = settings.getPrompts();
@@ -791,7 +791,7 @@ export async function translate(mode: 'input' | 'output'): Promise<void> {
         instructions = instructions.replace('[INTENT]', intent ? `Intent: ${intent}` : '');
         instructions = instructions.replace('[LANGUAGE]', myLangName);
         instructions = instructions.replace('[TARGET_LANGUAGE]', theirLangName);
-        promptName = prompt?.name ?? 'Translate';
+        promptName = 'Me';
         if (intentTextarea) {
             intentTextarea.value = '';
         }
@@ -1106,17 +1106,17 @@ function setupToggleHandler(element: HTMLElement, translation: Translation): voi
     const toggleSectionsBtn = element.querySelector('.toggle-sections-btn') as HTMLButtonElement | null;
     const sectionsArea = element.querySelector('.translation-sections-area') as HTMLElement | null;
     if (toggleSectionsBtn && sectionsArea) {
-        toggleSectionsBtn.addEventListener('click', function() {
-            const isCollapsed = sectionsArea.classList.contains('translation-sections-collapsed');
-            if (isCollapsed) {
-                sectionsArea.classList.remove('translation-sections-collapsed');
-                toggleSectionsBtn.textContent = '▼';
-                translation.sectionsCollapsed = false;
-            } else {
-                sectionsArea.classList.add('translation-sections-collapsed');
-                toggleSectionsBtn.textContent = '▲';
-                translation.sectionsCollapsed = true;
-            }
+            toggleSectionsBtn.addEventListener('click', function() {
+                const isCollapsed = sectionsArea.classList.contains('translation-sections-collapsed');
+                if (isCollapsed) {
+                    sectionsArea.classList.remove('translation-sections-collapsed');
+                    toggleSectionsBtn.textContent = '▼';
+                    translation.sectionsCollapsed = false;
+                } else {
+                    sectionsArea.classList.add('translation-sections-collapsed');
+                    toggleSectionsBtn.textContent = '▶';
+                    translation.sectionsCollapsed = true;
+                }
             saveSessionTranslation(currentSessionId, translation);
         });
     }
@@ -1401,7 +1401,7 @@ function updateTranslationItem(translation: Translation): void {
     const entryIntent = entry?.intent ?? (translation as any).intent ?? '';
 
     if (sourceEl) {
-        sourceEl.textContent = entrySource;
+        sourceEl.innerHTML = renderMarkdown(normalizeForMarkdown(entrySource));
     }
     if (promptEl) {
         promptEl.textContent = entryPrompt;
@@ -1469,7 +1469,7 @@ function updateTranslationItem(translation: Translation): void {
                     if (toggleAnswerBtn) toggleAnswerBtn.textContent = '▼';
                 }
             } else {
-                targetEl.textContent = entryTranslation;
+                targetEl.innerHTML = renderMarkdown(normalizeForMarkdown(entryTranslation));
             }
         }
         if (charCountEl) {
@@ -1514,7 +1514,7 @@ function updateTranslationItem(translation: Translation): void {
         if (sectionsArea && toggleSectionsBtn) {
             if (translation.sectionsCollapsed) {
                 sectionsArea.classList.add('translation-sections-collapsed');
-                toggleSectionsBtn.textContent = '▲';
+                toggleSectionsBtn.textContent = '▶';
             } else {
                 sectionsArea.classList.remove('translation-sections-collapsed');
                 toggleSectionsBtn.textContent = '▼';
@@ -1781,6 +1781,12 @@ export async function retranslateFromEdit(translationId: string, newSource: stri
 
     const session = await loadSession(currentSessionId);
     const reasoningLevel = session?.reasoning ?? 'none';
+    const myLang = LANGUAGES.find(function(l) { return l.id === session?.myLanguage; });
+    const myLangName = myLang?.name ?? session?.myLanguage ?? 'English';
+    const theirLang = LANGUAGES.find(function(l) { return l.id === session?.theirLanguage; });
+    const promptName = translation.pill === 'input'
+        ? session?.interlocutorName ?? theirLang?.name ?? 'Foreign'
+        : 'Me';
 
     translation.status = 'pending';
     translation.error = null;
@@ -1789,7 +1795,7 @@ export async function retranslateFromEdit(translationId: string, newSource: stri
         intent: newIntent,
         model: effectiveModel ?? '',
         modelName: getModelName(effectiveModel ?? ''),
-        prompt: translation.entries?.[translation.activeEntryIndex ?? 0]?.prompt ?? '',
+        prompt: promptName,
         promptContent: translation.entries?.[translation.activeEntryIndex ?? 0]?.promptContent ?? '',
         translation: '',
         explanation: '',
@@ -1809,9 +1815,6 @@ export async function retranslateFromEdit(translationId: string, newSource: stri
     updateTranslationItem(translation);
 
     let instructions: string;
-    const theirLang = LANGUAGES.find(function(l) { return l.id === session?.theirLanguage; });
-    const myLang = LANGUAGES.find(function(l) { return l.id === session?.myLanguage; });
-    const myLangName = myLang?.name ?? session?.myLanguage ?? 'English';
     if (translation.pill === 'input') {
         instructions = INPUT_INSTRUCTIONS.replace('[LANGUAGE]', myLangName);
     } else {

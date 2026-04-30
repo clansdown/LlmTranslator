@@ -79,6 +79,7 @@ interface SettingsReferences {
     saveSettingsButton: HTMLButtonElement;
     sessionListSelect: HTMLSelectElement;
     sessionNameInput: HTMLInputElement;
+    sessionInterlocutorNameInput: HTMLInputElement;
     sessionModelSelect: HTMLSelectElement;
     sessionLiteralModelSelect: HTMLSelectElement;
     sessionInterpretationModelSelect: HTMLSelectElement;
@@ -176,6 +177,7 @@ function openSettingsModal(): void {
             saveSettingsButton: settingsModalElement.querySelector('#settings-save-btn') as HTMLButtonElement,
             sessionListSelect: settingsModalElement.querySelector('#settings-session-list') as HTMLSelectElement,
             sessionNameInput: settingsModalElement.querySelector('#settings-session-name') as HTMLInputElement,
+            sessionInterlocutorNameInput: settingsModalElement.querySelector('#settings-session-interlocutor-name') as HTMLInputElement,
             sessionModelSelect: settingsModalElement.querySelector('#settings-session-model') as HTMLSelectElement,
             sessionLiteralModelSelect: settingsModalElement.querySelector('#settings-session-literal-model') as HTMLSelectElement,
             sessionInterpretationModelSelect: settingsModalElement.querySelector('#settings-session-interpretation-model') as HTMLSelectElement,
@@ -503,13 +505,13 @@ export function populateModelsTab(): void {
 
         input.addEventListener('change', function() {
             if (input.checked) {
-                if (config?.approvedModelIds !== null) {
+                if (config && config.approvedModelIds !== null) {
                     if (!config.approvedModelIds.includes(compositeKey)) {
                         config.approvedModelIds.push(compositeKey);
                     }
                 }
             } else {
-                if (config?.approvedModelIds !== null) {
+                if (config && config.approvedModelIds !== null) {
                     config.approvedModelIds = config.approvedModelIds.filter(function(id) { return id !== compositeKey; });
                 }
             }
@@ -849,6 +851,7 @@ function loadSessionIntoEditor(sessionId: string): void {
     storage.loadSession(sessionId).then(function(session) {
         if (session && refs) {
             refs.sessionNameInput.value = session.name;
+            refs.sessionInterlocutorNameInput.value = session.interlocutorName ?? '';
             refs.sessionModelSelect.value = session.model ?? '';
             refs.sessionLiteralModelSelect.value = session.literalModel ?? '';
             refs.sessionInterpretationModelSelect.value = session.interpretationModel ?? '';
@@ -861,6 +864,7 @@ function loadSessionIntoEditor(sessionId: string): void {
             refs.sessionWritePromptSelect.value = session.writePromptId ?? '';
         } else if (refs) {
             refs.sessionNameInput.value = '';
+            refs.sessionInterlocutorNameInput.value = '';
             refs.sessionModelSelect.value = '';
             refs.sessionLiteralModelSelect.value = '';
             refs.sessionInterpretationModelSelect.value = '';
@@ -882,6 +886,7 @@ function loadSessionIntoEditor(sessionId: string): void {
 function clearSessionEditor(): void {
     if (!refs) return;
     refs.sessionNameInput.value = '';
+    refs.sessionInterlocutorNameInput.value = '';
     refs.sessionBackgroundInput.value = '';
     refs.sessionReasoningSelect.value = 'none';
     refs.sessionPromptOverrideInput.value = '';
@@ -939,6 +944,7 @@ async function saveSession(): Promise<void> {
     session.promptOverride = refs.sessionPromptOverrideInput.value || null;
     session.theirLanguage = refs.sessionTheirLanguageSelect.value;
     session.myLanguage = refs.sessionMyLanguageSelect.value;
+    session.interlocutorName = refs.sessionInterlocutorNameInput.value.trim() || undefined;
     session.writePromptId = refs.sessionWritePromptSelect.value || null;
     await storage.saveSession(session);
 

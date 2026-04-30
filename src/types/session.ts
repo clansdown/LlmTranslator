@@ -17,5 +17,6 @@ export interface TranslationSession {
     promptOverride?: string | null;
     interpretationModel?: string | null;
     interpretationReasoning?: ReasoningLevel;
+    interlocutorName?: string;
     createdAt: number;
 }

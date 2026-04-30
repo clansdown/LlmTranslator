@@ -997,6 +997,9 @@ export async function loadSession(sessionId: string): Promise<TranslationSession
         if (!session.writePromptId && legacySession.promptId) {
             session.writePromptId = legacySession.promptId;
         }
+        if (!session.interlocutorName) {
+            session.interlocutorName = session.name;
+        }
         if (DEBUG_SESSIONS) {
             console.log(`[loadSession] Loaded session ${sessionId}: ${session.name}`);
         }
@@ -1113,6 +1116,7 @@ export async function getOrCreateDefaultSession(model?: string | null, theirLang
         background: "",
         reasoning: "none",
         literalModel: null,
+        interlocutorName: model ?? "",
         createdAt: Date.now()
     };
 

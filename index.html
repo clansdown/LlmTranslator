@@ -65,17 +65,22 @@
         }
 
 
+        .translation-source p,
         .translation-target p,
         .translation-literal p,
         .translation-explanation p,
-        .translation-nuances p {
-            margin: 0 0 0.5em;
+        .translation-nuances p,
+        .translation-interpretation p {
+            margin: 0 0 0.3em;
+            text-indent: 0.6em;
         }
 
+        .translation-source p:last-child,
         .translation-target p:last-child,
         .translation-literal p:last-child,
         .translation-explanation p:last-child,
-        .translation-nuances p:last-child {
+        .translation-nuances p:last-child,
+        .translation-interpretation p:last-child {
             margin-bottom: 0;
         }
 
@@ -154,10 +159,7 @@
             display: none;
         }
 
-        .translation-sections-area.translation-sections-collapsed .toggle-sections-btn {
-            transform: rotate(-90deg);
-        }
-
+        
         .translation-item[data-pill="input"] {
             border-color: var(--bs-info-border-color) !important;
         }
@@ -285,15 +287,15 @@
                 <button type="button" class="btn btn-sm btn-primary retranslate-btn">Retranslate</button>
             </div>
             <div class="row px-3">
-                <div class="col text-justify translation-source p-2" style="border-bottom: 1px solid var(--bs-border-color); white-space: pre-wrap;"></div>
-                <div class="col-auto p-1">
+                <div class="col text-justify translation-source p-2" style="border-bottom: 1px solid var(--bs-border-color);"></div>
+                <div class="col-auto p-1 d-flex flex-column">
                     <button type="button" class="btn btn-sm btn-outline-secondary copy-source-btn" title="Copy to clipboard">📋</button>
                     <button type="button" class="btn btn-sm btn-outline-secondary edit-toggle-btn mt-1" title="Edit">✏️</button>
                 </div>
             </div>
             <div class="row px-3">
                 <div class="col text-justify p-2">
-                    <div class="translation-target" style="white-space: pre-wrap;"></div>
+                    <div class="translation-target"></div>
                     <div class="translation-spinner" style="display: none; padding: 1rem; text-align: center;">
                         <div class="spinner-border spinner-border-sm" role="status"></div>
                         <span style="margin-left: 0.5rem;">Translating...</span>
@@ -372,14 +374,14 @@
                 </div>
             </div>
             <div class="row px-3">
-                <div class="col text-justify translation-source p-2" style="border-bottom: 1px solid var(--bs-border-color); white-space: pre-wrap;"></div>
+                <div class="col text-justify translation-source p-2" style="border-bottom: 1px solid var(--bs-border-color);"></div>
                 <div class="col-auto p-1">
                     <button type="button" class="btn btn-sm btn-outline-secondary copy-source-btn" title="Copy to clipboard">📋</button>
                 </div>
             </div>
             <div class="row px-3">
                 <div class="col text-justify p-2">
-                    <div class="translation-target" style="white-space: pre-wrap;"></div>
+                    <div class="translation-target"></div>
                     <div class="translation-spinner" style="display: none; padding: 1rem; text-align: center;">
                         <div class="spinner-border spinner-border-sm" role="status"></div>
                         <span style="margin-left: 0.5rem;">Translating...</span>
@@ -453,7 +455,7 @@
                 </div>
             </div>
             <div class="row px-3">
-                <div class="col text-justify translation-source p-2 fst-italic" style="border-bottom: 1px solid var(--bs-border-color); white-space: pre-wrap;"></div>
+                <div class="col text-justify translation-source p-2 fst-italic" style="border-bottom: 1px solid var(--bs-border-color);"></div>
                 <div class="col-auto p-1">
                     <button type="button" class="btn btn-sm btn-outline-secondary copy-source-btn" title="Copy to clipboard">📋</button>
                 </div>
@@ -572,6 +574,10 @@
                                     <div class="col-12">
                                         <label for="settings-session-name" class="form-label">Name</label>
                                         <input type="text" id="settings-session-name" class="form-control" placeholder="Enter conversation name">
+                                    </div>
+                                    <div class="col-12">
+                                        <label for="settings-session-interlocutor-name" class="form-label">Interlocutor Name</label>
+                                        <input type="text" id="settings-session-interlocutor-name" class="form-control" placeholder="Name of the person you're talking to">
                                     </div>
                                     <div class="col-12">
                                         <label for="settings-session-model" class="form-label">LLM Model</label>
