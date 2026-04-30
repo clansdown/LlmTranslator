@@ -8,8 +8,8 @@ export interface TranslationSession {
     id: string;
     name: string;
     model: string | null;
-    readLanguage: string;
-    writeLanguage: string;
+    theirLanguage: string;
+    myLanguage: string;
     writePromptId: string | null;
     background: string;
     reasoning: ReasoningLevel;

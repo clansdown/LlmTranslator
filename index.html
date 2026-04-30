@@ -303,6 +303,7 @@
                     <button type="button" class="btn btn-sm btn-outline-secondary copy-target-btn" title="Copy to clipboard">📋</button>
                 </div>
             </div>
+            <div class="d-flex flex-wrap retranslation-tabs px-3 py-1 gap-1" style="border-top: 1px solid var(--bs-border-color);"></div>
             <div class="translation-sections-area">
                 <div class="row g-1 align-items-center px-3 py-1" style="border-top: 1px solid var(--bs-border-color);">
                     <div class="col translation-sections-tabs-col">
@@ -332,19 +333,19 @@
                 </div>
                 <div class="tab-content translation-sections-content">
                     <div class="tab-pane fade show active" id="literal-pane" role="tabpanel" aria-labelledby="literal-tab">
-                        <div class="translation-literal p-2 small text-justify" style="white-space: pre-wrap;"></div>
+                        <div class="translation-literal p-2 small text-justify"></div>
                     </div>
                     <div class="tab-pane fade" id="words-pane" role="tabpanel" aria-labelledby="words-tab">
                         <div class="translation-words p-2 small text-justify"></div>
                     </div>
                     <div class="tab-pane fade" id="explanation-pane" role="tabpanel" aria-labelledby="explanation-tab">
-                        <div class="translation-explanation p-2 small text-justify" style="white-space: pre-wrap;"></div>
+                        <div class="translation-explanation p-2 small text-justify"></div>
                     </div>
                     <div class="tab-pane fade" id="nuances-pane" role="tabpanel" aria-labelledby="nuances-tab">
-                        <div class="translation-nuances p-2 small text-justify" style="white-space: pre-wrap;"></div>
+                        <div class="translation-nuances p-2 small text-justify"></div>
                     </div>
                     <div class="tab-pane fade" id="interpretation-pane" role="tabpanel" aria-labelledby="interpretation-tab">
-                        <div class="translation-interpretation p-2 small text-justify" style="white-space: pre-wrap;"></div>
+                        <div class="translation-interpretation p-2 small text-justify"></div>
                     </div>
                 </div>
             </div>
@@ -378,7 +379,7 @@
             </div>
             <div class="row px-3">
                 <div class="col text-justify p-2">
-                    <div class="translation-target"></div>
+                    <div class="translation-target" style="white-space: pre-wrap;"></div>
                     <div class="translation-spinner" style="display: none; padding: 1rem; text-align: center;">
                         <div class="spinner-border spinner-border-sm" role="status"></div>
                         <span style="margin-left: 0.5rem;">Translating...</span>
@@ -389,6 +390,7 @@
                     <button type="button" class="btn btn-sm btn-outline-secondary regenerate-translation-btn mt-1" title="Regenerate translation">↻</button>
                 </div>
             </div>
+            <div class="d-flex flex-wrap retranslation-tabs px-3 py-1 gap-1" style="border-top: 1px solid var(--bs-border-color);"></div>
             <div class="translation-sections-area">
                 <div class="row g-1 align-items-center px-3 py-1" style="border-top: 1px solid var(--bs-border-color);">
                     <div class="col translation-sections-tabs-col">
@@ -414,16 +416,16 @@
                 </div>
                 <div class="tab-content translation-sections-content">
                     <div class="tab-pane fade show active" id="literal-pane" role="tabpanel" aria-labelledby="literal-tab">
-                        <div class="translation-literal p-2 small text-justify" style="white-space: pre-wrap;"></div>
+                        <div class="translation-literal p-2 small text-justify"></div>
                     </div>
                     <div class="tab-pane fade" id="words-pane" role="tabpanel" aria-labelledby="words-tab">
                         <div class="translation-words p-2 small text-justify"></div>
                     </div>
                     <div class="tab-pane fade" id="explanation-pane" role="tabpanel" aria-labelledby="explanation-tab">
-                        <div class="translation-explanation p-2 small text-justify" style="white-space: pre-wrap;"></div>
+                        <div class="translation-explanation p-2 small text-justify"></div>
                     </div>
                     <div class="tab-pane fade" id="nuances-pane" role="tabpanel" aria-labelledby="nuances-tab">
-                        <div class="translation-nuances p-2 small text-justify" style="white-space: pre-wrap;"></div>
+                        <div class="translation-nuances p-2 small text-justify"></div>
                     </div>
                 </div>
             </div>
@@ -440,6 +442,10 @@
             <div class="row p-2 small" style="background: var(--bs-info-bg-subtle); color: var(--bs-secondary-color);">
                 <div class="col">
                     <span class="translation-prompt">Question</span>
+                    <div class="form-check form-switch d-inline-block ms-2" style="font-size: 0.75rem; margin-bottom: 0; vertical-align: middle;">
+                        <input class="form-check-input include-in-context-toggle" type="checkbox" role="switch">
+                        <label class="form-check-label" style="font-size: 0.75rem;">Context</label>
+                    </div>
                 </div>
                 <div class="col text-end">
                     <span class="ms-2 translation-model-name"></span>
@@ -453,8 +459,8 @@
                 </div>
             </div>
             <div class="row px-3">
-                <div class="col text-justify p-2" style="white-space: pre-wrap;">
-                    <div class="translation-target" style="white-space: pre-wrap;"></div>
+                <div class="col text-justify p-2">
+                    <div class="translation-target"></div>
                     <div class="translation-spinner" style="display: none; padding: 1rem; text-align: center;">
                         <div class="spinner-border spinner-border-sm" role="status"></div>
                         <span style="margin-left: 0.5rem;">Translating...</span>
@@ -604,12 +610,12 @@
                                         </select>
                                     </div>
                                     <div class="col-12">
-                                        <label for="settings-session-read-language" class="form-label">Read Language</label>
-                                        <select id="settings-session-read-language" class="form-select"></select>
+                                        <label for="settings-session-their-language" class="form-label">Their Language</label>
+                                        <select id="settings-session-their-language" class="form-select"></select>
                                     </div>
                                     <div class="col-12">
-                                        <label for="settings-session-write-language" class="form-label">Write Language</label>
-                                        <select id="settings-session-write-language" class="form-select"></select>
+                                        <label for="settings-session-my-language" class="form-label">My Language</label>
+                                        <select id="settings-session-my-language" class="form-select"></select>
                                     </div>
                                     <div class="col-12">
                                         <label for="settings-session-write-prompt" class="form-label">Write Prompt</label>

@@ -86,8 +86,8 @@ interface SettingsReferences {
     sessionBackgroundInput: HTMLTextAreaElement;
     sessionReasoningSelect: HTMLSelectElement;
     sessionPromptOverrideInput: HTMLTextAreaElement;
-    sessionReadLanguageSelect: HTMLSelectElement;
-    sessionWriteLanguageSelect: HTMLSelectElement;
+    sessionTheirLanguageSelect: HTMLSelectElement;
+    sessionMyLanguageSelect: HTMLSelectElement;
     sessionWritePromptSelect: HTMLSelectElement;
     deleteSessionButton: HTMLButtonElement;
     saveSessionButton: HTMLButtonElement;
@@ -183,8 +183,8 @@ function openSettingsModal(): void {
             sessionBackgroundInput: settingsModalElement.querySelector('#settings-session-background') as HTMLTextAreaElement,
             sessionReasoningSelect: settingsModalElement.querySelector('#settings-session-reasoning') as HTMLSelectElement,
             sessionPromptOverrideInput: settingsModalElement.querySelector('#settings-session-prompt-override') as HTMLTextAreaElement,
-            sessionReadLanguageSelect: settingsModalElement.querySelector('#settings-session-read-language') as HTMLSelectElement,
-            sessionWriteLanguageSelect: settingsModalElement.querySelector('#settings-session-write-language') as HTMLSelectElement,
+            sessionTheirLanguageSelect: settingsModalElement.querySelector('#settings-session-their-language') as HTMLSelectElement,
+            sessionMyLanguageSelect: settingsModalElement.querySelector('#settings-session-my-language') as HTMLSelectElement,
             sessionWritePromptSelect: settingsModalElement.querySelector('#settings-session-write-prompt') as HTMLSelectElement,
             deleteSessionButton: settingsModalElement.querySelector('#settings-delete-session-btn') as HTMLButtonElement,
             saveSessionButton: settingsModalElement.querySelector('#settings-save-session-btn') as HTMLButtonElement,
@@ -642,19 +642,19 @@ function populateModelDropdown(): void {
 function populateLanguageDropdowns(): void {
     if (!refs) return;
 
-    refs.sessionReadLanguageSelect.innerHTML = '';
-    refs.sessionWriteLanguageSelect.innerHTML = '';
+    refs.sessionTheirLanguageSelect.innerHTML = '';
+    refs.sessionMyLanguageSelect.innerHTML = '';
 
     for (const lang of LANGUAGES) {
-        const readOption = document.createElement('option');
-        readOption.value = lang.id;
-        readOption.textContent = lang.name;
-        refs.sessionReadLanguageSelect.appendChild(readOption);
+        const theirOption = document.createElement('option');
+        theirOption.value = lang.id;
+        theirOption.textContent = lang.name;
+        refs.sessionTheirLanguageSelect.appendChild(theirOption);
 
-        const writeOption = document.createElement('option');
-        writeOption.value = lang.id;
-        writeOption.textContent = lang.name;
-        refs.sessionWriteLanguageSelect.appendChild(writeOption);
+        const myOption = document.createElement('option');
+        myOption.value = lang.id;
+        myOption.textContent = lang.name;
+        refs.sessionMyLanguageSelect.appendChild(myOption);
     }
 }
 
@@ -856,8 +856,8 @@ function loadSessionIntoEditor(sessionId: string): void {
             refs.sessionBackgroundInput.value = session.background ?? '';
             refs.sessionReasoningSelect.value = session.reasoning ?? 'none';
             refs.sessionPromptOverrideInput.value = session.promptOverride ?? '';
-            refs.sessionReadLanguageSelect.value = session.readLanguage ?? 'english';
-            refs.sessionWriteLanguageSelect.value = session.writeLanguage ?? 'english';
+            refs.sessionTheirLanguageSelect.value = session.theirLanguage ?? 'english';
+            refs.sessionMyLanguageSelect.value = session.myLanguage ?? 'english';
             refs.sessionWritePromptSelect.value = session.writePromptId ?? '';
         } else if (refs) {
             refs.sessionNameInput.value = '';
@@ -868,8 +868,8 @@ function loadSessionIntoEditor(sessionId: string): void {
             refs.sessionBackgroundInput.value = '';
             refs.sessionReasoningSelect.value = 'none';
             refs.sessionPromptOverrideInput.value = '';
-            refs.sessionReadLanguageSelect.value = 'english';
-            refs.sessionWriteLanguageSelect.value = 'english';
+            refs.sessionTheirLanguageSelect.value = 'english';
+            refs.sessionMyLanguageSelect.value = 'english';
             refs.sessionWritePromptSelect.value = '';
         }
     });
@@ -885,8 +885,8 @@ function clearSessionEditor(): void {
     refs.sessionBackgroundInput.value = '';
     refs.sessionReasoningSelect.value = 'none';
     refs.sessionPromptOverrideInput.value = '';
-    refs.sessionReadLanguageSelect.value = 'english';
-    refs.sessionWriteLanguageSelect.value = 'english';
+    refs.sessionTheirLanguageSelect.value = 'english';
+    refs.sessionMyLanguageSelect.value = 'english';
     refs.sessionWritePromptSelect.value = '';
 }
 
@@ -937,8 +937,8 @@ async function saveSession(): Promise<void> {
     session.background = refs.sessionBackgroundInput.value;
     session.reasoning = refs.sessionReasoningSelect.value as 'none' | 'minimal' | 'low' | 'medium' | 'high';
     session.promptOverride = refs.sessionPromptOverrideInput.value || null;
-    session.readLanguage = refs.sessionReadLanguageSelect.value;
-    session.writeLanguage = refs.sessionWriteLanguageSelect.value;
+    session.theirLanguage = refs.sessionTheirLanguageSelect.value;
+    session.myLanguage = refs.sessionMyLanguageSelect.value;
     session.writePromptId = refs.sessionWritePromptSelect.value || null;
     await storage.saveSession(session);
 

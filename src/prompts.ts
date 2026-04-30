@@ -25,12 +25,9 @@ Always respond using these exact tags:
 <EXPLANATION>In the source language, explain the meaning of key words, phrases, and idioms from the original text and how you translated them.</EXPLANATION>
 <NUANCES>In the source language, explain any cultural or linguistic nuances that were important for preserving the meaning when doing the translation.</NUANCES>
 
-Do not include any text outside of these three tags.`;
+Do not include any text outside of these three tags.
+The <EXPLANATION> and <NUANCES> tags may use Markdown formatting for structure and emphasis. The <TRANSLATION> tag should contain plain text only.`;
 
-/**
- * System prompt for input pane translations (foreign -> user's language)
- * Defines the XML structure and role
- */
 export const INPUT_SYSTEM_PROMPT: string =
 `You are an expert linguist and translator. You specialize in accurate, culturally nuanced translations.
 
@@ -47,16 +44,14 @@ Always respond using these exact tags:
 <EXPLANATION>Explain the meaning of key words, phrases, and idioms from the original text and how they function in context.</EXPLANATION>
 <NUANCES>Explain any cultural or linguistic nuances that are important for fully understanding the original message.</NUANCES>
 
-Do not include any text outside of these three tags.`;
+Do not include any text outside of these three tags.
+The <EXPLANATION> and <NUANCES> tags may use Markdown formatting for structure and emphasis. The <TRANSLATION> tag should contain plain text only.`;
 
-/**
- * Instructions for input pane translations (foreign text -> user's language)
- * [LANGUAGE] is replaced with the target language name
- */
 export const INPUT_INSTRUCTIONS: string =
 `Translate the user's text into [LANGUAGE]. Consider any background context and conversation history provided.
 The <EXPLANATION> and <NUANCES> sections should be in [LANGUAGE].
 Follow the system prompt's guidelines for structuring your response.
+Try to preserve the original text's formatting, such as line breaks and paragraph breaks, as much as possible in the <TRANSLATION> tag.
 `;
 
 /**
@@ -73,7 +68,8 @@ export const OUTPUT_INSTRUCTIONS: string =
 
 Consider any background context and conversation history provided.
 The explanation and nuances sections should be in [LANGUAGE], while the translation should be in [TARGET_LANGUAGE].
-Follow the system prompt's guidelines for structuring your response.`;
+Follow the system prompt's guidelines for structuring your response.
+Try to preserve the original text's formatting, such as line breaks and paragraph breaks, as much as possible in the <TRANSLATION> tag.`;
 
 /**
  * System prompt for literal retranslation (input mode)
@@ -83,7 +79,7 @@ export const LITERAL_RETRANSLATION_PROMPT: string =
 `You are a literal translator. You will be given a text to translate word-by-word.
 Your task is to produce an ultra-literal, word-by-word translation of the text into [LANGUAGE].
 Prioritize exact word correspondence over natural phrasing even if the result is grammatically awkward or outright wrong.
-You may output a phrase for a word if there is no direct equivalent in the target language, but put the phrase in square brackets.
+You may output a phrase for a word if there is no direct equivalent in the target language, but separate the words with hyphens, for example, "there-being".
 Characters which have no meaning in [LANGUAGE] should be represented in square brackets with the meaning, for example, [subject marker].
 Output only the literal translation of the text into [LANGUAGE] with no explanations. Do not include any of the original text. There should be no text which is not [LANGUAGE]`;
 
@@ -95,7 +91,7 @@ export const OUTPUT_LITERAL_RETRANSLATION_PROMPT: string =
 `You are a literal translator. You will be given a text to translate word-by-word.
 Your task is to produce an ultra-literal, word-by-word translation of the text into [LANGUAGE].
 Prioritize exact word correspondence over natural phrasing even if the result is grammatically awkward or outright wrong.
-You may output a phrase for a word if there is no direct equivalent in the target language, but put the phrase in square brackets [].
+You may output a phrase for a word if there is no direct equivalent in the target language, but separate the words with hyphens, for example, "there-being".
 Output only the literal translation of the text into [LANGUAGE] with no explanations. Do not include any of the original text. There should be no text which is not [LANGUAGE]`;
 
 /**
@@ -110,7 +106,7 @@ export const WORD_DEFINITIONS_PROMPT: string =
 `You will be given a text. For each word and punctuation in the text, output an XML entry describing it.
 
 Use these tags:
-- <ITEM><WORD>word</WORD><DEF>concise dictionary definition</DEF><EXP>explanation of how the word is used in this specific context</EXP></ITEM> for each word
+- <ITEM><WORD>word</WORD><DEF>concise dictionary definition in [LANGUAGE]</DEF><EXP>explanation of how the word is used in this specific context in [LANGUAGE]</EXP></ITEM> for each word
 - <P>punctuation</P> for each punctuation mark (include the punctuation inside the P tag)
 - <NL /> for each newline
 
@@ -155,4 +151,4 @@ Provide a clear, insightful explanation covering:
 - Cultural or linguistic nuances that shape understanding
 - Potential alternative interpretations
 
-Write your interpretation in the same language as the message being interpreted.`;
+Write your interpretation clearly. You may use Markdown formatting.`;
