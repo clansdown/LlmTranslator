@@ -1653,7 +1653,10 @@ export async function retryTranslation(translationId: string): Promise<void> {
         translation.entries[activeIdx].modelName = getModelName(effectiveModel);
         translation.status = 'complete';
         syncTopLevelFromActive(translation);
-        saveSessionTranslation(currentSessionId, translation);
+        const oldTimestamp = translation.timestamp;
+        translation.timestamp = Date.now();
+        await saveSessionTranslation(currentSessionId, translation);
+        await deleteSessionTranslation(currentSessionId, oldTimestamp);
     } catch (error) {
         translation.status = 'error';
         translation.error = error instanceof Error ? error.message : "Translation failed";
@@ -1743,7 +1746,10 @@ async function regenerateTranslationById(translationId: string): Promise<void> {
         translation.activeEntryIndex = translation.entries.length - 1;
         translation.status = 'complete';
         syncTopLevelFromActive(translation);
-        saveSessionTranslation(currentSessionId, translation);
+        const oldTimestamp = translation.timestamp;
+        translation.timestamp = Date.now();
+        await saveSessionTranslation(currentSessionId, translation);
+        await deleteSessionTranslation(currentSessionId, oldTimestamp);
         updateTranslationItem(translation);
     } catch (error) {
         translation.status = 'error';
@@ -1843,7 +1849,10 @@ export async function retranslateFromEdit(translationId: string, newSource: stri
         translation.entries[0].modelName = getModelName(effectiveModel ?? '');
         translation.status = 'complete';
         syncTopLevelFromActive(translation);
-        saveSessionTranslation(currentSessionId, translation);
+        const oldTimestamp = translation.timestamp;
+        translation.timestamp = Date.now();
+        await saveSessionTranslation(currentSessionId, translation);
+        await deleteSessionTranslation(currentSessionId, oldTimestamp);
 
         currentLiteralModel = session?.literalModel ?? null;
         /** @type {Promise<void>[]} */
