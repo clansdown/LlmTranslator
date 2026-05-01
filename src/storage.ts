@@ -4,15 +4,14 @@
  * Directory Structure:
  * 
  * OPFS Root:
+ * 
+ * OPFS Root:
  * ├── preferences/
  * │   ├── apiKey
  * │   ├── selectedModel
  * │   ├── minPrice
  * │   ├── maxPrice
- * │   ├── selectedPrompt
  * │   └── ... (other preference files)
- * ├── prompts/
- * │   └── {prompt-id}.json   (one file per prompt)
  * └── conversations/
  *     └── {timestamp}/         (epoch seconds, e.g., 1737991234)
  *         ├── conversation.json
@@ -25,7 +24,6 @@
  */
 
 import type { Conversation, ConversationSummary } from './types/state';
-import type { Prompt } from './types/prompt';
 import type { Translation } from './types/translation';
 import type { TranslationSession } from './types/session';
 import { DEBUG_TRANSLATIONS, DEBUG_SESSIONS } from './debug';
@@ -35,7 +33,6 @@ const STORAGE_PREFERENCES_DIR: string = "preferences";
 const STORAGE_CONVERSATIONS_DIR: string = "conversations";
 const STORAGE_IMAGES_DIR: string = "images";
 const STORAGE_REFERENCE_DIR: string = "reference";
-const STORAGE_PROMPTS_DIR: string = "prompts";
 const STORAGE_TRANSLATIONS_DIR: string = "translations";
 const STORAGE_INPUT_DIR: string = "input";
 const STORAGE_OUTPUT_DIR: string = "output";
@@ -735,104 +732,6 @@ export async function clearDirectoryHandle(): Promise<void> {
 }
 
 /**
- * Saves a prompt to OPFS
- * @param {Prompt} prompt - Prompt object to save
- * @returns {Promise<void>}
- */
-export async function savePrompt(prompt: Prompt): Promise<void> {
-    try {
-        const root = await getOPFSHandle();
-        const promptsDir = await ensureDirectory(root, STORAGE_PROMPTS_DIR);
-        const fileHandle = await promptsDir.getFileHandle(prompt.id + ".json", { create: true });
-        const writable = await fileHandle.createWritable();
-        await writable.write(JSON.stringify(prompt, null, 2));
-        await writable.close();
-    } catch (e) {
-        console.error("Error saving prompt:", e);
-        throw e;
-    }
-}
-
-/**
- * Loads a prompt from OPFS by ID
- * @param {string} id - Prompt ID
- * @returns {Promise<Prompt | null>} Prompt object or null if not found
- */
-export async function loadPrompt(id: string): Promise<Prompt | null> {
-    try {
-        const root = await getOPFSHandle();
-        const promptsDir = await ensureDirectory(root, STORAGE_PROMPTS_DIR);
-        const fileHandle = await promptsDir.getFileHandle(id + ".json");
-        const file = await fileHandle.getFile();
-        const content = await file.text();
-        return JSON.parse(content) as Prompt;
-    } catch (e) {
-        return null;
-    }
-}
-
-/**
- * Deletes a prompt from OPFS
- * @param {string} id - Prompt ID to delete
- * @returns {Promise<void>}
- */
-export async function deletePrompt(id: string): Promise<void> {
-    try {
-        const root = await getOPFSHandle();
-        const promptsDir = await ensureDirectory(root, STORAGE_PROMPTS_DIR);
-        await promptsDir.removeEntry(id + ".json");
-    } catch (e) {
-        console.error("Error deleting prompt:", e);
-        throw e;
-    }
-}
-
-/**
- * Lists all prompts in OPFS
- * @returns {Promise<Prompt[]>} Array of prompt objects
- */
-export async function listPrompts(): Promise<Prompt[]> {
-    try {
-        const root = await getOPFSHandle();
-        const promptsDir = await ensureDirectory(root, STORAGE_PROMPTS_DIR);
-        const prompts: Prompt[] = [];
-        // @ts-expect-error - OPFS does not have standard types
-        for await (const entry of promptsDir.values()) {
-            if (entry.kind === "file" && entry.name.endsWith(".json")) {
-                const fileHandle = await promptsDir.getFileHandle(entry.name);
-                const file = await fileHandle.getFile();
-                const content = await file.text();
-                try {
-                    const prompt = JSON.parse(content) as Prompt;
-                    prompts.push(prompt);
-                } catch (e) {
-                    console.warn("Invalid prompt file:", entry.name);
-                }
-            }
-        }
-        prompts.sort(function(a, b) { return a.name.localeCompare(b.name); });
-        return prompts;
-    } catch (e) {
-        console.error("Error listing prompts:", e);
-        return [];
-    }
-}
-
-/**
- * Initializes default prompts if no prompts exist
- * @param {Prompt[]} defaultPrompts - Array of default prompts to save
- * @returns {Promise<void>}
- */
-export async function initializeDefaultPrompts(defaultPrompts: Prompt[]): Promise<void> {
-    const existingPrompts = await listPrompts();
-    if (existingPrompts.length === 0) {
-        for (const prompt of defaultPrompts) {
-            await savePrompt(prompt);
-        }
-    }
-}
-
-/**
  * Saves a translation to OPFS
  * @param {'input' | 'output'} pill - Which pane
  * @param {Translation} translation - Translation object to save
@@ -987,15 +886,12 @@ export async function loadSession(sessionId: string): Promise<TranslationSession
             ...parsedSession,
             literalModel: parsedSession.literalModel ?? null
         };
-        const legacySession = parsedSession as { inputLanguage?: string; promptId?: string; readLanguage?: string; writeLanguage?: string };
+        const legacySession = parsedSession as { inputLanguage?: string; readLanguage?: string; writeLanguage?: string };
         if (!session.theirLanguage) {
             session.theirLanguage = legacySession.readLanguage ?? legacySession.inputLanguage ?? 'english';
         }
         if (!session.myLanguage) {
             session.myLanguage = legacySession.writeLanguage ?? session.theirLanguage;
-        }
-        if (!session.writePromptId && legacySession.promptId) {
-            session.writePromptId = legacySession.promptId;
         }
         if (!session.interlocutorName) {
             session.interlocutorName = session.name;
@@ -1093,10 +989,9 @@ export async function deleteSession(sessionId: string): Promise<boolean> {
  * Gets or creates the default session
  * @param {string} [model] - Optional model to set if creating new default
  * @param {string} [theirLanguage] - Their language to set if creating new default
- * @param {string} [promptId] - Optional prompt ID to set if creating new default
  * @returns {Promise<TranslationSession>} Default session object
  */
-export async function getOrCreateDefaultSession(model?: string | null, theirLanguage?: string, promptId?: string | null): Promise<TranslationSession> {
+export async function getOrCreateDefaultSession(model?: string | null, theirLanguage?: string): Promise<TranslationSession> {
     const existing = await loadSession(DEFAULT_SESSION_ID);
     if (existing) {
         return existing;
@@ -1112,7 +1007,6 @@ export async function getOrCreateDefaultSession(model?: string | null, theirLang
         model: model ?? null,
         theirLanguage: theirLanguage ?? "english",
         myLanguage: theirLanguage ?? "english",
-        writePromptId: promptId ?? null,
         background: "",
         reasoning: "none",
         literalModel: null,

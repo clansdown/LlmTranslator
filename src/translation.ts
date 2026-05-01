@@ -10,7 +10,6 @@ import * as ui from './ui';
 import { LANGUAGES } from './languages';
 import { INPUT_SYSTEM_PROMPT, OUTPUT_SYSTEM_PROMPT, INPUT_INSTRUCTIONS, OUTPUT_INSTRUCTIONS, LITERAL_RETRANSLATION_PROMPT, OUTPUT_LITERAL_RETRANSLATION_PROMPT, QUESTION_SYSTEM_PROMPT, WORD_DEFINITIONS_PROMPT, INTERPRETATION_PROMPT } from './prompts';
 import { renderMarkdown, normalizeForMarkdown } from './markdown';
-import * as settings from './settings';
 import type { Translation, TranslationEntry, TranslationWordItem, WordItem, PunctItem, NewlineItem } from './types/translation';
 import type { Config } from './types/config';
 import type { TranslationSession } from './types/session';
@@ -219,8 +218,7 @@ export async function createSession(name?: string): Promise<string> {
         name: name ?? "New Conversation",
         model: config?.selectedModel ?? null,
         theirLanguage: 'english',
-        myLanguage: 'english',
-        writePromptId: config?.selectedPromptId ?? null,
+        myLanguage: config?.defaultMyLanguage ?? 'english',
         background: "",
         reasoning: "none",
         literalModel: null,
@@ -360,8 +358,7 @@ export async function initializeDefaultSession(): Promise<void> {
 
     const defaultSession = await getOrCreateDefaultSession(
         config?.selectedModel ?? null,
-        'english',
-        config?.selectedPromptId ?? null
+        'english'
     );
 
     currentSessionId = defaultSession.id;
@@ -782,13 +779,10 @@ export async function translate(mode: 'input' | 'output'): Promise<void> {
         promptName = session?.interlocutorName ?? theirLang?.name ?? 'Foreign';
         instructions = INPUT_INSTRUCTIONS.replace('[LANGUAGE]', myLangName);
     } else {
-        const prompts = settings.getPrompts();
-        const prompt = prompts.find(function(p) { return p.id === session?.writePromptId; });
-        const promptContent = session?.promptOverride ?? prompt?.content ?? '';
-        instructions = OUTPUT_INSTRUCTIONS.replace('[PROMPT]', promptContent);
         const intentTextarea = document.getElementById('intent-textarea') as HTMLTextAreaElement | null;
         const intent = intentTextarea?.value.trim() ?? '';
-        instructions = instructions.replace('[INTENT]', intent ? `Intent: ${intent}` : '');
+        const promptContent = session?.promptOverride ?? '';
+        instructions = OUTPUT_INSTRUCTIONS.replace('[INTENT]', intent ? `Intent: ${intent}` : '');
         instructions = instructions.replace('[LANGUAGE]', myLangName);
         instructions = instructions.replace('[TARGET_LANGUAGE]', theirLangName);
         promptName = 'Me';
@@ -890,6 +884,7 @@ export async function translate(mode: 'input' | 'output'): Promise<void> {
                 } catch (literalError) {
                     console.error('[translateLiteral] Literal retranslation failed:', literalError);
                     translation.entries[0].literalPending = false;
+                    updateTranslationItem(translation);
                 }
             })());
         }
@@ -921,6 +916,7 @@ export async function translate(mode: 'input' | 'output'): Promise<void> {
                     } catch (wordDefError) {
                         console.error('[wordDefinitions] Failed:', wordDefError);
                         translation.entries[0].wordPending = false;
+                        updateTranslationItem(translation);
                     }
                 })());
             }
@@ -944,9 +940,11 @@ export async function translate(mode: 'input' | 'output'): Promise<void> {
                     translation.entries[0].interpretationPending = false;
                     syncTopLevelFromActive(translation);
                     saveSessionTranslation(currentSessionId, translation);
+                    updateTranslationItem(translation);
                 } catch (interpretationError) {
                     console.error('[interpretation] Failed:', interpretationError);
                     translation.entries[0].interpretationPending = false;
+                    updateTranslationItem(translation);
                 }
             })());
         }
@@ -1626,11 +1624,8 @@ export async function retryTranslation(translationId: string): Promise<void> {
     if (translation.pill === 'input') {
         instructions = INPUT_INSTRUCTIONS.replace('[LANGUAGE]', myLang?.name ?? session?.myLanguage ?? 'English');
     } else {
-        const prompts = settings.getPrompts();
-        const prompt = prompts.find(function(p) { return p.id === session?.writePromptId; });
-        const promptContent = session?.promptOverride ?? prompt?.content ?? '';
-        instructions = OUTPUT_INSTRUCTIONS.replace('[PROMPT]', promptContent);
-        instructions = instructions.replace('[INTENT]', entry.intent ? `Intent: ${entry.intent}` : '');
+        const promptContent = session?.promptOverride ?? '';
+        instructions = OUTPUT_INSTRUCTIONS.replace('[INTENT]', entry.intent ? `Intent: ${entry.intent}` : '');
         instructions = instructions.replace('[LANGUAGE]', myLang?.name ?? session?.myLanguage ?? 'English');
         instructions = instructions.replace('[TARGET_LANGUAGE]', theirLang?.name ?? session?.theirLanguage ?? 'Foreign');
     }
@@ -1818,11 +1813,8 @@ export async function retranslateFromEdit(translationId: string, newSource: stri
     if (translation.pill === 'input') {
         instructions = INPUT_INSTRUCTIONS.replace('[LANGUAGE]', myLangName);
     } else {
-        const prompts = settings.getPrompts();
-        const prompt = prompts.find(function(p) { return p.id === session?.writePromptId; });
-        const promptContent = session?.promptOverride ?? prompt?.content ?? '';
-        instructions = OUTPUT_INSTRUCTIONS.replace('[PROMPT]', promptContent);
-        instructions = instructions.replace('[INTENT]', newIntent ? `Intent: ${newIntent}` : '');
+        const promptContent = session?.promptOverride ?? '';
+        instructions = OUTPUT_INSTRUCTIONS.replace('[INTENT]', newIntent ? `Intent: ${newIntent}` : '');
         instructions = instructions.replace('[LANGUAGE]', myLangName);
         instructions = instructions.replace('[TARGET_LANGUAGE]', theirLang?.name ?? session?.theirLanguage ?? 'Foreign');
     }
@@ -1923,19 +1915,21 @@ export async function retranslateFromEdit(translationId: string, newSource: stri
                     translation.entries[0].interpretationPending = false;
                     syncTopLevelFromActive(translation);
                     saveSessionTranslation(currentSessionId, translation);
+                    updateTranslationItem(translation);
                 } catch (interpretationError) {
                     console.error('[interpretation] Failed:', interpretationError);
                     translation.entries[0].interpretationPending = false;
+                    updateTranslationItem(translation);
                 }
             })());
         }
 
         if (tasks.length > 0) {
-            updateTranslationItem(translation);
             Promise.all(tasks)
                 .then(() => updateTranslationItem(translation))
                 .catch(() => updateTranslationItem(translation));
         }
+        updateTranslationItem(translation);
     } catch (error) {
         translation.status = 'error';
         translation.error = error instanceof Error ? error.message : "Translation failed";
@@ -2000,6 +1994,7 @@ export async function regenerateInterpretation(translationId: string): Promise<v
     } catch (interpretationError) {
         console.error('[regenerateInterpretation] Failed:', interpretationError);
         entry.interpretationPending = false;
+        updateTranslationItem(translation);
     }
 }
 
@@ -2079,6 +2074,7 @@ export async function regenerateIndependentSections(translationId: string): Prom
             } catch (literalError) {
                 console.error('[regenerateLiteral] Literal retranslation failed:', literalError);
                 entry.literalPending = false;
+                updateTranslationItem(translation);
             }
         })());
     }
@@ -2111,6 +2107,7 @@ export async function regenerateIndependentSections(translationId: string): Prom
             } catch (wordDefError) {
                 console.error('[wordDefinitions] Failed:', wordDefError);
                 entry.wordPending = false;
+                updateTranslationItem(translation);
             }
         })());
     }
@@ -2134,9 +2131,11 @@ export async function regenerateIndependentSections(translationId: string): Prom
                 entry.interpretationPending = false;
                 syncTopLevelFromActive(translation);
                 saveSessionTranslation(currentSessionId, translation);
+                updateTranslationItem(translation);
             } catch (interpretationError) {
                 console.error('[interpretation] Failed:', interpretationError);
                 entry.interpretationPending = false;
+                updateTranslationItem(translation);
             }
         })());
     }

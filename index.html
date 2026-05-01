@@ -535,24 +535,13 @@
                                         <label for="settings-question-temperature" class="form-label">Question Temperature</label>
                                         <input type="number" id="settings-question-temperature" class="form-control" min="0" max="2" step="0.1" placeholder="0.35">
                                     </div>
-                                </div>
-                                <hr>
-                                <h6>Prompts</h6>
-                                <div class="row mt-3">
-                                    <div class="col-md-4">
-                                        <select id="settings-prompt-list" class="form-select" size="8">
-                                        </select>
-                                        <div class="mt-2">
-                                            <button type="button" class="btn btn-sm btn-outline-primary" id="settings-add-prompt-btn">Add</button>
-                                            <button type="button" class="btn btn-sm btn-outline-danger ms-1" id="settings-delete-prompt-btn">Delete</button>
-                                        </div>
+                                    <div class="col">
+                                        <label for="settings-max-tokens" class="form-label">Max Tokens (K)</label>
+                                        <input type="number" id="settings-max-tokens" class="form-control" min="1" max="1024" step="1" value="32">
                                     </div>
-                                    <div class="col-md-8">
-                                        <div class="mb-2">
-                                            <input type="text" id="settings-prompt-name" class="form-control" placeholder="Prompt name">
-                                        </div>
-                                        <textarea id="settings-prompt-content" class="form-control" rows="6" placeholder="Enter prompt text..."></textarea>
-                                        <button type="button" class="btn btn-sm btn-primary mt-2" id="settings-save-prompt-btn">Save Prompt</button>
+                                    <div class="col">
+                                        <label for="settings-default-my-language" class="form-label">Default My Language</label>
+                                        <select id="settings-default-my-language" class="form-select"></select>
                                     </div>
                                 </div>
                             </div>
@@ -593,6 +582,7 @@
                                             <option value="low">Low</option>
                                             <option value="medium">Medium</option>
                                             <option value="high">High</option>
+                                            <option value="xhigh">Max</option>
                                         </select>
                                     </div>
                                     <div class="col-12">
@@ -613,27 +603,28 @@
                                             <option value="low">Low</option>
                                             <option value="medium">Medium</option>
                                             <option value="high">High</option>
+                                            <option value="xhigh">Max</option>
                                         </select>
                                     </div>
                                     <div class="col-12">
-                                        <label for="settings-session-their-language" class="form-label">Their Language</label>
-                                        <select id="settings-session-their-language" class="form-select"></select>
-                                    </div>
-                                    <div class="col-12">
-                                        <label for="settings-session-my-language" class="form-label">My Language</label>
-                                        <select id="settings-session-my-language" class="form-select"></select>
-                                    </div>
-                                    <div class="col-12">
-                                        <label for="settings-session-write-prompt" class="form-label">Write Prompt</label>
-                                        <select id="settings-session-write-prompt" class="form-select"></select>
+                                        <div class="row g-2">
+                                            <div class="col">
+                                                <label for="settings-session-my-language" class="form-label">My Language</label>
+                                                <select id="settings-session-my-language" class="form-select"></select>
+                                            </div>
+                                            <div class="col">
+                                                <label for="settings-session-their-language" class="form-label">Their Language</label>
+                                                <select id="settings-session-their-language" class="form-select"></select>
+                                            </div>
+                                        </div>
                                     </div>
                                     <div class="col-12">
                                         <label for="settings-session-background" class="form-label">Background</label>
                                         <textarea id="settings-session-background" class="form-control" rows="4" placeholder="Context for the AI about who you're talking to, what the conversation is about, etc."></textarea>
                                     </div>
                                     <div class="col-12">
-                                        <label for="settings-session-prompt-override" class="form-label">Prompt Override</label>
-                                        <textarea id="settings-session-prompt-override" class="form-control" rows="3" placeholder="Override the selected prompt content for this conversation. Leave empty to use the selected prompt."></textarea>
+                                        <label for="settings-session-prompt-override" class="form-label">Translation Style</label>
+                                        <textarea id="settings-session-prompt-override" class="form-control" rows="3" placeholder="Additional instructions for how the translation should sound. Leave empty for the default style."></textarea>
                                     </div>
                                     <div class="col-12">
                                         <button type="button" class="btn btn-sm btn-primary" id="settings-save-session-btn">Save</button>

@@ -390,3 +390,10 @@ const complexData: any = getComplexData();
 ```
 
 Without this documentation, use of `any` will be rejected in code review.
+
+## 16. Build Verification
+
+After completing any code change, agents MUST run both verification commands before marking work done:
+
+- `npm run type-check` - Run TypeScript strict type check (tsc --noEmit); must pass with zero errors
+- `npm run build` - Production build; must complete without errors

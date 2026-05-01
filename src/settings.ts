@@ -1,28 +1,21 @@
 /**
  * Settings Module
- * Handles settings modal dialog, prompt management, and session management
+ * Handles settings modal dialog and session management
  */
 
 import * as storage from './storage';
 import * as ui from './ui';
 import * as translation from './translation';
-import { DEFAULT_PROMPTS, generateUuid } from './default_prompts';
 import { saveApiKey } from './main';
 import { LANGUAGES } from './languages';
-import type { Prompt } from './types/prompt';
 import type { Config } from './types/config';
 import type { VisionModel } from './types/api';
+import type { ReasoningLevel } from './types/session';
 
 /**
  * Application configuration (injected from main.ts)
  */
 let config: Config | null = null;
-
-/**
- * In-memory prompts array - source of truth for prompts
- * @type {Prompt[]}
- */
-let prompts: Prompt[] = [];
 
 /**
  * Available models for the model dropdown
@@ -35,12 +28,6 @@ let models: VisionModel[] = [];
  * @type {VisionModel[]}
  */
 let allModels: VisionModel[] = [];
-
-/**
- * Currently selected prompt ID in the settings modal
- * @type {string | null}
- */
-let selectedPromptIdInModal: string | null = null;
 
 /**
  * Currently selected session ID in the settings modal
@@ -68,14 +55,9 @@ interface SettingsReferences {
     maxPriceInput: HTMLInputElement;
     temperatureInput: HTMLInputElement;
     questionTemperatureInput: HTMLInputElement;
+    maxTokensInput: HTMLInputElement;
     apiKeyInput: HTMLInputElement;
     toggleApiKeyButton: HTMLButtonElement;
-    promptListSelect: HTMLSelectElement;
-    promptNameInput: HTMLInputElement;
-    promptContentTextarea: HTMLTextAreaElement;
-    addPromptButton: HTMLButtonElement;
-    deletePromptButton: HTMLButtonElement;
-    savePromptButton: HTMLButtonElement;
     saveSettingsButton: HTMLButtonElement;
     sessionListSelect: HTMLSelectElement;
     sessionNameInput: HTMLInputElement;
@@ -89,7 +71,6 @@ interface SettingsReferences {
     sessionPromptOverrideInput: HTMLTextAreaElement;
     sessionTheirLanguageSelect: HTMLSelectElement;
     sessionMyLanguageSelect: HTMLSelectElement;
-    sessionWritePromptSelect: HTMLSelectElement;
     deleteSessionButton: HTMLButtonElement;
     saveSessionButton: HTMLButtonElement;
     modelsTabSearchInput: HTMLInputElement;
@@ -97,6 +78,7 @@ interface SettingsReferences {
     modelsTabClearButton: HTMLButtonElement;
     selectAllModelsBtn: HTMLButtonElement;
     deselectAllModelsBtn: HTMLButtonElement;
+    defaultMyLanguageSelect: HTMLSelectElement;
 }
 
 let refs: SettingsReferences | null = null;
@@ -108,31 +90,6 @@ let refs: SettingsReferences | null = null;
  */
 export function setConfig(appConfig: Config): void {
     config = appConfig;
-}
-
-/**
- * Gets the prompts array for external use
- * @returns {Prompt[]}
- */
-export function getPrompts(): Prompt[] {
-    return prompts;
-}
-
-/**
- * Loads prompts from OPFS into memory
- * @returns {Promise<void>}
- */
-export async function loadPromptsIntoMemory(): Promise<void> {
-    prompts = await storage.listPrompts();
-}
-
-/**
- * Initializes default prompts if none exist
- * @returns {Promise<void>}
- */
-export async function initializeDefaultPromptsIfNeeded(): Promise<void> {
-    await storage.initializeDefaultPrompts(DEFAULT_PROMPTS);
-    prompts = await storage.listPrompts();
 }
 
 /**
@@ -166,14 +123,9 @@ function openSettingsModal(): void {
             maxPriceInput: settingsModalElement.querySelector('#settings-max-price') as HTMLInputElement,
             temperatureInput: settingsModalElement.querySelector('#settings-temperature') as HTMLInputElement,
             questionTemperatureInput: settingsModalElement.querySelector('#settings-question-temperature') as HTMLInputElement,
+            maxTokensInput: settingsModalElement.querySelector('#settings-max-tokens') as HTMLInputElement,
             apiKeyInput: settingsModalElement.querySelector('#settings-api-key') as HTMLInputElement,
             toggleApiKeyButton: settingsModalElement.querySelector('#settings-toggle-key-visibility') as HTMLButtonElement,
-            promptListSelect: settingsModalElement.querySelector('#settings-prompt-list') as HTMLSelectElement,
-            promptNameInput: settingsModalElement.querySelector('#settings-prompt-name') as HTMLInputElement,
-            promptContentTextarea: settingsModalElement.querySelector('#settings-prompt-content') as HTMLTextAreaElement,
-            addPromptButton: settingsModalElement.querySelector('#settings-add-prompt-btn') as HTMLButtonElement,
-            deletePromptButton: settingsModalElement.querySelector('#settings-delete-prompt-btn') as HTMLButtonElement,
-            savePromptButton: settingsModalElement.querySelector('#settings-save-prompt-btn') as HTMLButtonElement,
             saveSettingsButton: settingsModalElement.querySelector('#settings-save-btn') as HTMLButtonElement,
             sessionListSelect: settingsModalElement.querySelector('#settings-session-list') as HTMLSelectElement,
             sessionNameInput: settingsModalElement.querySelector('#settings-session-name') as HTMLInputElement,
@@ -187,14 +139,14 @@ function openSettingsModal(): void {
             sessionPromptOverrideInput: settingsModalElement.querySelector('#settings-session-prompt-override') as HTMLTextAreaElement,
             sessionTheirLanguageSelect: settingsModalElement.querySelector('#settings-session-their-language') as HTMLSelectElement,
             sessionMyLanguageSelect: settingsModalElement.querySelector('#settings-session-my-language') as HTMLSelectElement,
-            sessionWritePromptSelect: settingsModalElement.querySelector('#settings-session-write-prompt') as HTMLSelectElement,
             deleteSessionButton: settingsModalElement.querySelector('#settings-delete-session-btn') as HTMLButtonElement,
             saveSessionButton: settingsModalElement.querySelector('#settings-save-session-btn') as HTMLButtonElement,
             modelsTabSearchInput: settingsModalElement.querySelector('#settings-models-search') as HTMLInputElement,
             modelsTabListContainer: settingsModalElement.querySelector('#settings-models-list') as HTMLDivElement,
             modelsTabClearButton: settingsModalElement.querySelector('#settings-models-search-clear') as HTMLButtonElement,
             selectAllModelsBtn: settingsModalElement.querySelector('#settings-select-all-models') as HTMLButtonElement,
-            deselectAllModelsBtn: settingsModalElement.querySelector('#settings-deselect-all-models') as HTMLButtonElement
+            deselectAllModelsBtn: settingsModalElement.querySelector('#settings-deselect-all-models') as HTMLButtonElement,
+            defaultMyLanguageSelect: settingsModalElement.querySelector('#settings-default-my-language') as HTMLSelectElement
         };
 
         setupEventListeners();
@@ -223,25 +175,6 @@ function setupEventListeners(): void {
         if (key) {
             await saveApiKey(key);
         }
-    });
-
-    refs.promptListSelect.addEventListener('change', function() {
-        const selectedId = refs!.promptListSelect.value;
-        selectedPromptIdInModal = selectedId || null;
-        loadPromptIntoEditor(selectedId);
-    });
-
-    refs.addPromptButton.addEventListener('click', function() {
-        clearPromptEditor();
-        selectedPromptIdInModal = null;
-    });
-
-    refs.deletePromptButton.addEventListener('click', async function() {
-        await deleteSelectedPrompt();
-    });
-
-    refs.savePromptButton.addEventListener('click', async function() {
-        await saveCurrentPrompt();
     });
 
     refs.saveSettingsButton.addEventListener('click', async function() {
@@ -300,130 +233,15 @@ function populateSettingsForm(): void {
     refs.maxPriceInput.value = config.maxPrice !== null ? String(config.maxPrice) : '';
     refs.temperatureInput.value = String(config.temperature);
     refs.questionTemperatureInput.value = String(config.questionTemperature);
+    refs.maxTokensInput.value = String(Math.round(config.maxTokens / 1024));
     refs.apiKeyInput.value = config.openRouterApiKey ?? '';
-
-    renderPromptList();
-    clearPromptEditor();
 
     renderSessionList();
     clearSessionEditor();
     populateModelDropdown();
     populateLanguageDropdowns();
-    populateWritePromptDropdown();
+    populateDefaultMyLanguageDropdown();
     populateModelsTab();
-}
-
-/**
- * Renders the prompt list from in-memory prompts array
- * @returns {void}
- */
-function renderPromptList(): void {
-    if (!refs) return;
-
-    refs.promptListSelect.innerHTML = '';
-
-    for (const prompt of prompts) {
-        const option = document.createElement('option');
-        option.value = prompt.id;
-        option.textContent = prompt.name;
-        refs.promptListSelect.appendChild(option);
-    }
-}
-
-/**
- * Loads a prompt into the editor fields
- * @param {string} promptId - Prompt ID to load
- * @returns {void}
- */
-function loadPromptIntoEditor(promptId: string): void {
-    if (!refs) return;
-
-    const prompt = prompts.find(function(p) { return p.id === promptId; });
-    if (prompt) {
-        refs.promptNameInput.value = prompt.name;
-        refs.promptContentTextarea.value = prompt.content;
-    } else {
-        clearPromptEditor();
-    }
-}
-
-/**
- * Clears the prompt editor fields
- * @returns {void}
- */
-function clearPromptEditor(): void {
-    if (!refs) return;
-    refs.promptNameInput.value = '';
-    refs.promptContentTextarea.value = '';
-}
-
-/**
- * Saves the currently edited prompt
- * @returns {Promise<void>}
- */
-async function saveCurrentPrompt(): Promise<void> {
-    if (!refs || !config) return;
-
-    const name = refs.promptNameInput.value.trim();
-    const content = refs.promptContentTextarea.value.trim();
-
-    if (!name) {
-        ui.displayError('Prompt name is required');
-        return;
-    }
-
-    if (!content) {
-        ui.displayError('Prompt content is required');
-        return;
-    }
-
-    const now = Date.now();
-    const prompt: Prompt = {
-        id: selectedPromptIdInModal ?? generateUuid(),
-        name: name,
-        content: content,
-        createdAt: selectedPromptIdInModal ? (prompts.find(function(p) { return p.id === selectedPromptIdInModal; })?.createdAt ?? now) : now,
-        updatedAt: now
-    };
-
-    await storage.savePrompt(prompt);
-
-    prompts = await storage.listPrompts();
-
-    renderPromptList();
-    populateWritePromptDropdown();
-
-    refs.promptListSelect.value = prompt.id;
-    selectedPromptIdInModal = prompt.id;
-
-    updatePromptDropdown();
-}
-
-/**
- * Deletes the selected prompt
- * @returns {Promise<void>}
- */
-async function deleteSelectedPrompt(): Promise<void> {
-    if (!refs || !selectedPromptIdInModal) {
-        ui.displayError('No prompt selected to delete');
-        return;
-    }
-
-    await storage.deletePrompt(selectedPromptIdInModal);
-
-    prompts = await storage.listPrompts();
-
-    if (config && config.selectedPromptId === selectedPromptIdInModal) {
-        config.selectedPromptId = null;
-        await storage.savePreference('selectedPrompt', '');
-    }
-
-    renderPromptList();
-    populateWritePromptDropdown();
-    clearPromptEditor();
-    selectedPromptIdInModal = null;
-
-    updatePromptDropdown();
 }
 
 /**
@@ -661,25 +479,22 @@ function populateLanguageDropdowns(): void {
 }
 
 /**
- * Populates the write prompt dropdown
+ * Populates the default "my language" dropdown in settings
  * @returns {void}
  */
-function populateWritePromptDropdown(): void {
+function populateDefaultMyLanguageDropdown(): void {
     if (!refs) return;
 
-    refs.sessionWritePromptSelect.innerHTML = '';
+    refs.defaultMyLanguageSelect.innerHTML = '';
 
-    const placeholder = document.createElement('option');
-    placeholder.value = '';
-    placeholder.textContent = 'Select prompt...';
-    refs.sessionWritePromptSelect.appendChild(placeholder);
-
-    for (const prompt of prompts) {
+    for (const lang of LANGUAGES) {
         const option = document.createElement('option');
-        option.value = prompt.id;
-        option.textContent = prompt.name;
-        refs.sessionWritePromptSelect.appendChild(option);
+        option.value = lang.id;
+        option.textContent = lang.name;
+        refs.defaultMyLanguageSelect.appendChild(option);
     }
+
+    refs.defaultMyLanguageSelect.value = config?.defaultMyLanguage ?? 'english';
 }
 
 /**
@@ -727,7 +542,20 @@ async function saveSettings(): Promise<void> {
         await storage.savePreference('questionTemperature', String(questionTemperature));
     }
 
+    const maxTokensStr = refs.maxTokensInput.value.trim();
+    const maxTokensK = parseInt(maxTokensStr, 10);
+    if (!isNaN(maxTokensK) && maxTokensK > 0) {
+        config.maxTokens = maxTokensK * 1024;
+        await storage.savePreference('maxTokens', String(config.maxTokens));
+    }
+
     await saveApprovedModels();
+
+    const defaultMyLanguageStr = refs.defaultMyLanguageSelect.value.trim();
+    if (defaultMyLanguageStr) {
+        config.defaultMyLanguage = defaultMyLanguageStr;
+        await storage.savePreference('defaultMyLanguage', defaultMyLanguageStr);
+    }
 
     settingsModalInstance.hide();
 }
@@ -754,61 +582,6 @@ export function filterModelsByPrice(models: VisionModel[]): VisionModel[] {
 
         return true;
     });
-}
-
-/**
- * Populates the prompt dropdown in the main UI
- * @returns {void}
- */
-export function updatePromptDropdown(): void {
-    const dropdown = document.getElementById('prompt-dropdown') as HTMLSelectElement | null;
-    if (!dropdown) return;
-
-    dropdown.innerHTML = '';
-
-    const placeholder = document.createElement('option');
-    placeholder.value = '';
-    placeholder.textContent = 'Select prompt...';
-    dropdown.appendChild(placeholder);
-
-    for (const prompt of prompts) {
-        const option = document.createElement('option');
-        option.value = prompt.id;
-        option.textContent = prompt.name;
-        dropdown.appendChild(option);
-    }
-
-    if (config && config.selectedPromptId) {
-        dropdown.value = config.selectedPromptId;
-    }
-}
-
-/**
- * Sets up the prompt dropdown change handler in the main UI
- * @returns {void}
- */
-export function setupPromptDropdown(): void {
-    const dropdown = document.getElementById('prompt-dropdown') as HTMLSelectElement | null;
-    if (!dropdown || !config) return;
-
-    dropdown.addEventListener('change', async function() {
-        config!.selectedPromptId = dropdown.value || null;
-        if (config!.selectedPromptId) {
-            await storage.savePreference('selectedPrompt', config!.selectedPromptId);
-        } else {
-            await storage.deletePreference('selectedPrompt');
-        }
-    });
-}
-
-/**
- * Gets the selected prompt content
- * @returns {string | null} Prompt content or null if none selected
- */
-export function getSelectedPromptContent(): string | null {
-    if (!config || !config.selectedPromptId) return null;
-    const prompt = prompts.find(function(p) { return p.id === config!.selectedPromptId; });
-    return prompt?.content ?? null;
 }
 
 /**
@@ -860,8 +633,7 @@ function loadSessionIntoEditor(sessionId: string): void {
             refs.sessionReasoningSelect.value = session.reasoning ?? 'none';
             refs.sessionPromptOverrideInput.value = session.promptOverride ?? '';
             refs.sessionTheirLanguageSelect.value = session.theirLanguage ?? 'english';
-            refs.sessionMyLanguageSelect.value = session.myLanguage ?? 'english';
-            refs.sessionWritePromptSelect.value = session.writePromptId ?? '';
+            refs.sessionMyLanguageSelect.value = session.myLanguage ?? config?.defaultMyLanguage ?? 'english';
         } else if (refs) {
             refs.sessionNameInput.value = '';
             refs.sessionInterlocutorNameInput.value = '';
@@ -873,8 +645,7 @@ function loadSessionIntoEditor(sessionId: string): void {
             refs.sessionReasoningSelect.value = 'none';
             refs.sessionPromptOverrideInput.value = '';
             refs.sessionTheirLanguageSelect.value = 'english';
-            refs.sessionMyLanguageSelect.value = 'english';
-            refs.sessionWritePromptSelect.value = '';
+            refs.sessionMyLanguageSelect.value = config?.defaultMyLanguage ?? 'english';
         }
     });
 }
@@ -891,8 +662,7 @@ function clearSessionEditor(): void {
     refs.sessionReasoningSelect.value = 'none';
     refs.sessionPromptOverrideInput.value = '';
     refs.sessionTheirLanguageSelect.value = 'english';
-    refs.sessionMyLanguageSelect.value = 'english';
-    refs.sessionWritePromptSelect.value = '';
+    refs.sessionMyLanguageSelect.value = config?.defaultMyLanguage ?? 'english';
 }
 
 /**
@@ -938,14 +708,13 @@ async function saveSession(): Promise<void> {
     session.model = refs.sessionModelSelect.value || null;
     session.literalModel = refs.sessionLiteralModelSelect.value || null;
     session.interpretationModel = refs.sessionInterpretationModelSelect.value || null;
-    session.interpretationReasoning = refs.sessionInterpretationReasoningSelect.value as 'none' | 'minimal' | 'low' | 'medium' | 'high';
+    session.interpretationReasoning = refs.sessionInterpretationReasoningSelect.value as ReasoningLevel;
     session.background = refs.sessionBackgroundInput.value;
-    session.reasoning = refs.sessionReasoningSelect.value as 'none' | 'minimal' | 'low' | 'medium' | 'high';
+    session.reasoning = refs.sessionReasoningSelect.value as ReasoningLevel;
     session.promptOverride = refs.sessionPromptOverrideInput.value || null;
     session.theirLanguage = refs.sessionTheirLanguageSelect.value;
     session.myLanguage = refs.sessionMyLanguageSelect.value;
     session.interlocutorName = refs.sessionInterlocutorNameInput.value.trim() || undefined;
-    session.writePromptId = refs.sessionWritePromptSelect.value || null;
     await storage.saveSession(session);
 
     if (config && session.model) {

@@ -2,7 +2,7 @@
  * Translation Session data types
  */
 
-export type ReasoningLevel = 'none' | 'minimal' | 'low' | 'medium' | 'high';
+export type ReasoningLevel = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 
 export interface TranslationSession {
     id: string;
@@ -10,7 +10,6 @@ export interface TranslationSession {
     model: string | null;
     theirLanguage: string;
     myLanguage: string;
-    writePromptId: string | null;
     background: string;
     reasoning: ReasoningLevel;
     literalModel?: string | null;

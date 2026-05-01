@@ -3,7 +3,7 @@
  */
 
 import { savePreference, getPreference, deletePreference } from './storage';
-import { fetchBalance, fetchZdrModels } from './openrouter';
+import { fetchBalance, fetchZdrModels, setConfig as setOpenRouterConfig } from './openrouter';
 import * as ui from './ui';
 import * as settings from './settings';
 import * as translation from './translation';
@@ -18,10 +18,11 @@ const config: Config = {
     selectedModel: null,
     minPrice: null,
     maxPrice: null,
-    selectedPromptId: null,
+    defaultMyLanguage: 'english',
     approvedModelIds: null,
     temperature: 0.2,
-    questionTemperature: 0.35
+    questionTemperature: 0.35,
+    maxTokens: 32768
 };
 
 /**
@@ -148,11 +149,6 @@ async function loadSettings(): Promise<void> {
         config.maxPrice = parseFloat(maxPriceStr);
     }
 
-    const selectedPromptId = await getPreference("selectedPrompt");
-    if (selectedPromptId) {
-        config.selectedPromptId = selectedPromptId;
-    }
-
     const approvedModelsStr = await getPreference("approvedModels");
     if (approvedModelsStr) {
         try {
@@ -184,6 +180,19 @@ async function loadSettings(): Promise<void> {
             config.questionTemperature = parsed;
         }
     }
+
+    const maxTokensStr = await getPreference("maxTokens");
+    if (maxTokensStr) {
+        const parsed = parseInt(maxTokensStr, 10);
+        if (!isNaN(parsed) && parsed > 0) {
+            config.maxTokens = parsed;
+        }
+    }
+
+    const defaultMyLanguage = await getPreference("defaultMyLanguage");
+    if (defaultMyLanguage) {
+        config.defaultMyLanguage = defaultMyLanguage;
+    }
 }
 
 /**
@@ -192,6 +201,7 @@ async function loadSettings(): Promise<void> {
  */
 export async function init(): Promise<void> {
     translation.setConfig(config);
+    setOpenRouterConfig(config);
 
     await loadSettings();
 
@@ -216,8 +226,6 @@ export async function init(): Promise<void> {
     await translation.loadTranslationHistory();
 
     settings.setConfig(config);
-    await settings.initializeDefaultPromptsIfNeeded();
-    await settings.loadPromptsIntoMemory();
 
     settings.setupSettingsButton(document.getElementById("config-button") as HTMLButtonElement);
 

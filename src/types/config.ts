@@ -10,8 +10,9 @@ export interface Config {
     selectedModel: string | null;
     minPrice: number | null;
     maxPrice: number | null;
-    selectedPromptId: string | null;
+    defaultMyLanguage: string;
     approvedModelIds: string[] | null;
     temperature: number;
     questionTemperature: number;
+    maxTokens: number;
 }

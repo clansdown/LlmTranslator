@@ -11,8 +11,19 @@ import type {
     ImageInput,
     Message 
 } from './types/api';
+import type { Config } from './types/config';
 
 const OPENROUTER_BASE_URL: string = "https://openrouter.ai/api/v1";
+
+let config: Config | null = null;
+
+/**
+ * Sets the application configuration for API calls
+ * @param {Config} appConfig - Application configuration object
+ */
+export function setConfig(appConfig: Config): void {
+    config = appConfig;
+}
 
 /**
  * Fetches all available models from OpenRouter
@@ -654,13 +665,18 @@ export async function translateStructured(
         }
     };
 
-    if (reasoningLevel !== 'none') {
-        body.reasoning = {
-            effort: reasoningLevel
-        };
-    }
+    body.reasoning = {
+        effort: reasoningLevel,
+        enabled: reasoningLevel !== 'none'
+    };
 
     body.temperature = temperature;
+
+    if (config?.maxTokens && config.maxTokens > 0) {
+        body.max_tokens = config.maxTokens;
+    }
+
+    const apiStartTime = performance.now();
 
     const response = await fetch(OPENROUTER_BASE_URL + "/chat/completions", {
         method: "POST",
@@ -694,6 +710,8 @@ export async function translateStructured(
     const content = message?.content ?? "";
     const reasoning = message?.reasoning ?? "";
     const reasoningDetails = JSON.stringify(message?.reasoning_details ?? []);
+
+    console.log(`[translateStructured] API call completed in ${(performance.now() - apiStartTime).toFixed(0)}ms, model: ${model}`);
 
     return {
         translation: parseTag(content, 'TRANSLATION'),
@@ -744,13 +762,18 @@ export async function translateRaw(
         }
     };
 
-    if (reasoningLevel !== 'none') {
-        body.reasoning = {
-            effort: reasoningLevel
-        };
-    }
+    body.reasoning = {
+        effort: reasoningLevel,
+        enabled: reasoningLevel !== 'none'
+    };
 
     body.temperature = temperature;
+
+    if (config?.maxTokens && config.maxTokens > 0) {
+        body.max_tokens = config.maxTokens;
+    }
+
+    const apiStartTime = performance.now();
 
     const response = await fetch(OPENROUTER_BASE_URL + "/chat/completions", {
         method: "POST",
@@ -781,5 +804,12 @@ export async function translateRaw(
 
     const data = await response.json() as ChatCompletionResponse;
     const message = data.choices && data.choices.length > 0 ? data.choices[0].message : null;
+
+    console.log(`[translateRaw] API call completed in ${(performance.now() - apiStartTime).toFixed(0)}ms, model: ${model}`);
+
     return message?.content ?? "";
 }
+
+/**
+ * Fetches models from OpenRouter
+ */
