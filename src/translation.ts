@@ -866,6 +866,17 @@ export async function translate(mode: 'input' | 'output'): Promise<void> {
             config!.temperature
         );
 
+        if (!result.translation || !/\S/.test(result.translation)) {
+            console.log('[translate] API returned empty translation - model:', effectiveModel, 'text:', sourceText.substring(0, 100));
+            translation.status = 'error';
+            translation.error = 'Translation returned empty content. Try again.';
+            syncTopLevelFromActive(translation);
+            saveSessionTranslation(currentSessionId, translation);
+            updateTranslationItem(translation);
+            await refreshBalance();
+            return;
+        }
+
         translation.entries[0].translation = result.translation;
         translation.entries[0].explanation = result.explanation;
         translation.entries[0].nuances = result.nuances;
@@ -1093,7 +1104,13 @@ export async function askQuestion(): Promise<void> {
             config.questionTemperature
         );
         translation.entries[0].translation = result;
-        translation.status = 'complete';
+        if (!result || !/\S/.test(result)) {
+            console.log('[askQuestion] API returned empty answer');
+            translation.status = 'error';
+            translation.error = 'Question answer returned empty. Try again.';
+        } else {
+            translation.status = 'complete';
+        }
         syncTopLevelFromActive(translation);
         saveSessionTranslation(currentSessionId, translation);
     } catch (error) {
@@ -1497,7 +1514,16 @@ function updateTranslationItem(translation: Translation): void {
         if (spinnerEl) spinnerEl.style.display = 'none';
         if (errorEl) errorEl.style.display = 'none';
         if (targetEl) {
-            if (translation.pill === 'question') {
+            if (!/\S/.test(entryTranslation)) {
+                targetEl.innerHTML = '';
+                if (errorEl) {
+                    errorEl.style.display = 'block';
+                    const errorMsg = errorEl.querySelector('.error-message') as HTMLElement | null;
+                    if (errorMsg) errorMsg.textContent = 'Translation returned empty content. Try again.';
+                }
+                if (charCountEl) charCountEl.textContent = `(${entrySource.length}/0)`;
+                if (regenerateLiteralBtn) regenerateLiteralBtn.style.display = 'none';
+            } else if (translation.pill === 'question') {
                 targetEl.innerHTML = renderMarkdown(entryTranslation);
                 const toggleAnswerBtn = element.querySelector('.toggle-answer-btn') as HTMLButtonElement | null;
                 if (translation.answerCollapsed) {
@@ -1647,9 +1673,17 @@ export async function retryTranslation(translationId: string): Promise<void> {
                 config.questionTemperature
             );
             translation.entries[activeIdx].translation = result;
-            translation.status = 'complete';
-            syncTopLevelFromActive(translation);
-            saveSessionTranslation(currentSessionId, translation);
+            if (!result || !/\S/.test(result)) {
+                console.log('[retryTranslation] API returned empty question answer');
+                translation.status = 'error';
+                translation.error = 'Question answer returned empty. Try again.';
+                syncTopLevelFromActive(translation);
+                saveSessionTranslation(currentSessionId, translation);
+            } else {
+                translation.status = 'complete';
+                syncTopLevelFromActive(translation);
+                saveSessionTranslation(currentSessionId, translation);
+            }
         } catch (error) {
             translation.status = 'error';
             translation.error = error instanceof Error ? error.message : "Failed to get answer";
@@ -1691,6 +1725,17 @@ export async function retryTranslation(translationId: string): Promise<void> {
             reasoningLevel,
             config!.temperature
         );
+
+        if (!result.translation || !/\S/.test(result.translation)) {
+            console.log('[retryTranslation] API returned empty translation - model:', effectiveModel, 'text:', entry.source.substring(0, 100));
+            translation.status = 'error';
+            translation.error = 'Translation returned empty content. Try again.';
+            syncTopLevelFromActive(translation);
+            await saveSessionTranslation(currentSessionId, translation);
+            updateTranslationItem(translation);
+            await refreshBalance();
+            return;
+        }
 
         translation.entries[activeIdx].translation = result.translation;
         translation.entries[activeIdx].explanation = result.explanation;
@@ -1768,6 +1813,17 @@ async function regenerateTranslationById(translationId: string): Promise<void> {
             reasoningLevel,
             config!.temperature
         );
+
+        if (!result.translation || !/\S/.test(result.translation)) {
+            console.log('[regenerateTranslationById] API returned empty translation - model:', effectiveModel, 'text:', currentEntry.source.substring(0, 100));
+            translation.status = 'error';
+            translation.error = 'Translation returned empty content. Try again.';
+            syncTopLevelFromActive(translation);
+            await saveSessionTranslation(currentSessionId, translation);
+            updateTranslationItem(translation);
+            await refreshBalance();
+            return;
+        }
 
         /** @type {TranslationEntry} */
         const newEntry: TranslationEntry = {
@@ -1894,6 +1950,20 @@ export async function retranslateFromEdit(translationId: string, newSource: stri
             reasoningLevel,
             config!.temperature
         );
+
+        if (!result.translation || !/\S/.test(result.translation)) {
+            console.log('[retranslateFromEdit] API returned empty translation - model:', effectiveModel, 'text:', newSource.substring(0, 100));
+            translation.status = 'error';
+            translation.error = 'Translation returned empty content. Try again.';
+            syncTopLevelFromActive(translation);
+            const oldTs = translation.timestamp;
+            translation.timestamp = Date.now();
+            await saveSessionTranslation(currentSessionId, translation);
+            await deleteSessionTranslation(currentSessionId, oldTs);
+            updateTranslationItem(translation);
+            await refreshBalance();
+            return;
+        }
 
         translation.entries[0].translation = result.translation;
         translation.entries[0].explanation = result.explanation;
