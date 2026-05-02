@@ -483,7 +483,7 @@
     <!-- settings-modal-template: Large modal for application settings -->
     <template id="settings-modal-template">
         <div class="modal fade" tabindex="-1" aria-labelledby="settings-modal-title">
-            <div class="modal-dialog modal-lg">
+            <div class="modal-dialog modal-xl">
                 <div class="modal-content">
                     <div class="modal-header">
                         <h5 class="modal-title" id="settings-modal-title">Settings</h5>
@@ -547,7 +547,6 @@
                                 </div>
                             </div>
                             <div class="tab-pane fade" id="conversations-content" role="tabpanel" aria-labelledby="conversations-tab-btn">
-                                <h6>Conversations</h6>
                                 <div class="row g-2 mt-3">
                                     <div class="col-12">
                                         <label for="settings-session-list" class="form-label">Conversation</label>
@@ -562,29 +561,37 @@
                                         </div>
                                     </div>
                                     <div class="col-12">
-                                        <label for="settings-session-name" class="form-label">Name</label>
-                                        <input type="text" id="settings-session-name" class="form-control" placeholder="Enter conversation name">
+                                        <div class="row g-2">
+                                            <div class="col">
+                                                <label for="settings-session-name" class="form-label">Conversation Name</label>
+                                                <input type="text" id="settings-session-name" class="form-control" placeholder="Enter conversation name">
+                                            </div>
+                                            <div class="col">
+                                                <label for="settings-session-interlocutor-name" class="form-label">Interlocutor Name</label>
+                                                <input type="text" id="settings-session-interlocutor-name" class="form-control" placeholder="Name of the person you're talking to">
+                                            </div>
+                                        </div>
                                     </div>
                                     <div class="col-12">
-                                        <label for="settings-session-interlocutor-name" class="form-label">Interlocutor Name</label>
-                                        <input type="text" id="settings-session-interlocutor-name" class="form-control" placeholder="Name of the person you're talking to">
-                                    </div>
-                                    <div class="col-12">
-                                        <label for="settings-session-model" class="form-label">LLM Model</label>
-                                        <select id="settings-session-model" class="form-select">
-                                        </select>
-                                    </div>
-                                    <div class="col-12">
-                                        <label for="settings-session-reasoning" class="form-label">Reasoning Level</label>
-                                        <select id="settings-session-reasoning" class="form-select"
-                                                title="Controls how much reasoning the model does before responding">
-                                            <option value="none">None</option>
-                                            <option value="minimal">Minimal</option>
-                                            <option value="low">Low</option>
-                                            <option value="medium">Medium</option>
-                                            <option value="high">High</option>
-                                            <option value="xhigh">Max</option>
-                                        </select>
+                                        <div class="row g-2">
+                                            <div class="col">
+                                                <label for="settings-session-model" class="form-label">Translation Model</label>
+                                                <select id="settings-session-model" class="form-select">
+                                                </select>
+                                            </div>
+                                            <div class="col-lg-2">
+                                                <label for="settings-session-reasoning" class="form-label">Reasoning</label>
+                                                <select id="settings-session-reasoning" class="form-select"
+                                                        title="Controls how much reasoning the model does before responding">
+                                                    <option value="none">None</option>
+                                                    <option value="minimal">Minimal</option>
+                                                    <option value="low">Low</option>
+                                                    <option value="medium">Medium</option>
+                                                    <option value="high">High</option>
+                                                    <option value="xhigh">Max</option>
+                                                </select>
+                                            </div>
+                                        </div>
                                     </div>
                                     <div class="col-12">
                                         <label for="settings-session-literal-model" class="form-label">Literal Model</label>
@@ -592,20 +599,24 @@
                                         </select>
                                     </div>
                                     <div class="col-12">
-                                        <label for="settings-session-interpretation-model" class="form-label">Interpretation Model</label>
-                                        <select id="settings-session-interpretation-model" class="form-select">
-                                        </select>
-                                    </div>
-                                    <div class="col-12">
-                                        <label for="settings-session-interpretation-reasoning" class="form-label">Interpretation Reasoning</label>
-                                        <select id="settings-session-interpretation-reasoning" class="form-select">
-                                            <option value="none">None</option>
-                                            <option value="minimal">Minimal</option>
-                                            <option value="low">Low</option>
-                                            <option value="medium">Medium</option>
-                                            <option value="high">High</option>
-                                            <option value="xhigh">Max</option>
-                                        </select>
+                                        <div class="row g-2">
+                                            <div class="col">
+                                                <label for="settings-session-interpretation-model" class="form-label">Interpretation Model</label>
+                                                <select id="settings-session-interpretation-model" class="form-select">
+                                                </select>
+                                            </div>
+                                            <div class="col-lg-2">
+                                                <label for="settings-session-interpretation-reasoning" class="form-label">Reasoning</label>
+                                                <select id="settings-session-interpretation-reasoning" class="form-select">
+                                                    <option value="none">None</option>
+                                                    <option value="minimal">Minimal</option>
+                                                    <option value="low">Low</option>
+                                                    <option value="medium">Medium</option>
+                                                    <option value="high">High</option>
+                                                    <option value="xhigh">Max</option>
+                                                </select>
+                                            </div>
+                                        </div>
                                     </div>
                                     <div class="col-12">
                                         <div class="row g-2">
@@ -621,11 +632,11 @@
                                     </div>
                                     <div class="col-12">
                                         <label for="settings-session-background" class="form-label">Background</label>
-                                        <textarea id="settings-session-background" class="form-control" rows="4" placeholder="Context for the AI about who you're talking to, what the conversation is about, etc."></textarea>
+                                        <textarea id="settings-session-background" class="form-control" rows="5" placeholder="Context for the AI about who you're talking to, what the conversation is about, etc."></textarea>
                                     </div>
                                     <div class="col-12">
                                         <label for="settings-session-translation-instructions" class="form-label">Translation Instructions</label>
-                                        <textarea id="settings-session-translation-instructions" class="form-control" rows="3" placeholder="General instructions for how translations should be styled and presented (e.g. tone, formality, register). Leave empty for default."></textarea>
+                                        <textarea id="settings-session-translation-instructions" class="form-control" rows="5" placeholder="General instructions for how translations should be styled and presented (e.g. tone, formality, register). Leave empty for default."></textarea>
                                     </div>
                                     <div class="col-12">
                                         <button type="button" class="btn btn-sm btn-primary" id="settings-save-session-btn">Save</button>

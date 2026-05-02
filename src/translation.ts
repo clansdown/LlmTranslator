@@ -1412,6 +1412,7 @@ function updateTranslationItem(translation: Translation): void {
         promptEl.textContent = entryPrompt;
     }
     if (modelNameEl) {
+        console.log('[DIAG] updateTranslationItem - setting header modelName to:', entryModelName, 'for translation', translation.id, 'activeEntryIndex:', translation.activeEntryIndex, 'entries.length:', translation.entries?.length);
         modelNameEl.textContent = entryModelName;
     }
 
@@ -1805,6 +1806,7 @@ export async function retranslateFromEdit(translationId: string, newSource: stri
 
     translation.status = 'pending';
     translation.error = null;
+    console.log('[DIAG] retranslateFromEdit - effectiveModel:', effectiveModel, 'modelName:', getModelName(effectiveModel ?? ''), 'modelOverride:', modelOverride, 'config.selectedModel:', config?.selectedModel);
     translation.entries = [{
         source: newSource,
         intent: newIntent,
@@ -1868,6 +1870,7 @@ export async function retranslateFromEdit(translationId: string, newSource: stri
         translation.entries[0].reasoningDetails = result.reasoningDetails;
         translation.entries[0].model = effectiveModel ?? '';
         translation.entries[0].modelName = getModelName(effectiveModel ?? '');
+        console.log('[DIAG] retranslateFromEdit - post-translate entries[0].modelName:', translation.entries[0].modelName, 'entries[0].model:', translation.entries[0].model);
         translation.status = 'complete';
         syncTopLevelFromActive(translation);
         const oldTimestamp = translation.timestamp;
