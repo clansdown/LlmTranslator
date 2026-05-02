@@ -5,3 +5,4 @@
 
 export const DEBUG_TRANSLATIONS = false;
 export const DEBUG_SESSIONS = false;
+export const DEBUG_API_CALLS = true;

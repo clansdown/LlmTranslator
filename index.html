@@ -545,6 +545,46 @@
                                         <select id="settings-default-my-language" class="form-select"></select>
                                     </div>
                                 </div>
+                                <hr>
+                                <h6>New Conversation Defaults</h6>
+                                <div class="row g-2 mb-2">
+                                    <div class="col">
+                                        <label for="settings-default-model" class="form-label">Translation Model</label>
+                                        <select id="settings-default-model" class="form-select"></select>
+                                    </div>
+                                    <div class="col-lg-2">
+                                        <label for="settings-default-reasoning" class="form-label">Reasoning</label>
+                                        <select id="settings-default-reasoning" class="form-select" title="Controls how much reasoning the model does before responding">
+                                            <option value="none">None</option>
+                                            <option value="minimal">Minimal</option>
+                                            <option value="low">Low</option>
+                                            <option value="medium">Medium</option>
+                                            <option value="high">High</option>
+                                            <option value="xhigh">Max</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div class="col-12 mb-2">
+                                    <label for="settings-default-literal-model" class="form-label">Literal Model</label>
+                                    <select id="settings-default-literal-model" class="form-select"></select>
+                                </div>
+                                <div class="row g-2 mb-2">
+                                    <div class="col">
+                                        <label for="settings-default-interpretation-model" class="form-label">Interpretation Model</label>
+                                        <select id="settings-default-interpretation-model" class="form-select"></select>
+                                    </div>
+                                    <div class="col-lg-2">
+                                        <label for="settings-default-interpretation-reasoning" class="form-label">Reasoning</label>
+                                        <select id="settings-default-interpretation-reasoning" class="form-select">
+                                            <option value="none">None</option>
+                                            <option value="minimal">Minimal</option>
+                                            <option value="low">Low</option>
+                                            <option value="medium">Medium</option>
+                                            <option value="high">High</option>
+                                            <option value="xhigh">Max</option>
+                                        </select>
+                                    </div>
+                                </div>
                             </div>
                             <div class="tab-pane fade" id="conversations-content" role="tabpanel" aria-labelledby="conversations-tab-btn">
                                 <div class="row g-2 mt-3">

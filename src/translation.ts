@@ -12,7 +12,7 @@ import { INPUT_SYSTEM_PROMPT, OUTPUT_SYSTEM_PROMPT, INPUT_INSTRUCTIONS, OUTPUT_I
 import { renderMarkdown, normalizeForMarkdown } from './markdown';
 import type { Translation, TranslationEntry, TranslationWordItem, WordItem, PunctItem, NewlineItem } from './types/translation';
 import type { Config } from './types/config';
-import type { TranslationSession } from './types/session';
+import type { TranslationSession, ReasoningLevel } from './types/session';
 
 /**
  * Generates a UUID for translation IDs
@@ -128,11 +128,14 @@ function getModelName(modelId: string): string {
 }
 
 /**
- * Gets the effective model for translation, considering overrides
- * @returns {string | null} The effective model ID to use
+ * Gets the model to use for translation, checking override, session, and config in order
+ * @param {TranslationSession | null} session - The current translation session
+ * @returns {string | null} The model ID to use
  */
-function getEffectiveModel(): string | null {
-    return modelOverride ?? config?.selectedModel ?? null;
+function getTranslationModelToUse(session: TranslationSession | null): string | null {
+    if (modelOverride) return modelOverride;
+    if (session?.model) return session.model;
+    return config?.selectedModel ?? null;
 }
 
 /**
@@ -213,15 +216,26 @@ export async function createSession(name?: string): Promise<string> {
     }
 
     const now = Date.now();
+
+    const [defaultModelPref, defaultReasoningPref, defaultLiteralModelPref, defaultInterpretationModelPref, defaultInterpretationReasoningPref] = await Promise.all([
+        getPreference("defaultModel"),
+        getPreference("defaultReasoning"),
+        getPreference("defaultLiteralModel"),
+        getPreference("defaultInterpretationModel"),
+        getPreference("defaultInterpretationReasoning")
+    ]);
+
     const newSession: TranslationSession = {
         id: generateUuid(),
         name: name ?? "New Conversation",
-        model: config?.selectedModel ?? null,
+        model: defaultModelPref ?? config?.selectedModel ?? null,
         theirLanguage: 'english',
         myLanguage: config?.defaultMyLanguage ?? 'english',
         background: "",
-        reasoning: "none",
-        literalModel: null,
+        reasoning: (defaultReasoningPref as ReasoningLevel) ?? 'none',
+        literalModel: defaultLiteralModelPref ?? null,
+        interpretationModel: defaultInterpretationModelPref ?? null,
+        interpretationReasoning: (defaultInterpretationReasoningPref as ReasoningLevel | null) ?? undefined,
         createdAt: now
     };
 
@@ -740,8 +754,7 @@ async function buildUserMessage(pill: 'input' | 'output' | 'question', sourceTex
  * @returns {Promise<void>}
  */
 export async function translate(mode: 'input' | 'output'): Promise<void> {
-    const effectiveModel = getEffectiveModel();
-    if (!config || !effectiveModel) {
+    if (!config) {
         ui.displayError("Please select a model first");
         return;
     }
@@ -765,6 +778,11 @@ export async function translate(mode: 'input' | 'output'): Promise<void> {
     textarea.value = '';
 
     const session = await loadSession(currentSessionId);
+    const effectiveModel = getTranslationModelToUse(session);
+    if (!effectiveModel) {
+        ui.displayError("Please select a model first");
+        return;
+    }
     const reasoningLevel = session?.reasoning ?? 'none';
     currentLiteralModel = session?.literalModel ?? null;
     const theirLang = LANGUAGES.find(function(l) { return l.id === session?.theirLanguage; });
@@ -1001,8 +1019,7 @@ async function buildQuestionMessage(questionText: string): Promise<string> {
  * @returns {Promise<void>}
  */
 export async function askQuestion(): Promise<void> {
-    const effectiveModel = getEffectiveModel();
-    if (!config || !effectiveModel) {
+    if (!config) {
         ui.displayError("Please select a model first");
         return;
     }
@@ -1028,6 +1045,11 @@ export async function askQuestion(): Promise<void> {
     const userMessage = await buildQuestionMessage(questionText);
 
     const session = await loadSession(currentSessionId);
+    const effectiveModel = getTranslationModelToUse(session);
+    if (!effectiveModel) {
+        ui.displayError("Please select a model first");
+        return;
+    }
 
     const translation: Translation = {
         id: generateUuid(),
@@ -1412,7 +1434,6 @@ function updateTranslationItem(translation: Translation): void {
         promptEl.textContent = entryPrompt;
     }
     if (modelNameEl) {
-        console.log('[DIAG] updateTranslationItem - setting header modelName to:', entryModelName, 'for translation', translation.id, 'activeEntryIndex:', translation.activeEntryIndex, 'entries.length:', translation.entries?.length);
         modelNameEl.textContent = entryModelName;
     }
 
@@ -1581,12 +1602,6 @@ export async function retryTranslation(translationId: string): Promise<void> {
         return;
     }
 
-    const effectiveModel = getEffectiveModel();
-    if (!config || !effectiveModel || !config!.openRouterApiKey!) {
-        ui.displayError("Cannot retry: no model selected or no API key");
-        return;
-    }
-
     ensureEntries(translation);
     const activeIdx = translation.activeEntryIndex ?? 0;
     const entry = translation.entries[activeIdx];
@@ -1600,6 +1615,12 @@ export async function retryTranslation(translationId: string): Promise<void> {
     renderAllTranslations();
 
     const session = await loadSession(currentSessionId);
+    const effectiveModel = getTranslationModelToUse(session);
+    if (!config || !effectiveModel || !config!.openRouterApiKey!) {
+        ui.displayError("Cannot retry: no model selected or no API key");
+        return;
+    }
+
     const reasoningLevel = session?.reasoning ?? 'none';
 
     if (translation.pill === 'question') {
@@ -1720,7 +1741,7 @@ async function regenerateTranslationById(translationId: string): Promise<void> {
     updateTranslationItem(translation);
 
     const session = await loadSession(currentSessionId);
-    const effectiveModel = getEffectiveModel();
+    const effectiveModel = getTranslationModelToUse(session);
     const reasoningLevel = session?.reasoning ?? 'none';
     const myLang = LANGUAGES.find(function(l) { return l.id === session?.myLanguage; });
     const instructions = INPUT_INSTRUCTIONS.replace('[LANGUAGE]', myLang?.name ?? session?.myLanguage ?? 'English');
@@ -1789,13 +1810,13 @@ export async function retranslateFromEdit(translationId: string, newSource: stri
         return;
     }
 
-    const effectiveModel = getEffectiveModel();
+    const session = await loadSession(currentSessionId);
+    const effectiveModel = getTranslationModelToUse(session);
     if (!config || !effectiveModel || !config!.openRouterApiKey!) {
         ui.displayError("Cannot retranslate: no model selected or no API key");
         return;
     }
 
-    const session = await loadSession(currentSessionId);
     const reasoningLevel = session?.reasoning ?? 'none';
     const myLang = LANGUAGES.find(function(l) { return l.id === session?.myLanguage; });
     const myLangName = myLang?.name ?? session?.myLanguage ?? 'English';
@@ -1806,7 +1827,6 @@ export async function retranslateFromEdit(translationId: string, newSource: stri
 
     translation.status = 'pending';
     translation.error = null;
-    console.log('[DIAG] retranslateFromEdit - effectiveModel:', effectiveModel, 'modelName:', getModelName(effectiveModel ?? ''), 'modelOverride:', modelOverride, 'config.selectedModel:', config?.selectedModel);
     translation.entries = [{
         source: newSource,
         intent: newIntent,
@@ -1870,7 +1890,6 @@ export async function retranslateFromEdit(translationId: string, newSource: stri
         translation.entries[0].reasoningDetails = result.reasoningDetails;
         translation.entries[0].model = effectiveModel ?? '';
         translation.entries[0].modelName = getModelName(effectiveModel ?? '');
-        console.log('[DIAG] retranslateFromEdit - post-translate entries[0].modelName:', translation.entries[0].modelName, 'entries[0].model:', translation.entries[0].model);
         translation.status = 'complete';
         syncTopLevelFromActive(translation);
         const oldTimestamp = translation.timestamp;
@@ -2056,7 +2075,7 @@ export async function regenerateIndependentSections(translationId: string): Prom
         return;
     }
 
-    const effectiveModel = getEffectiveModel();
+    const effectiveModel = getTranslationModelToUse(session);
     if (!config || !config!.openRouterApiKey!) {
         console.error('[regenerateLiteral] No API key');
         return;

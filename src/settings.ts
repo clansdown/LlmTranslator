@@ -79,6 +79,11 @@ interface SettingsReferences {
     selectAllModelsBtn: HTMLButtonElement;
     deselectAllModelsBtn: HTMLButtonElement;
     defaultMyLanguageSelect: HTMLSelectElement;
+    defaultModelSelect: HTMLSelectElement;
+    defaultReasoningSelect: HTMLSelectElement;
+    defaultLiteralModelSelect: HTMLSelectElement;
+    defaultInterpretationModelSelect: HTMLSelectElement;
+    defaultInterpretationReasoningSelect: HTMLSelectElement;
 }
 
 let refs: SettingsReferences | null = null;
@@ -146,15 +151,21 @@ function openSettingsModal(): void {
             modelsTabClearButton: settingsModalElement.querySelector('#settings-models-search-clear') as HTMLButtonElement,
             selectAllModelsBtn: settingsModalElement.querySelector('#settings-select-all-models') as HTMLButtonElement,
             deselectAllModelsBtn: settingsModalElement.querySelector('#settings-deselect-all-models') as HTMLButtonElement,
-            defaultMyLanguageSelect: settingsModalElement.querySelector('#settings-default-my-language') as HTMLSelectElement
+            defaultMyLanguageSelect: settingsModalElement.querySelector('#settings-default-my-language') as HTMLSelectElement,
+            defaultModelSelect: settingsModalElement.querySelector('#settings-default-model') as HTMLSelectElement,
+            defaultReasoningSelect: settingsModalElement.querySelector('#settings-default-reasoning') as HTMLSelectElement,
+            defaultLiteralModelSelect: settingsModalElement.querySelector('#settings-default-literal-model') as HTMLSelectElement,
+            defaultInterpretationModelSelect: settingsModalElement.querySelector('#settings-default-interpretation-model') as HTMLSelectElement,
+            defaultInterpretationReasoningSelect: settingsModalElement.querySelector('#settings-default-interpretation-reasoning') as HTMLSelectElement
         };
 
         setupEventListeners();
         settingsModalInstance = new (window as any).bootstrap.Modal(settingsModalElement);
     }
 
-    populateSettingsForm();
-    settingsModalInstance.show();
+    populateSettingsForm().then(function() {
+        settingsModalInstance.show();
+    });
 }
 
 /**
@@ -224,9 +235,9 @@ function setupEventListeners(): void {
 
 /**
  * Populates the settings form with current config values
- * @returns {void}
+ * @returns {Promise<void>}
  */
-function populateSettingsForm(): void {
+async function populateSettingsForm(): Promise<void> {
     if (!refs || !config) return;
 
     refs.minPriceInput.value = config.minPrice !== null ? String(config.minPrice) : '';
@@ -241,6 +252,7 @@ function populateSettingsForm(): void {
     populateModelDropdown();
     populateLanguageDropdowns();
     populateDefaultMyLanguageDropdown();
+    await populateDefaultModelDropdowns();
     populateModelsTab();
 }
 
@@ -252,6 +264,7 @@ function populateSettingsForm(): void {
 export function setModels(availableModels: VisionModel[]): void {
     models = availableModels;
     populateModelDropdown();
+    populateDefaultModelDropdowns();
 }
 
 /**
@@ -456,6 +469,90 @@ function populateModelDropdown(): void {
 }
 
 /**
+ * Populates the default model dropdowns in the Settings tab
+ * @returns {Promise<void>}
+ */
+async function populateDefaultModelDropdowns(): Promise<void> {
+    if (!refs) return;
+
+    refs.defaultModelSelect.innerHTML = '';
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = 'Select model...';
+    refs.defaultModelSelect.appendChild(placeholder);
+
+    for (const model of models) {
+        const option = document.createElement('option');
+        option.value = model.id;
+        if (model.pricing) {
+            const promptCost = (parseFloat(model.pricing.prompt) * 1_000_000).toFixed(2);
+            const completionCost = (parseFloat(model.pricing.completion) * 1_000_000).toFixed(2);
+            const providerPart = model.providerName ? ' by ' + model.providerName : '';
+            option.textContent = `${model.name}${providerPart} ($${promptCost}/$${completionCost})`;
+        } else {
+            option.textContent = model.name;
+        }
+        refs.defaultModelSelect.appendChild(option);
+    }
+
+    refs.defaultLiteralModelSelect.innerHTML = '';
+    const disabledPlaceholder = document.createElement('option');
+    disabledPlaceholder.value = '';
+    disabledPlaceholder.textContent = 'Disabled';
+    refs.defaultLiteralModelSelect.appendChild(disabledPlaceholder);
+
+    for (const model of models) {
+        const option = document.createElement('option');
+        option.value = model.id;
+        if (model.pricing) {
+            const promptCost = (parseFloat(model.pricing.prompt) * 1_000_000).toFixed(2);
+            const completionCost = (parseFloat(model.pricing.completion) * 1_000_000).toFixed(2);
+            const providerPart = model.providerName ? ' by ' + model.providerName : '';
+            option.textContent = `${model.name}${providerPart} ($${promptCost}/$${completionCost})`;
+        } else {
+            option.textContent = model.name;
+        }
+        refs.defaultLiteralModelSelect.appendChild(option);
+    }
+
+    refs.defaultInterpretationModelSelect.innerHTML = '';
+    const interpDisabledPlaceholder = document.createElement('option');
+    interpDisabledPlaceholder.value = '';
+    interpDisabledPlaceholder.textContent = 'Disabled';
+    refs.defaultInterpretationModelSelect.appendChild(interpDisabledPlaceholder);
+
+    for (const model of models) {
+        const option = document.createElement('option');
+        option.value = model.id;
+        if (model.pricing) {
+            const promptCost = (parseFloat(model.pricing.prompt) * 1_000_000).toFixed(2);
+            const completionCost = (parseFloat(model.pricing.completion) * 1_000_000).toFixed(2);
+            const providerPart = model.providerName ? ' by ' + model.providerName : '';
+            option.textContent = `${model.name}${providerPart} ($${promptCost}/$${completionCost})`;
+        } else {
+            option.textContent = model.name;
+        }
+        refs.defaultInterpretationModelSelect.appendChild(option);
+    }
+
+    const [defaultModelPref, defaultReasoningPref, defaultLiteralModelPref, defaultInterpretationModelPref, defaultInterpretationReasoningPref] = await Promise.all([
+        storage.getPreference("defaultModel"),
+        storage.getPreference("defaultReasoning"),
+        storage.getPreference("defaultLiteralModel"),
+        storage.getPreference("defaultInterpretationModel"),
+        storage.getPreference("defaultInterpretationReasoning")
+    ]);
+
+    console.log('[defaults] Loaded from OPFS - model:', defaultModelPref, 'reasoning:', defaultReasoningPref, 'literalModel:', defaultLiteralModelPref, 'interpretationModel:', defaultInterpretationModelPref, 'interpretationReasoning:', defaultInterpretationReasoningPref);
+
+    refs.defaultModelSelect.value = defaultModelPref ?? '';
+    refs.defaultReasoningSelect.value = defaultReasoningPref ?? 'none';
+    refs.defaultLiteralModelSelect.value = defaultLiteralModelPref ?? '';
+    refs.defaultInterpretationModelSelect.value = defaultInterpretationModelPref ?? '';
+    refs.defaultInterpretationReasoningSelect.value = defaultInterpretationReasoningPref ?? 'none';
+}
+
+/**
  * Populates the read and write language dropdowns
  * @returns {void}
  */
@@ -556,6 +653,36 @@ async function saveSettings(): Promise<void> {
         config.defaultMyLanguage = defaultMyLanguageStr;
         await storage.savePreference('defaultMyLanguage', defaultMyLanguageStr);
     }
+
+    const defaultModel = refs.defaultModelSelect.value || null;
+    const defaultReasoning = refs.defaultReasoningSelect.value;
+    const defaultLiteralModel = refs.defaultLiteralModelSelect.value || null;
+    const defaultInterpretationModel = refs.defaultInterpretationModelSelect.value || null;
+    const defaultInterpretationReasoning = refs.defaultInterpretationReasoningSelect.value;
+
+    if (defaultModel) {
+        await storage.savePreference('defaultModel', defaultModel);
+    } else {
+        await storage.deletePreference('defaultModel');
+    }
+
+    await storage.savePreference('defaultReasoning', defaultReasoning);
+
+    if (defaultLiteralModel) {
+        await storage.savePreference('defaultLiteralModel', defaultLiteralModel);
+    } else {
+        await storage.deletePreference('defaultLiteralModel');
+    }
+
+    if (defaultInterpretationModel) {
+        await storage.savePreference('defaultInterpretationModel', defaultInterpretationModel);
+    } else {
+        await storage.deletePreference('defaultInterpretationModel');
+    }
+
+    await storage.savePreference('defaultInterpretationReasoning', defaultInterpretationReasoning);
+
+    console.log('[defaults] Saved - model:', defaultModel, 'reasoning:', defaultReasoning, 'literalModel:', defaultLiteralModel, 'interpretationModel:', defaultInterpretationModel, 'interpretationReasoning:', defaultInterpretationReasoning);
 
     settingsModalInstance.hide();
 }

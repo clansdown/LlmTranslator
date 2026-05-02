@@ -134,6 +134,7 @@ export async function deletePreference(key: string): Promise<void> {
         const prefsDir = await ensureDirectory(root, STORAGE_PREFERENCES_DIR);
         await prefsDir.removeEntry(key);
     } catch (e) {
+        if (e instanceof DOMException && e.name === 'NotFoundError') return;
         console.error("Error deleting preference:", e);
     }
 }

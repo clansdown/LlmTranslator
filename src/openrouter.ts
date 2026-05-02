@@ -12,6 +12,7 @@ import type {
     Message 
 } from './types/api';
 import type { Config } from './types/config';
+import { DEBUG_API_CALLS } from './debug';
 
 const OPENROUTER_BASE_URL: string = "https://openrouter.ai/api/v1";
 
@@ -23,6 +24,16 @@ let config: Config | null = null;
  */
 export function setConfig(appConfig: Config): void {
     config = appConfig;
+}
+
+/**
+ * Strips XML tags from a message and returns the first 60 characters of plain text
+ * @param {string} text - The message text to trim
+ * @returns {string} Trimmed plain text
+ */
+function trimApiText(text: string): string {
+    const stripped = text.replace(/<[^>]+>/g, '').trim();
+    return stripped.length > 60 ? stripped.substring(0, 60) + '...' : stripped;
 }
 
 /**
@@ -155,6 +166,8 @@ export async function fetchVisionModels(apiKey: string): Promise<VisionModel[]> 
  * @throws {Error} If API request fails
  */
 export async function fetchZdrModels(apiKey: string): Promise<VisionModel[]> {
+    if (DEBUG_API_CALLS) console.log('[API] fetchZdrModels starting');
+
     const response = await fetch(OPENROUTER_BASE_URL + "/endpoints/zdr", {
         method: "GET",
         headers: {
@@ -221,7 +234,9 @@ export async function fetchZdrModels(apiKey: string): Promise<VisionModel[]> {
         if (completionA > completionB) return 1;
         return 0;
     });
-    
+
+    if (DEBUG_API_CALLS) console.log(`[API] fetchZdrModels completed, found ${models.length} models`);
+
     return models;
 }
 
@@ -232,6 +247,8 @@ export async function fetchZdrModels(apiKey: string): Promise<VisionModel[]> {
  * @throws {Error} If API request fails
  */
 export async function fetchBalance(apiKey: string): Promise<BalanceInfo> {
+    if (DEBUG_API_CALLS) console.log('[API] fetchBalance starting');
+
     const response = await fetch(OPENROUTER_BASE_URL + "/credits", {
         method: "GET",
         headers: {
@@ -261,6 +278,7 @@ export async function fetchBalance(apiKey: string): Promise<BalanceInfo> {
     }
 
     const data = await response.json();
+    if (DEBUG_API_CALLS) console.log('[API] fetchBalance completed');
     return {
         totalCredits: data.data.total_credits,
         totalUsage: data.data.total_usage
@@ -643,6 +661,8 @@ export async function translateStructured(
     reasoningLevel: string = 'none',
     temperature: number = 0.2
 ): Promise<TranslationResult> {
+    if (DEBUG_API_CALLS) console.log(`[API] translateStructured starting - model: ${model}, text: "${trimApiText(userMessage)}"`);
+
     /** @type {Array<{role: string; content: string}>} */
     const messages: Array<{role: string; content: string}> = [];
 
@@ -711,7 +731,7 @@ export async function translateStructured(
     const reasoning = message?.reasoning ?? "";
     const reasoningDetails = JSON.stringify(message?.reasoning_details ?? []);
 
-    console.log(`[translateStructured] API call completed in ${(performance.now() - apiStartTime).toFixed(0)}ms, model: ${model}`);
+    if (DEBUG_API_CALLS) console.log(`[API] translateStructured completed in ${(performance.now() - apiStartTime).toFixed(0)}ms, model: ${model}`);
 
     return {
         translation: parseTag(content, 'TRANSLATION'),
@@ -740,6 +760,8 @@ export async function translateRaw(
     reasoningLevel: string = 'none',
     temperature: number = 0.2
 ): Promise<string> {
+    if (DEBUG_API_CALLS) console.log(`[API] translateRaw starting - model: ${model}, text: "${trimApiText(userMessage)}"`);
+
     /** @type {Array<{role: string; content: string}>} */
     const messages: Array<{role: string; content: string}> = [];
 
@@ -805,7 +827,7 @@ export async function translateRaw(
     const data = await response.json() as ChatCompletionResponse;
     const message = data.choices && data.choices.length > 0 ? data.choices[0].message : null;
 
-    console.log(`[translateRaw] API call completed in ${(performance.now() - apiStartTime).toFixed(0)}ms, model: ${model}`);
+    if (DEBUG_API_CALLS) console.log(`[API] translateRaw completed in ${(performance.now() - apiStartTime).toFixed(0)}ms, model: ${model}`);
 
     return message?.content ?? "";
 }
