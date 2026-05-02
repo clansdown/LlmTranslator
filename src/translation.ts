@@ -781,8 +781,15 @@ export async function translate(mode: 'input' | 'output'): Promise<void> {
     } else {
         const intentTextarea = document.getElementById('intent-textarea') as HTMLTextAreaElement | null;
         const intent = intentTextarea?.value.trim() ?? '';
-        const promptContent = session?.promptOverride ?? '';
-        instructions = OUTPUT_INSTRUCTIONS.replace('[INTENT]', intent ? `Intent: ${intent}` : '');
+        const translationInstructions = session?.translationInstructions ?? '';
+        const translationInstructionsBlock = translationInstructions
+            ? `The following are instructions on how the translation should be styled and presented:\n<TRANSLATIONINSTRUCTIONS>${translationInstructions}</TRANSLATIONINSTRUCTIONS>`
+            : '';
+        const intentBlock = intent
+            ? `The following is guidance on the intent of the text to be translated:\n<INTENT>${intent}</INTENT>`
+            : '';
+        instructions = OUTPUT_INSTRUCTIONS.replace('[TRANSLATION_INSTRUCTIONS_BLOCK]', translationInstructionsBlock);
+        instructions = instructions.replace('[INTENT_BLOCK]', intentBlock);
         instructions = instructions.replace('[LANGUAGE]', myLangName);
         instructions = instructions.replace('[TARGET_LANGUAGE]', theirLangName);
         promptName = 'Me';
@@ -1624,8 +1631,15 @@ export async function retryTranslation(translationId: string): Promise<void> {
     if (translation.pill === 'input') {
         instructions = INPUT_INSTRUCTIONS.replace('[LANGUAGE]', myLang?.name ?? session?.myLanguage ?? 'English');
     } else {
-        const promptContent = session?.promptOverride ?? '';
-        instructions = OUTPUT_INSTRUCTIONS.replace('[INTENT]', entry.intent ? `Intent: ${entry.intent}` : '');
+        const translationInstructions = session?.translationInstructions ?? '';
+        const translationInstructionsBlock = translationInstructions
+            ? `The following are instructions on how the translation should be styled and presented:\n<TRANSLATIONINSTRUCTIONS>${translationInstructions}</TRANSLATIONINSTRUCTIONS>`
+            : '';
+        const intentBlock = entry.intent
+            ? `The following is guidance on the intent of the text to be translated:\n<INTENT>${entry.intent}</INTENT>`
+            : '';
+        instructions = OUTPUT_INSTRUCTIONS.replace('[TRANSLATION_INSTRUCTIONS_BLOCK]', translationInstructionsBlock);
+        instructions = instructions.replace('[INTENT_BLOCK]', intentBlock);
         instructions = instructions.replace('[LANGUAGE]', myLang?.name ?? session?.myLanguage ?? 'English');
         instructions = instructions.replace('[TARGET_LANGUAGE]', theirLang?.name ?? session?.theirLanguage ?? 'Foreign');
     }
@@ -1819,8 +1833,15 @@ export async function retranslateFromEdit(translationId: string, newSource: stri
     if (translation.pill === 'input') {
         instructions = INPUT_INSTRUCTIONS.replace('[LANGUAGE]', myLangName);
     } else {
-        const promptContent = session?.promptOverride ?? '';
-        instructions = OUTPUT_INSTRUCTIONS.replace('[INTENT]', newIntent ? `Intent: ${newIntent}` : '');
+        const translationInstructions = session?.translationInstructions ?? '';
+        const translationInstructionsBlock = translationInstructions
+            ? `The following are instructions on how the translation should be styled and presented:\n<TRANSLATIONINSTRUCTIONS>${translationInstructions}</TRANSLATIONINSTRUCTIONS>`
+            : '';
+        const intentBlock = newIntent
+            ? `The following is guidance on the intent of the text to be translated:\n<INTENT>${newIntent}</INTENT>`
+            : '';
+        instructions = OUTPUT_INSTRUCTIONS.replace('[TRANSLATION_INSTRUCTIONS_BLOCK]', translationInstructionsBlock);
+        instructions = instructions.replace('[INTENT_BLOCK]', intentBlock);
         instructions = instructions.replace('[LANGUAGE]', myLangName);
         instructions = instructions.replace('[TARGET_LANGUAGE]', theirLang?.name ?? session?.theirLanguage ?? 'Foreign');
     }

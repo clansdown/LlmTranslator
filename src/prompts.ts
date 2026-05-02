@@ -62,7 +62,9 @@ Try to preserve the original text's formatting, such as line breaks and paragrap
  * [TARGET_LANGUAGE] is replaced with the target/foreign language name
  */
 export const OUTPUT_INSTRUCTIONS: string =
-`[INTENT]
+`[TRANSLATION_INSTRUCTIONS_BLOCK]
+
+[INTENT_BLOCK]
 
 Consider any background context and conversation history provided.
 The explanation and nuances sections should be in [LANGUAGE], while the translation should be in [TARGET_LANGUAGE].

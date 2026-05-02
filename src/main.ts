@@ -4,9 +4,11 @@
 
 import { savePreference, getPreference, deletePreference } from './storage';
 import { fetchBalance, fetchZdrModels, setConfig as setOpenRouterConfig } from './openrouter';
+import { Modal } from 'bootstrap';
 import * as ui from './ui';
 import * as settings from './settings';
 import * as translation from './translation';
+import { initAuth, getClerk, mountAuthComponent, isSignedIn } from './auth';
 import type { Config } from './types/config';
 
 /**
@@ -230,7 +232,50 @@ export async function init(): Promise<void> {
     settings.setupSettingsButton(document.getElementById("config-button") as HTMLButtonElement);
 
     await loadApiKey();
+    await setupAuthButton();
     console.log("LLM Translator initialized");
+}
+
+/**
+ * Sets up the optional Clerk auth button in the toolbar
+ * @returns {Promise<void>}
+ */
+async function setupAuthButton(): Promise<void> {
+    const authActive = await initAuth();
+    if (!authActive) return;
+
+    const clerk = getClerk()!;
+    const authBtn = document.getElementById('auth-btn') as HTMLButtonElement;
+    const hasLoggedIn = (await getPreference('clerkHasLoggedIn')) === 'true';
+
+    if (isSignedIn()) {
+        authBtn.textContent = 'Log out';
+        await savePreference('clerkHasLoggedIn', 'true');
+    } else {
+        authBtn.textContent = hasLoggedIn ? 'Log in' : 'Create account';
+    }
+    authBtn.style.display = '';
+
+    const template = document.getElementById('auth-modal-template') as HTMLTemplateElement;
+    const clone = template.content.cloneNode(true) as DocumentFragment;
+    document.body.appendChild(clone);
+    const modalEl = document.body.querySelector('.modal.fade:last-child') as HTMLElement;
+    const modal = new Modal(modalEl as Element);
+    const modalBody = modalEl.querySelector('#auth-modal-body') as HTMLElement;
+
+    authBtn.addEventListener('click', async function() {
+        if (isSignedIn()) {
+            await clerk.signOut();
+            window.location.reload();
+        } else {
+            mountAuthComponent(modalBody, hasLoggedIn ? 'signIn' : 'signUp');
+            modal.show();
+        }
+    });
+
+    modalEl.addEventListener('hidden.bs.modal', function() {
+        modalBody.innerHTML = '';
+    });
 }
 
 /**

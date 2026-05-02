@@ -68,7 +68,7 @@ interface SettingsReferences {
     sessionInterpretationReasoningSelect: HTMLSelectElement;
     sessionBackgroundInput: HTMLTextAreaElement;
     sessionReasoningSelect: HTMLSelectElement;
-    sessionPromptOverrideInput: HTMLTextAreaElement;
+    sessionTranslationInstructionsInput: HTMLTextAreaElement;
     sessionTheirLanguageSelect: HTMLSelectElement;
     sessionMyLanguageSelect: HTMLSelectElement;
     deleteSessionButton: HTMLButtonElement;
@@ -136,7 +136,7 @@ function openSettingsModal(): void {
             sessionInterpretationReasoningSelect: settingsModalElement.querySelector('#settings-session-interpretation-reasoning') as HTMLSelectElement,
             sessionBackgroundInput: settingsModalElement.querySelector('#settings-session-background') as HTMLTextAreaElement,
             sessionReasoningSelect: settingsModalElement.querySelector('#settings-session-reasoning') as HTMLSelectElement,
-            sessionPromptOverrideInput: settingsModalElement.querySelector('#settings-session-prompt-override') as HTMLTextAreaElement,
+            sessionTranslationInstructionsInput: settingsModalElement.querySelector('#settings-session-translation-instructions') as HTMLTextAreaElement,
             sessionTheirLanguageSelect: settingsModalElement.querySelector('#settings-session-their-language') as HTMLSelectElement,
             sessionMyLanguageSelect: settingsModalElement.querySelector('#settings-session-my-language') as HTMLSelectElement,
             deleteSessionButton: settingsModalElement.querySelector('#settings-delete-session-btn') as HTMLButtonElement,
@@ -631,7 +631,7 @@ function loadSessionIntoEditor(sessionId: string): void {
             refs.sessionInterpretationReasoningSelect.value = session.interpretationReasoning ?? 'none';
             refs.sessionBackgroundInput.value = session.background ?? '';
             refs.sessionReasoningSelect.value = session.reasoning ?? 'none';
-            refs.sessionPromptOverrideInput.value = session.promptOverride ?? '';
+            refs.sessionTranslationInstructionsInput.value = session.translationInstructions ?? '';
             refs.sessionTheirLanguageSelect.value = session.theirLanguage ?? 'english';
             refs.sessionMyLanguageSelect.value = session.myLanguage ?? config?.defaultMyLanguage ?? 'english';
         } else if (refs) {
@@ -643,9 +643,7 @@ function loadSessionIntoEditor(sessionId: string): void {
             refs.sessionInterpretationReasoningSelect.value = 'none';
             refs.sessionBackgroundInput.value = '';
             refs.sessionReasoningSelect.value = 'none';
-            refs.sessionPromptOverrideInput.value = '';
-            refs.sessionTheirLanguageSelect.value = 'english';
-            refs.sessionMyLanguageSelect.value = config?.defaultMyLanguage ?? 'english';
+            refs.sessionTranslationInstructionsInput.value = '';
         }
     });
 }
@@ -660,7 +658,7 @@ function clearSessionEditor(): void {
     refs.sessionInterlocutorNameInput.value = '';
     refs.sessionBackgroundInput.value = '';
     refs.sessionReasoningSelect.value = 'none';
-    refs.sessionPromptOverrideInput.value = '';
+    refs.sessionTranslationInstructionsInput.value = '';
     refs.sessionTheirLanguageSelect.value = 'english';
     refs.sessionMyLanguageSelect.value = config?.defaultMyLanguage ?? 'english';
 }
@@ -711,7 +709,7 @@ async function saveSession(): Promise<void> {
     session.interpretationReasoning = refs.sessionInterpretationReasoningSelect.value as ReasoningLevel;
     session.background = refs.sessionBackgroundInput.value;
     session.reasoning = refs.sessionReasoningSelect.value as ReasoningLevel;
-    session.promptOverride = refs.sessionPromptOverrideInput.value || null;
+    session.translationInstructions = refs.sessionTranslationInstructionsInput.value || null;
     session.theirLanguage = refs.sessionTheirLanguageSelect.value;
     session.myLanguage = refs.sessionMyLanguageSelect.value;
     session.interlocutorName = refs.sessionInterlocutorNameInput.value.trim() || undefined;

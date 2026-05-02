@@ -13,7 +13,7 @@ export interface TranslationSession {
     background: string;
     reasoning: ReasoningLevel;
     literalModel?: string | null;
-    promptOverride?: string | null;
+    translationInstructions?: string | null;
     interpretationModel?: string | null;
     interpretationReasoning?: ReasoningLevel;
     interlocutorName?: string;

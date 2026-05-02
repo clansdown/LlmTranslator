@@ -6,3 +6,4 @@ backblaze/
 # Local generation statistics
 .commit/
 .opencode/
+public/clerk-key.js
