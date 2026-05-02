@@ -222,6 +222,7 @@ function setupEventListeners(): void {
         }
         const checkboxes = refs!.modelsTabListContainer.querySelectorAll('.model-approval-checkbox');
         checkboxes.forEach(function(cb) { (cb as HTMLInputElement).checked = true; });
+        syncModelsFromApproval();
     });
 
     refs.deselectAllModelsBtn.addEventListener('click', function() {
@@ -230,7 +231,16 @@ function setupEventListeners(): void {
         }
         const checkboxes = refs!.modelsTabListContainer.querySelectorAll('.model-approval-checkbox');
         checkboxes.forEach(function(cb) { (cb as HTMLInputElement).checked = false; });
+        syncModelsFromApproval();
     });
+
+    if (settingsModalElement) {
+        settingsModalElement.querySelectorAll('[data-bs-toggle="tab"]').forEach(function(btn) {
+            btn.addEventListener('shown.bs.tab', async function() {
+                await refreshModelDropdowns();
+            });
+        });
+    }
 }
 
 /**
@@ -261,10 +271,12 @@ async function populateSettingsForm(): Promise<void> {
  * @param {VisionModel[]} availableModels - Array of available models
  * @returns {void}
  */
-export function setModels(availableModels: VisionModel[]): void {
+export function setModels(availableModels: VisionModel[], updateUI: boolean = true): void {
     models = availableModels;
-    populateModelDropdown();
-    populateDefaultModelDropdowns();
+    if (updateUI) {
+        populateModelDropdown();
+        populateDefaultModelDropdowns();
+    }
 }
 
 /**
@@ -290,6 +302,18 @@ export function filterModelsByApproval(availableModels: VisionModel[]): VisionMo
         const key = model.id + '::' + (model.providerName ?? '');
         return approvedSet.has(key);
     });
+}
+
+/**
+ * Rebuilds the in-memory models array from allModels filtered by current approvedModelIds
+ * @returns {void}
+ */
+function syncModelsFromApproval(): void {
+    if (!config) return;
+    const approvedSet = new Set(config.approvedModelIds ?? []);
+    models = config.approvedModelIds === null
+        ? [...allModels]
+        : allModels.filter(function(m) { return approvedSet.has(m.id + '::' + (m.providerName ?? '')); });
 }
 
 /**
@@ -346,6 +370,7 @@ export function populateModelsTab(): void {
                     config.approvedModelIds = config.approvedModelIds.filter(function(id) { return id !== compositeKey; });
                 }
             }
+            syncModelsFromApproval();
         });
 
         div.appendChild(input);
@@ -384,7 +409,7 @@ export async function saveApprovedModels(): Promise<void> {
     }
 
     const approvedModels = filterModelsByApproval(models);
-    setModels(approvedModels);
+    setModels(approvedModels, false);
     translation.setModelNameMap(approvedModels);
     translation.setModelOverrideOptions(approvedModels);
 
@@ -553,6 +578,42 @@ async function populateDefaultModelDropdowns(): Promise<void> {
 }
 
 /**
+ * Checks if model dropdowns match the current models array and repopulates with
+ * selection preserved if they don't
+ * @returns {Promise<void>}
+ */
+async function refreshModelDropdowns(): Promise<void> {
+    if (!refs) return;
+
+    const selects = [
+        refs.sessionModelSelect,
+        refs.sessionLiteralModelSelect,
+        refs.sessionInterpretationModelSelect,
+        refs.defaultModelSelect,
+        refs.defaultLiteralModelSelect,
+        refs.defaultInterpretationModelSelect
+    ];
+
+    let needsRefresh = false;
+    for (const select of selects) {
+        if (select.options.length - 1 !== models.length) { needsRefresh = true; break; }
+        for (let i = 0; i < models.length; i++) {
+            if (select.options[i + 1].value !== models[i].id) { needsRefresh = true; break; }
+        }
+        if (needsRefresh) break;
+    }
+
+    if (!needsRefresh) return;
+
+    const saved = selects.map(function(s) { return s.value; });
+    populateModelDropdown();
+    await populateDefaultModelDropdowns();
+    for (let i = 0; i < selects.length; i++) {
+        if (saved[i]) selects[i].value = saved[i];
+    }
+}
+
+/**
  * Populates the read and write language dropdowns
  * @returns {void}
  */
@@ -646,6 +707,12 @@ async function saveSettings(): Promise<void> {
         await storage.savePreference('maxTokens', String(config.maxTokens));
     }
 
+    const defaultModel = refs.defaultModelSelect.value || null;
+    const defaultReasoning = refs.defaultReasoningSelect.value;
+    const defaultLiteralModel = refs.defaultLiteralModelSelect.value || null;
+    const defaultInterpretationModel = refs.defaultInterpretationModelSelect.value || null;
+    const defaultInterpretationReasoning = refs.defaultInterpretationReasoningSelect.value;
+
     await saveApprovedModels();
 
     const defaultMyLanguageStr = refs.defaultMyLanguageSelect.value.trim();
@@ -653,12 +720,6 @@ async function saveSettings(): Promise<void> {
         config.defaultMyLanguage = defaultMyLanguageStr;
         await storage.savePreference('defaultMyLanguage', defaultMyLanguageStr);
     }
-
-    const defaultModel = refs.defaultModelSelect.value || null;
-    const defaultReasoning = refs.defaultReasoningSelect.value;
-    const defaultLiteralModel = refs.defaultLiteralModelSelect.value || null;
-    const defaultInterpretationModel = refs.defaultInterpretationModelSelect.value || null;
-    const defaultInterpretationReasoning = refs.defaultInterpretationReasoningSelect.value;
 
     if (defaultModel) {
         await storage.savePreference('defaultModel', defaultModel);

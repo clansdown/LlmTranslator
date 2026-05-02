@@ -1417,14 +1417,17 @@ function updateTranslationItem(translation: Translation): void {
     const entryTranslation = entry?.translation ?? (translation as any).translation ?? '';
     const entryExplanation = entry?.explanation ?? (translation as any).explanation ?? '';
     const entryNuances = entry?.nuances ?? (translation as any).nuances ?? '';
-    const entryLiteralRetranslation = entry?.literalRetranslation;
-    const entryLiteralPending = entry?.literalPending ?? false;
+    const literalEntry = (translation.pill === 'input' && translation.entries.length > 0)
+        ? translation.entries[0]
+        : entry;
+    const entryLiteralRetranslation = literalEntry?.literalRetranslation;
+    const entryLiteralPending = literalEntry?.literalPending ?? false;
     const entryInterpretation = entry?.interpretation;
     const entryInterpretationPending = entry?.interpretationPending ?? false;
     const entryPrompt = entry?.prompt ?? (translation as any).prompt ?? '';
     const entryModelName = entry?.modelName ?? (translation as any).modelName ?? '';
-    const entryWordData = entry?.wordData ?? (translation as any).wordData;
-    const entryWordPending = entry?.wordPending ?? false;
+    const entryWordData = literalEntry?.wordData ?? (translation as any).wordData;
+    const entryWordPending = literalEntry?.wordPending ?? false;
     const entryIntent = entry?.intent ?? (translation as any).intent ?? '';
 
     if (sourceEl) {
@@ -1444,18 +1447,27 @@ function updateTranslationItem(translation: Translation): void {
         } else {
             retranslationTabsEl.style.display = '';
             const idx = translation.activeEntryIndex ?? 0;
+            const ul = document.createElement('ul');
+            ul.className = 'nav nav-tabs';
+            ul.role = 'tablist';
             for (let i = 0; i < translation.entries.length; i++) {
+                const li = document.createElement('li');
+                li.className = 'nav-item';
+                li.role = 'presentation';
                 const btn = document.createElement('button');
                 btn.type = 'button';
-                btn.className = 'btn btn-sm ' + (i === idx ? 'btn-primary' : 'btn-outline-secondary') + ' retranslation-tab-btn';
+                btn.className = 'nav-link' + (i === idx ? ' active' : '');
+                btn.role = 'tab';
                 btn.textContent = getModelShortName(translation.entries[i].modelName);
                 const translationId = translation.id;
                 const entryIndex = i;
                 btn.addEventListener('click', function() {
                     switchTranslationEntry(translationId, entryIndex);
                 });
-                retranslationTabsEl.appendChild(btn);
+                li.appendChild(btn);
+                ul.appendChild(li);
             }
+            retranslationTabsEl.appendChild(ul);
         }
     }
 
