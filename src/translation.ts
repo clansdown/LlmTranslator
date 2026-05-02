@@ -1313,8 +1313,15 @@ function renderTranslationItem(container: HTMLElement, translation: Translation)
                     ui.displayError("Source text cannot be empty");
                     return;
                 }
-                const newIntent = editIntent?.value.trim() ?? '';
-                retranslateFromEdit(translation.id, newSource, newIntent);
+                if (translation.pill === 'question') {
+                    ensureEntries(translation);
+                    const entry = translation.entries[translation.activeEntryIndex ?? 0];
+                    if (entry) entry.source = newSource;
+                    retryTranslation(translation.id);
+                } else {
+                    const newIntent = editIntent?.value.trim() ?? '';
+                    retranslateFromEdit(translation.id, newSource, newIntent);
+                }
             });
         }
 

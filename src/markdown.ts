@@ -6,6 +6,14 @@
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 
+marked.use({
+    renderer: {
+        del(token) {
+            return token.raw;
+        }
+    }
+});
+
 /**
  * Normalizes plain text for markdown rendering by converting single newlines
  * into appropriate markdown formatting based on line length.
