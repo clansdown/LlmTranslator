@@ -3,7 +3,7 @@
  * Handles translation functionality for input and output panes
  */
 
-import { translateStructured, translateRaw } from './openrouter';
+import { translateStructured, sendChatMessage } from './openrouter';
 import { getPreference, savePreference, listSessions, saveSession, loadSession, deleteSession as storageDeleteSession, getOrCreateDefaultSession, saveSessionTranslation, listSessionTranslations, deleteSessionTranslation } from './storage';
 import { DEBUG_TRANSLATIONS, DEBUG_SESSIONS } from './debug';
 import * as ui from './ui';
@@ -418,7 +418,7 @@ export async function loadTranslationHistory(): Promise<void> {
  * @param {boolean} includeQuestions - Whether to include question/answer pairs in history
  * @returns {string} History section or empty string
  */
-function buildHistorySection(includeQuestions: boolean = true): string {
+function buildHistorySection(includeQuestions: boolean = true, sourcesOnly: boolean = false): string {
     const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
     const now = Date.now();
     const cutoff = now - SEVEN_DAYS_MS;
@@ -450,13 +450,19 @@ function buildHistorySection(includeQuestions: boolean = true): string {
         if (!entry) continue;
         if (t.pill === 'input') {
             history += `<THEM>${entry.source}</THEM>\n`;
-            history += `<THEM>${entry.translation}</THEM>\n`;
+            if (!sourcesOnly) {
+                history += `<THEM>${entry.translation}</THEM>\n`;
+            }
         } else if (t.pill === 'output') {
             history += `<ME>${entry.source}</ME>\n`;
-            history += `<ME>${entry.translation}</ME>\n`;
+            if (!sourcesOnly) {
+                history += `<ME>${entry.translation}</ME>\n`;
+            }
         } else if (t.pill === 'question' && includeQuestions && t.includeInContext !== false) {
             history += `<USERQUESTION>${entry.source}</USERQUESTION>\n`;
-            history += `<AGENTANSWER>${entry.translation}</AGENTANSWER>\n`;
+            if (!sourcesOnly) {
+                history += `<AGENTANSWER>${entry.translation}</AGENTANSWER>\n`;
+            }
         }
     }
     history += "</HISTORY>";
@@ -904,7 +910,7 @@ export async function translate(mode: 'input' | 'output'): Promise<void> {
                         ? sourceText
                         : result.translation;
                     console.log('[translateLiteral] Starting literal retranslation with model:', session.literalModel);
-                    const literalResult = await translateRaw(
+                    const literalResult = await sendChatMessage(
                         config!.openRouterApiKey!,
                         literalUserMessage,
                         literalSystemPrompt,
@@ -964,7 +970,7 @@ export async function translate(mode: 'input' | 'output'): Promise<void> {
                 try {
                     const message = await buildInterpretationMessage(translation);
                     console.log('[interpretation] Starting interpretation with model:', session.interpretationModel);
-                    const interpretationResult = await translateRaw(
+                    const interpretationResult = await sendChatMessage(
                         config!.openRouterApiKey!,
                         message,
                         INTERPRETATION_PROMPT,
@@ -1005,7 +1011,7 @@ export async function translate(mode: 'input' | 'output'): Promise<void> {
  * @param {string} questionText - The user's question
  * @returns {Promise<string>} Complete user message
  */
-async function buildQuestionMessage(questionText: string): Promise<string> {
+async function buildQuestionMessage(questionText: string, myLanguage?: string): Promise<string> {
     const background = await getBackground();
 
     let message = "";
@@ -1014,13 +1020,14 @@ async function buildQuestionMessage(questionText: string): Promise<string> {
         message += `<BACKGROUND>${background}</BACKGROUND>\n\n`;
     }
 
-    const history = buildHistorySection();
+    const history = buildHistorySection(true, true);
     if (history) {
         message += history + "\n\n";
     }
 
     message += `<QUESTION>${questionText}</QUESTION>\n\n`;
-    message += `<INSTRUCTIONS>Answer the user's question clearly and helpfully.</INSTRUCTIONS>`;
+    const langInstruction = myLanguage ? ` Write your answer in ${myLanguage}.` : '';
+    message += `<INSTRUCTIONS>Answer the user's question clearly and helpfully.${langInstruction}</INSTRUCTIONS>`;
 
     return message;
 }
@@ -1053,14 +1060,17 @@ export async function askQuestion(): Promise<void> {
 
     textarea.value = '';
 
-    const userMessage = await buildQuestionMessage(questionText);
-
     const session = await loadSession(currentSessionId);
+    const myLang = LANGUAGES.find(function(l) { return l.id === session?.myLanguage; });
+    const myLangName = myLang?.name ?? session?.myLanguage ?? 'English';
+    const userMessage = await buildQuestionMessage(questionText, myLangName);
+
     const effectiveModel = getTranslationModelToUse(session);
     if (!effectiveModel) {
         ui.displayError("Please select a model first");
         return;
     }
+    console.log(`[askQuestion] Asking question with model: ${effectiveModel}, chars: ${questionText.length}`);
 
     const translation: Translation = {
         id: generateUuid(),
@@ -1095,7 +1105,7 @@ export async function askQuestion(): Promise<void> {
     renderAllTranslations();
 
     try {
-        const result = await translateRaw(
+        const result = await sendChatMessage(
             config!.openRouterApiKey!,
             userMessage,
             QUESTION_SYSTEM_PROMPT,
@@ -1304,6 +1314,7 @@ function renderTranslationItem(container: HTMLElement, translation: Translation)
 
         const editSource = element.querySelector('.translation-edit-source') as HTMLTextAreaElement | null;
         const editIntent = element.querySelector('.translation-edit-intent') as HTMLTextAreaElement | null;
+        const editArea = element.querySelector('.translation-edit-area') as HTMLElement | null;
         const retranslateBtn = element.querySelector('.retranslate-btn') as HTMLButtonElement | null;
 
         if (retranslateBtn) {
@@ -1313,6 +1324,7 @@ function renderTranslationItem(container: HTMLElement, translation: Translation)
                     ui.displayError("Source text cannot be empty");
                     return;
                 }
+                if (editArea) editArea.style.display = 'none';
                 if (translation.pill === 'question') {
                     ensureEntries(translation);
                     const entry = translation.entries[translation.activeEntryIndex ?? 0];
@@ -1326,7 +1338,6 @@ function renderTranslationItem(container: HTMLElement, translation: Translation)
         }
 
         const editToggleBtn = element.querySelector('.edit-toggle-btn') as HTMLButtonElement | null;
-        const editArea = element.querySelector('.translation-edit-area') as HTMLElement | null;
 
         if (editToggleBtn && editArea) {
             editToggleBtn.addEventListener('click', function() {
@@ -1669,9 +1680,12 @@ export async function retryTranslation(translationId: string): Promise<void> {
     const reasoningLevel = session?.reasoning ?? 'none';
 
     if (translation.pill === 'question') {
-        const userMessage = await buildQuestionMessage(entry.source);
+        const myLang = LANGUAGES.find(function(l) { return l.id === session?.myLanguage; });
+        const myLangName = myLang?.name ?? session?.myLanguage ?? 'English';
+        console.log(`[retryTranslation] Re-asking question with model: ${effectiveModel}, chars: ${entry.source.length}`);
+        const userMessage = await buildQuestionMessage(entry.source, myLangName);
         try {
-            const result = await translateRaw(
+            const result = await sendChatMessage(
                 config!.openRouterApiKey!,
                 userMessage,
                 QUESTION_SYSTEM_PROMPT,
@@ -1684,8 +1698,6 @@ export async function retryTranslation(translationId: string): Promise<void> {
                 console.log('[retryTranslation] API returned empty question answer');
                 translation.status = 'error';
                 translation.error = 'Question answer returned empty. Try again.';
-                syncTopLevelFromActive(translation);
-                saveSessionTranslation(currentSessionId, translation);
             } else {
                 translation.status = 'complete';
                 syncTopLevelFromActive(translation);
@@ -1999,7 +2011,7 @@ export async function retranslateFromEdit(translationId: string, newSource: stri
                         : OUTPUT_LITERAL_RETRANSLATION_PROMPT;
                     const literalSystemPrompt = literalPrompt.replace(/\[LANGUAGE\]/g, myLangName);
                     const literalUserMessage = result.translation;
-                    const literalResult = await translateRaw(
+                    const literalResult = await sendChatMessage(
                         config!.openRouterApiKey!,
                         literalUserMessage,
                         literalSystemPrompt,
@@ -2044,7 +2056,7 @@ export async function retranslateFromEdit(translationId: string, newSource: stri
                 try {
                     const message = await buildInterpretationMessage(translation);
                     console.log('[interpretation] Starting interpretation with model:', session.interpretationModel);
-                    const interpretationResult = await translateRaw(
+                    const interpretationResult = await sendChatMessage(
                         config!.openRouterApiKey!,
                         message,
                         INTERPRETATION_PROMPT,
@@ -2119,7 +2131,7 @@ export async function regenerateInterpretation(translationId: string): Promise<v
     try {
         const message = await buildInterpretationMessage(translation);
         console.log('[regenerateInterpretation] Starting interpretation with model:', session.interpretationModel);
-        const interpretationResult = await translateRaw(
+        const interpretationResult = await sendChatMessage(
             config!.openRouterApiKey!,
             message,
             INTERPRETATION_PROMPT,
@@ -2198,7 +2210,7 @@ export async function regenerateIndependentSections(translationId: string): Prom
     if (session?.literalModel) {
         tasks.push((async () => {
             try {
-                const literalResult = await translateRaw(
+                const literalResult = await sendChatMessage(
                     config!.openRouterApiKey!,
                     literalUserMessage,
                     literalSystemPrompt,
@@ -2260,7 +2272,7 @@ export async function regenerateIndependentSections(translationId: string): Prom
             try {
                 const message = await buildInterpretationMessage(translation);
                 console.log('[interpretation] Starting interpretation with model:', session.interpretationModel);
-                const interpretationResult = await translateRaw(
+                const interpretationResult = await sendChatMessage(
                     config!.openRouterApiKey!,
                     message,
                     INTERPRETATION_PROMPT,
@@ -2300,7 +2312,7 @@ export async function regenerateIndependentSections(translationId: string): Prom
 async function fetchWordDefinitions(model: string, text: string, outputLanguage: string): Promise<string> {
     const prompt = WORD_DEFINITIONS_PROMPT.replace('[TEXT]', text).replace('[LANGUAGE]', outputLanguage);
     console.log('[wordDefinitions] Sending API request, text length:', text.length);
-    const result = await translateRaw(
+    const result = await sendChatMessage(
         config!.openRouterApiKey!,
         prompt,
         'You are a linguistic analysis tool. Output only the requested XML structure with no additional text.',

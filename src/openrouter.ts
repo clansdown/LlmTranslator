@@ -32,8 +32,7 @@ export function setConfig(appConfig: Config): void {
  * @returns {string} Trimmed plain text
  */
 function trimApiText(text: string): string {
-    const stripped = text.replace(/<[^>]+>/g, '').trim();
-    return stripped.length > 60 ? stripped.substring(0, 60) + '...' : stripped;
+    return text.length > 60 ? text.substring(0, 60) + '...' : text;
 }
 
 /**
@@ -752,7 +751,7 @@ export async function translateStructured(
  * @returns {Promise<string>} Raw content string from the model
  * @throws {Error} If API request fails
  */
-export async function translateRaw(
+export async function sendChatMessage(
     apiKey: string,
     userMessage: string,
     systemPrompt: string,
@@ -760,7 +759,7 @@ export async function translateRaw(
     reasoningLevel: string = 'none',
     temperature: number = 0.2
 ): Promise<string> {
-    if (DEBUG_API_CALLS) console.log(`[API] translateRaw starting - model: ${model}, text: "${trimApiText(userMessage)}"`);
+    if (DEBUG_API_CALLS) console.log(`[API] sendChatMessage starting - model: ${model}, chars: ${userMessage.length}, text: "${trimApiText(userMessage)}"`);
 
     /** @type {Array<{role: string; content: string}>} */
     const messages: Array<{role: string; content: string}> = [];
@@ -827,7 +826,7 @@ export async function translateRaw(
     const data = await response.json() as ChatCompletionResponse;
     const message = data.choices && data.choices.length > 0 ? data.choices[0].message : null;
 
-    if (DEBUG_API_CALLS) console.log(`[API] translateRaw completed in ${(performance.now() - apiStartTime).toFixed(0)}ms, model: ${model}`);
+    if (DEBUG_API_CALLS) console.log(`[API] sendChatMessage completed in ${(performance.now() - apiStartTime).toFixed(0)}ms, model: ${model}`);
 
     return message?.content ?? "";
 }
