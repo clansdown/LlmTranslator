@@ -21,6 +21,15 @@ export interface NewlineItem {
 export type TranslationWordItem = WordItem | PunctItem | NewlineItem;
 
 /**
+ * Token usage statistics from an API call.
+ */
+export interface TokenUsage {
+    promptTokens?: number;
+    completionTokens?: number;
+    totalTokens?: number;
+}
+
+/**
  * A single translation result entry.
  * Multiple entries represent retranslations of the same source text (different models, edits, etc.).
  * @property {string} source - Source text for this entry (may differ after retranslateFromEdit)
@@ -41,6 +50,9 @@ export type TranslationWordItem = WordItem | PunctItem | NewlineItem;
  * @property {boolean} wordPending - True while word definitions are loading
  * @property {string} interpretation - How the listener understands the message
  * @property {boolean} interpretationPending - True while interpretation is in progress
+ * @property {string} generationId - OpenRouter generation ID for info lookup
+ * @property {TokenUsage} usage - Token usage from the API call
+ * @property {number} cost - Cost of the API call in USD
  */
 export interface TranslationEntry {
     source: string;
@@ -61,6 +73,9 @@ export interface TranslationEntry {
     wordPending?: boolean;
     interpretation?: string;
     interpretationPending?: boolean;
+    generationId?: string;
+    usage?: TokenUsage;
+    cost?: number;
 }
 
 /**
@@ -73,7 +88,7 @@ export interface Translation {
     entries: TranslationEntry[];
     activeEntryIndex: number;
     timestamp: number;
-    status: 'pending' | 'complete' | 'error';
+    status: 'pending' | 'streaming' | 'complete' | 'error';
     error: string | null;
     answerCollapsed?: boolean;
     sectionsCollapsed?: boolean;

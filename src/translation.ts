@@ -3,7 +3,7 @@
  * Handles translation functionality for input and output panes
  */
 
-import { translateStructured, sendChatMessage } from './openrouter';
+import { translateStructured, sendChatMessage, streamSendChatMessage, streamTranslateStructured, parseTag } from './openrouter';
 import { getPreference, savePreference, listSessions, saveSession, loadSession, deleteSession as storageDeleteSession, getOrCreateDefaultSession, saveSessionTranslation, listSessionTranslations, deleteSessionTranslation } from './storage';
 import { DEBUG_TRANSLATIONS, DEBUG_SESSIONS } from './debug';
 import * as ui from './ui';
@@ -11,6 +11,7 @@ import { LANGUAGES } from './languages';
 import { INPUT_SYSTEM_PROMPT, OUTPUT_SYSTEM_PROMPT, INPUT_INSTRUCTIONS, OUTPUT_INSTRUCTIONS, LITERAL_RETRANSLATION_PROMPT, OUTPUT_LITERAL_RETRANSLATION_PROMPT, QUESTION_SYSTEM_PROMPT, WORD_DEFINITIONS_PROMPT, INTERPRETATION_PROMPT } from './prompts';
 import { renderMarkdown, normalizeForMarkdown } from './markdown';
 import type { Translation, TranslationEntry, TranslationWordItem, WordItem, PunctItem, NewlineItem } from './types/translation';
+import type { StreamingAbortHandle, StreamCallbacks } from './types/api';
 import type { Config } from './types/config';
 import type { TranslationSession, ReasoningLevel } from './types/session';
 
@@ -65,6 +66,89 @@ let modelNameMap: Map<string, string> = new Map();
  * @type {string | null}
  */
 let modelOverride: string | null = null;
+
+/**
+ * Captured DOM element references for a translation item.
+ * All references are queried once during element creation and reused.
+ * Never re-query the DOM for these elements after initial capture.
+ */
+interface TranslationDomRefs {
+    element: HTMLElement;
+    sourceEl: HTMLElement | null;
+    targetEl: HTMLElement | null;
+    thinkingEl: HTMLElement | null;
+    thinkingContentEl: HTMLElement | null;
+    literalEl: HTMLElement | null;
+    explanationEl: HTMLElement | null;
+    nuancesEl: HTMLElement | null;
+    interpretationEl: HTMLElement | null;
+    spinnerEl: HTMLElement | null;
+    errorEl: HTMLElement | null;
+    errorMessageEl: HTMLElement | null;
+    promptEl: HTMLElement | null;
+    modelNameEl: HTMLElement | null;
+    charCountEl: HTMLElement | null;
+    sectionsArea: HTMLElement | null;
+    toggleSectionsBtn: HTMLButtonElement | null;
+    toggleAnswerBtn: HTMLButtonElement | null;
+    retryBtn: HTMLButtonElement | null;
+    regenerateTranslationBtn: HTMLButtonElement | null;
+    regenerateLiteralBtn: HTMLButtonElement | null;
+    regenerateInterpretationBtn: HTMLButtonElement | null;
+    stopGenerationBtn: HTMLButtonElement | null;
+    copySourceBtn: HTMLButtonElement | null;
+    copyTargetBtn: HTMLButtonElement | null;
+    retranslationTabsEl: HTMLElement | null;
+    wordsTab: HTMLElement | null;
+    wordsContent: HTMLElement | null;
+    editArea: HTMLElement | null;
+    editSource: HTMLTextAreaElement | null;
+    editIntent: HTMLTextAreaElement | null;
+    retranslateBtn: HTMLButtonElement | null;
+    editToggleBtn: HTMLButtonElement | null;
+    includeInContextToggle: HTMLInputElement | null;
+}
+
+/**
+ * Map from Translation objects to their captured DOM references.
+ * @type {WeakMap<Translation, TranslationDomRefs>}
+ */
+const domRefsMap: WeakMap<Translation, TranslationDomRefs> = new WeakMap();
+
+/**
+ * Ephemeral streaming state for an in-progress streaming generation.
+ * Not persisted — only exists while the stream is active.
+ */
+interface StreamingState {
+    abort: () => void;
+    accumulatedText: string;
+    accumulatedReasoning: string;
+    lastRenderedBreakIndex: number;
+}
+
+/**
+ * Map from streaming Translation objects to their ephemeral streaming state.
+ * @type {WeakMap<Translation, StreamingState>}
+ */
+const streamingStateMap: WeakMap<Translation, StreamingState> = new WeakMap();
+
+/**
+ * Ephemeral streaming state for literal retranslation streaming.
+ * Tracks the abort handle and accumulated text for the literal back-translation stream.
+ * Literal streaming is simpler than main streaming: no reasoning, no XML tags, plain text only.
+ */
+interface LiteralStreamingState {
+    abort: () => void;
+    accumulatedText: string;
+}
+
+/**
+ * Map from Translation objects to their literal retranslation streaming state.
+ * Separate from streamingStateMap because literal streaming runs concurrently
+ * as a background task after the main translation completes.
+ * @type {WeakMap<Translation, LiteralStreamingState>}
+ */
+const literalStreamingStateMap: WeakMap<Translation, LiteralStreamingState> = new WeakMap();
 
 /**
  * Sets the model override dropdown with available models
@@ -400,6 +484,33 @@ export async function loadTranslationHistory(): Promise<void> {
 
     for (const t of allTranslations) {
         ensureEntries(t);
+        const entry = t.entries[t.activeEntryIndex ?? 0];
+        let needsSave = false;
+        if (entry) {
+            if (t.status === 'streaming' || t.status === 'pending') {
+                t.status = 'error';
+                t.error = 'Generation was interrupted.';
+                needsSave = true;
+            }
+            if (entry.literalPending) {
+                entry.literalPending = false;
+                needsSave = true;
+            }
+            if (entry.wordPending) {
+                entry.wordPending = false;
+                needsSave = true;
+            }
+            if (entry.interpretationPending) {
+                entry.interpretationPending = false;
+                needsSave = true;
+            }
+            if (needsSave) {
+                syncTopLevelFromActive(t);
+                saveSessionTranslation(currentSessionId, t).catch(function(e: unknown) {
+                    console.error('[loadTranslationHistory] Failed to save fixed translation:', e);
+                });
+            }
+        }
     }
 
     if (DEBUG_TRANSLATIONS) {
@@ -557,7 +668,10 @@ export async function switchTranslationEntry(translationId: string, entryIndex: 
     }
     translation.activeEntryIndex = entryIndex;
     syncTopLevelFromActive(translation);
-    updateTranslationItem(translation);
+    const refs = domRefsMap.get(translation);
+    if (refs) {
+        updateTranslationItemContent(translation, refs);
+    }
     saveSessionTranslation(currentSessionId, translation);
 }
 
@@ -684,7 +798,7 @@ export function setupTranslateButtons(): void {
 }
 
 /**
- * Sets up keyboard handlers for textareas to trigger translation on Shift+Enter or Ctrl+Enter
+ * Sets up keyboard handlers for the source textarea: Enter sends as output, Alt+Enter asks a question, Shift+Enter inserts a newline.
  * @returns {void}
  */
 export function setupTextareaKeyHandlers(): void {
@@ -692,12 +806,16 @@ export function setupTextareaKeyHandlers(): void {
 
     if (sourceTextarea) {
         sourceTextarea.addEventListener('keydown', function(event: KeyboardEvent): void {
-            if (event.key === 'Enter' && event.ctrlKey && event.shiftKey) {
-                event.preventDefault();
-                askQuestion();
-            } else if (event.key === 'Enter' && (event.shiftKey || event.ctrlKey)) {
-                event.preventDefault();
-                translate('output');
+            if (event.key === 'Enter') {
+                if (event.shiftKey) {
+                    // Shift+Enter: insert newline (default behavior), do not preventDefault
+                } else if (event.altKey) {
+                    event.preventDefault();
+                    askQuestion();
+                } else {
+                    event.preventDefault();
+                    translate('output');
+                }
             }
         });
     }
@@ -755,7 +873,7 @@ async function buildUserMessage(pill: 'input' | 'output' | 'question', sourceTex
 }
 
 /**
- * Performs translation for the specified mode
+ * Performs translation for the specified mode using streaming
  * @param {'input' | 'output'} mode - Which mode to translate
  * @returns {Promise<void>}
  */
@@ -794,35 +912,10 @@ export async function translate(mode: 'input' | 'output'): Promise<void> {
     const theirLang = LANGUAGES.find(function(l) { return l.id === session?.theirLanguage; });
     const myLang = LANGUAGES.find(function(l) { return l.id === session?.myLanguage; });
     const myLangName = myLang?.name ?? session?.myLanguage ?? 'English';
-    const theirLangName = theirLang?.name ?? session?.theirLanguage ?? 'Foreign';
 
-    let promptName: string;
-    let instructions: string;
-
-    if (mode === 'input') {
-        promptName = session?.interlocutorName ?? theirLang?.name ?? 'Foreign';
-        instructions = INPUT_INSTRUCTIONS.replace('[LANGUAGE]', myLangName);
-    } else {
-        const intentTextarea = document.getElementById('intent-textarea') as HTMLTextAreaElement | null;
-        const intent = intentTextarea?.value.trim() ?? '';
-        const translationInstructions = session?.translationInstructions ?? '';
-        const translationInstructionsBlock = translationInstructions
-            ? `The following are instructions on how the translation should be styled and presented:\n<TRANSLATIONINSTRUCTIONS>${translationInstructions}</TRANSLATIONINSTRUCTIONS>`
-            : '';
-        const intentBlock = intent
-            ? `The following is guidance on the intent of the text to be translated:\n<INTENT>${intent}</INTENT>`
-            : '';
-        instructions = OUTPUT_INSTRUCTIONS.replace('[TRANSLATION_INSTRUCTIONS_BLOCK]', translationInstructionsBlock);
-        instructions = instructions.replace('[INTENT_BLOCK]', intentBlock);
-        instructions = instructions.replace('[LANGUAGE]', myLangName);
-        instructions = instructions.replace('[TARGET_LANGUAGE]', theirLangName);
-        promptName = 'Me';
-        if (intentTextarea) {
-            intentTextarea.value = '';
-        }
-    }
-
-    const userMessage = await buildUserMessage(mode, sourceText, instructions);
+    const promptName = mode === 'input'
+        ? (session?.interlocutorName ?? theirLang?.name ?? 'Foreign')
+        : 'Me';
 
     const translation: Translation = {
         id: generateUuid(),
@@ -833,7 +926,7 @@ export async function translate(mode: 'input' | 'output'): Promise<void> {
             model: effectiveModel ?? '',
             modelName: getModelName(effectiveModel ?? ''),
             prompt: promptName,
-            promptContent: instructions,
+            promptContent: '',
             translation: '',
             explanation: '',
             nuances: '',
@@ -849,7 +942,7 @@ export async function translate(mode: 'input' | 'output'): Promise<void> {
         }],
         activeEntryIndex: 0,
         timestamp: Date.now(),
-        status: 'pending',
+        status: 'streaming',
         error: null
     };
 
@@ -860,150 +953,16 @@ export async function translate(mode: 'input' | 'output'): Promise<void> {
     }
 
     const systemPrompt = mode === 'input' ? INPUT_SYSTEM_PROMPT : OUTPUT_SYSTEM_PROMPT;
-    console.log(`[translate] Starting translation with model: ${effectiveModel}, mode: ${mode}`);
+    console.log(`[translate] Starting streaming translation with model: ${effectiveModel}, mode: ${mode}`);
 
-    try {
-        const result = await translateStructured(
-            config!.openRouterApiKey!,
-            userMessage,
-            systemPrompt,
-            effectiveModel!,
-            reasoningLevel,
-            config!.temperature
-        );
-
-        if (!result.translation || !/\S/.test(result.translation)) {
-            console.log('[translate] API returned empty translation - model:', effectiveModel, 'text:', sourceText.substring(0, 100));
-            translation.status = 'error';
-            translation.error = 'Translation returned empty content. Try again.';
-            syncTopLevelFromActive(translation);
-            saveSessionTranslation(currentSessionId, translation);
-            updateTranslationItem(translation);
-            await refreshBalance();
-            return;
-        }
-
-        translation.entries[0].translation = result.translation;
-        translation.entries[0].explanation = result.explanation;
-        translation.entries[0].nuances = result.nuances;
-        translation.entries[0].reasoning = result.reasoning;
-        translation.entries[0].reasoningDetails = result.reasoningDetails;
-        translation.entries[0].model = effectiveModel ?? '';
-        translation.entries[0].modelName = getModelName(effectiveModel ?? '');
-        translation.status = 'complete';
-        syncTopLevelFromActive(translation);
-        saveSessionTranslation(currentSessionId, translation);
-
-        currentLiteralModel = session?.literalModel ?? null;
-        /** @type {Promise<void>[]} */
-        const tasks: Promise<void>[] = [];
-
-        if (session?.literalModel) {
-            translation.entries[0].literalPending = true;
-            tasks.push((async () => {
-                try {
-                    const literalPrompt = mode === 'input'
-                        ? LITERAL_RETRANSLATION_PROMPT
-                        : OUTPUT_LITERAL_RETRANSLATION_PROMPT;
-                    const literalSystemPrompt = literalPrompt.replace(/\[LANGUAGE\]/g, myLangName);
-                    const literalUserMessage = mode === 'input'
-                        ? sourceText
-                        : result.translation;
-                    console.log('[translateLiteral] Starting literal retranslation with model:', session.literalModel);
-                    const literalResult = await sendChatMessage(
-                        config!.openRouterApiKey!,
-                        literalUserMessage,
-                        literalSystemPrompt,
-                        session.literalModel!,
-                        'none',
-                        config!.temperature
-                    );
-                    translation.entries[0].literalRetranslation = literalResult;
-                    translation.entries[0].literalPending = false;
-                    syncTopLevelFromActive(translation);
-                    saveSessionTranslation(currentSessionId, translation);
-                    updateTranslationItem(translation);
-                } catch (literalError) {
-                    console.error('[translateLiteral] Literal retranslation failed:', literalError);
-                    translation.entries[0].literalPending = false;
-                    updateTranslationItem(translation);
-                }
-            })());
-        }
-
-        const wordDefModel = session?.literalModel ?? effectiveModel;
-        if (wordDefModel) {
-            const wordText = mode === 'input'
-                ? sourceText
-                : result.translation;
-            if (wordText) {
-                translation.entries[0].wordPending = true;
-                tasks.push((async () => {
-                    try {
-                        console.log('[wordDefinitions] Starting word definitions with model:', wordDefModel);
-                        const wordXml = await fetchWordDefinitions(wordDefModel, wordText, myLangName);
-                        translation.entries[0].wordDefinitions = wordXml;
-                        translation.entries[0].wordData = parseWordDefinitions(wordXml);
-                        console.log('[wordDefinitions] Parsed', translation.entries[0].wordData.length, 'word items');
-                        translation.entries[0].wordPending = false;
-                        syncTopLevelFromActive(translation);
-                        saveSessionTranslation(currentSessionId, translation);
-                        updateTranslationItem(translation);
-                        const wordElement = document.getElementById('translation-' + translation.id);
-                        const wordContent = (wordElement as HTMLElement | null)?.querySelector('.translation-words') as HTMLElement | null | undefined;
-                        if (wordContent) {
-                            wordContent.innerHTML = '';
-                            renderWordContent(wordContent, translation);
-                        }
-                    } catch (wordDefError) {
-                        console.error('[wordDefinitions] Failed:', wordDefError);
-                        translation.entries[0].wordPending = false;
-                        updateTranslationItem(translation);
-                    }
-                })());
-            }
-        }
-
-        if (mode === 'output' && session?.interpretationModel) {
-            translation.entries[0].interpretationPending = true;
-            tasks.push((async () => {
-                try {
-                    const message = await buildInterpretationMessage(translation);
-                    console.log('[interpretation] Starting interpretation with model:', session.interpretationModel);
-                    const interpretationResult = await sendChatMessage(
-                        config!.openRouterApiKey!,
-                        message,
-                        INTERPRETATION_PROMPT,
-                        session.interpretationModel!,
-                        session?.interpretationReasoning ?? 'none',
-                        config!.temperature
-                    );
-                    translation.entries[0].interpretation = interpretationResult;
-                    translation.entries[0].interpretationPending = false;
-                    syncTopLevelFromActive(translation);
-                    saveSessionTranslation(currentSessionId, translation);
-                    updateTranslationItem(translation);
-                } catch (interpretationError) {
-                    console.error('[interpretation] Failed:', interpretationError);
-                    translation.entries[0].interpretationPending = false;
-                    updateTranslationItem(translation);
-                }
-            })());
-        }
-
-        if (tasks.length > 0) {
-            Promise.all(tasks)
-                .then(() => updateTranslationItem(translation))
-                .catch(() => updateTranslationItem(translation));
-        }
-        updateTranslationItem(translation);
-    } catch (error) {
-        translation.status = 'error';
-        translation.error = error instanceof Error ? error.message : "Translation failed";
-        updateTranslationItem(translation);
-    }
-
-    await refreshBalance();
+    // Delegate to streaming handler which manages the entire lifecycle
+    await handleTranslateStreaming(
+        translation,
+        mode,
+        systemPrompt,
+        effectiveModel,
+        reasoningLevel
+    );
 }
 
 /**
@@ -1070,6 +1029,7 @@ export async function askQuestion(): Promise<void> {
         ui.displayError("Please select a model first");
         return;
     }
+    const reasoningLevel = session?.reasoning ?? 'none';
     console.log(`[askQuestion] Asking question with model: ${effectiveModel}, chars: ${questionText.length}`);
 
     const translation: Translation = {
@@ -1097,39 +1057,20 @@ export async function askQuestion(): Promise<void> {
         }],
         activeEntryIndex: 0,
         timestamp: Date.now(),
-        status: 'pending',
+        status: 'streaming',
         error: null
     };
 
     allTranslations.push(translation);
     renderAllTranslations();
 
-    try {
-        const result = await sendChatMessage(
-            config!.openRouterApiKey!,
-            userMessage,
-            QUESTION_SYSTEM_PROMPT,
-            effectiveModel!,
-            session?.reasoning ?? 'none',
-            config.questionTemperature
-        );
-        translation.entries[0].translation = result;
-        if (!result || !/\S/.test(result)) {
-            console.log('[askQuestion] API returned empty answer');
-            translation.status = 'error';
-            translation.error = 'Question answer returned empty. Try again.';
-        } else {
-            translation.status = 'complete';
-        }
-        syncTopLevelFromActive(translation);
-        saveSessionTranslation(currentSessionId, translation);
-    } catch (error) {
-        translation.status = 'error';
-        translation.error = error instanceof Error ? error.message : "Failed to get answer";
-    }
-
-    renderAllTranslations();
-    await refreshBalance();
+    // Delegate to streaming handler
+    await handleQuestionStreaming(
+        translation,
+        userMessage,
+        effectiveModel,
+        reasoningLevel
+    );
 }
 
 /**
@@ -1151,42 +1092,38 @@ async function refreshBalance(): Promise<void> {
 }
 
 /**
- * Sets up toggle visibility for explanation/nuances sections
- * @param {HTMLElement} element - The translation item element
+ * Sets up toggle visibility for explanation/nuances sections using captured DOM refs
+ * @param {TranslationDomRefs} refs - Captured DOM references for the translation item
  * @param {Translation} translation - The translation object
  * @returns {void}
  */
-function setupToggleHandler(element: HTMLElement, translation: Translation): void {
-    const toggleSectionsBtn = element.querySelector('.toggle-sections-btn') as HTMLButtonElement | null;
-    const sectionsArea = element.querySelector('.translation-sections-area') as HTMLElement | null;
-    if (toggleSectionsBtn && sectionsArea) {
-            toggleSectionsBtn.addEventListener('click', function() {
-                const isCollapsed = sectionsArea.classList.contains('translation-sections-collapsed');
-                if (isCollapsed) {
-                    sectionsArea.classList.remove('translation-sections-collapsed');
-                    toggleSectionsBtn.textContent = '▼';
-                    translation.sectionsCollapsed = false;
-                } else {
-                    sectionsArea.classList.add('translation-sections-collapsed');
-                    toggleSectionsBtn.textContent = '▶';
-                    translation.sectionsCollapsed = true;
-                }
+function setupToggleHandler(refs: TranslationDomRefs, translation: Translation): void {
+    if (refs.toggleSectionsBtn && refs.sectionsArea) {
+        refs.toggleSectionsBtn.addEventListener('click', function() {
+            const isCollapsed = refs.sectionsArea!.classList.contains('translation-sections-collapsed');
+            if (isCollapsed) {
+                refs.sectionsArea!.classList.remove('translation-sections-collapsed');
+                refs.toggleSectionsBtn!.textContent = '▼';
+                translation.sectionsCollapsed = false;
+            } else {
+                refs.sectionsArea!.classList.add('translation-sections-collapsed');
+                refs.toggleSectionsBtn!.textContent = '▶';
+                translation.sectionsCollapsed = true;
+            }
             saveSessionTranslation(currentSessionId, translation);
         });
     }
 
-    const toggleAnswerBtn = element.querySelector('.toggle-answer-btn') as HTMLButtonElement | null;
-    const answerEl = element.querySelector('.translation-target') as HTMLElement | null;
-    if (toggleAnswerBtn && answerEl) {
-        toggleAnswerBtn.addEventListener('click', function() {
-            const isCollapsed = answerEl.classList.contains('answer-collapsed');
+    if (refs.toggleAnswerBtn && refs.targetEl) {
+        refs.toggleAnswerBtn.addEventListener('click', function() {
+            const isCollapsed = refs.targetEl!.classList.contains('answer-collapsed');
             if (isCollapsed) {
-                answerEl.classList.remove('answer-collapsed');
-                toggleAnswerBtn.textContent = '▲';
+                refs.targetEl!.classList.remove('answer-collapsed');
+                refs.toggleAnswerBtn!.textContent = '▲';
                 translation.answerCollapsed = false;
             } else {
-                answerEl.classList.add('answer-collapsed');
-                toggleAnswerBtn.textContent = '▼';
+                refs.targetEl!.classList.add('answer-collapsed');
+                refs.toggleAnswerBtn!.textContent = '▼';
                 translation.answerCollapsed = true;
             }
             saveSessionTranslation(currentSessionId, translation);
@@ -1195,7 +1132,9 @@ function setupToggleHandler(element: HTMLElement, translation: Translation): voi
 }
 
 /**
- * Renders a single translation item, creating or updating DOM element
+ * Renders a single translation item, creating or updating DOM element.
+ * Captures all dynamic child element references once during creation and stores them
+ * in domRefsMap for efficient subsequent updates.
  * @param {HTMLElement} container - Container element
  * @param {Translation} translation - Translation object
  * @returns {void}
@@ -1219,6 +1158,7 @@ function renderTranslationItem(container: HTMLElement, translation: Translation)
         element.id = elementId;
         element.dataset.pill = translation.pill;
 
+        // Make pane and tab IDs unique per translation item
         const literalPane = element.querySelector('#literal-pane');
         const explanationPane = element.querySelector('#explanation-pane');
         const nuancesPane = element.querySelector('#nuances-pane');
@@ -1229,21 +1169,12 @@ function renderTranslationItem(container: HTMLElement, translation: Translation)
         const nuancesTab = element.querySelector('#nuances-tab');
         const wordsTab = element.querySelector('#words-tab');
         const interpretationTab = element.querySelector('#interpretation-tab');
-        if (literalPane) {
-            literalPane.id = 'literal-pane-' + translation.id;
-        }
-        if (explanationPane) {
-            explanationPane.id = 'explanation-pane-' + translation.id;
-        }
-        if (nuancesPane) {
-            nuancesPane.id = 'nuances-pane-' + translation.id;
-        }
-        if (wordsPane) {
-            wordsPane.id = 'words-pane-' + translation.id;
-        }
-        if (interpretationPane) {
-            interpretationPane.id = 'interpretation-pane-' + translation.id;
-        }
+
+        if (literalPane) literalPane.id = 'literal-pane-' + translation.id;
+        if (explanationPane) explanationPane.id = 'explanation-pane-' + translation.id;
+        if (nuancesPane) nuancesPane.id = 'nuances-pane-' + translation.id;
+        if (wordsPane) wordsPane.id = 'words-pane-' + translation.id;
+        if (interpretationPane) interpretationPane.id = 'interpretation-pane-' + translation.id;
         if (literalTab) {
             literalTab.id = 'literal-tab-' + translation.id;
             literalTab.setAttribute('data-bs-target', '#literal-pane-' + translation.id);
@@ -1267,14 +1198,55 @@ function renderTranslationItem(container: HTMLElement, translation: Translation)
             interpretationTab.setAttribute('aria-controls', 'interpretation-pane-' + translation.id);
         }
 
-        const retryBtn = element.querySelector('.retry-btn');
-        if (retryBtn) {
+        // Capture all dynamic child element references once
+        /** @type {TranslationDomRefs} */
+        const refs: TranslationDomRefs = {
+            element: element,
+            sourceEl: element.querySelector('.translation-source') as HTMLElement | null,
+            targetEl: element.querySelector('.translation-target') as HTMLElement | null,
+            thinkingEl: element.querySelector('.translation-thinking') as HTMLElement | null,
+            thinkingContentEl: element.querySelector('.thinking-content') as HTMLElement | null,
+            literalEl: element.querySelector('.translation-literal') as HTMLElement | null,
+            explanationEl: element.querySelector('.translation-explanation') as HTMLElement | null,
+            nuancesEl: element.querySelector('.translation-nuances') as HTMLElement | null,
+            interpretationEl: element.querySelector('.translation-interpretation') as HTMLElement | null,
+            spinnerEl: element.querySelector('.translation-spinner') as HTMLElement | null,
+            errorEl: element.querySelector('.translation-error') as HTMLElement | null,
+            errorMessageEl: element.querySelector('.error-message') as HTMLElement | null,
+            promptEl: element.querySelector('.translation-prompt') as HTMLElement | null,
+            modelNameEl: element.querySelector('.translation-model-name') as HTMLElement | null,
+            charCountEl: element.querySelector('.translation-char-count') as HTMLElement | null,
+            sectionsArea: element.querySelector('.translation-sections-area') as HTMLElement | null,
+            toggleSectionsBtn: element.querySelector('.toggle-sections-btn') as HTMLButtonElement | null,
+            toggleAnswerBtn: element.querySelector('.toggle-answer-btn') as HTMLButtonElement | null,
+            retryBtn: element.querySelector('.retry-btn') as HTMLButtonElement | null,
+            regenerateTranslationBtn: element.querySelector('.regenerate-translation-btn') as HTMLButtonElement | null,
+            regenerateLiteralBtn: element.querySelector('.regenerate-literal-btn') as HTMLButtonElement | null,
+            regenerateInterpretationBtn: element.querySelector('.regenerate-interpretation-btn') as HTMLButtonElement | null,
+            stopGenerationBtn: element.querySelector('.stop-generation-btn') as HTMLButtonElement | null,
+            copySourceBtn: element.querySelector('.copy-source-btn') as HTMLButtonElement | null,
+            copyTargetBtn: element.querySelector('.copy-target-btn') as HTMLButtonElement | null,
+            retranslationTabsEl: element.querySelector('.retranslation-tabs') as HTMLElement | null,
+            wordsTab: element.querySelector('#words-tab-' + translation.id) as HTMLElement | null,
+            wordsContent: element.querySelector('.translation-words') as HTMLElement | null,
+            editArea: element.querySelector('.translation-edit-area') as HTMLElement | null,
+            editSource: element.querySelector('.translation-edit-source') as HTMLTextAreaElement | null,
+            editIntent: element.querySelector('.translation-edit-intent') as HTMLTextAreaElement | null,
+            retranslateBtn: element.querySelector('.retranslate-btn') as HTMLButtonElement | null,
+            editToggleBtn: element.querySelector('.edit-toggle-btn') as HTMLButtonElement | null,
+            includeInContextToggle: element.querySelector('.include-in-context-toggle') as HTMLInputElement | null
+        };
+        domRefsMap.set(translation, refs);
+
+        // Wire retry button
+        if (refs.retryBtn) {
             const translationId = translation.id;
-            retryBtn.addEventListener('click', function() {
+            refs.retryBtn.addEventListener('click', function() {
                 retryTranslation(translationId);
             });
         }
 
+        // Wire delete button
         const deleteBtn = element.querySelector('.delete-translation-btn') as HTMLButtonElement | null;
         if (deleteBtn) {
             const translationId = translation.id;
@@ -1283,12 +1255,10 @@ function renderTranslationItem(container: HTMLElement, translation: Translation)
             });
         }
 
-        const copySourceBtn = element.querySelector('.copy-source-btn') as HTMLButtonElement | null;
-        const copyTargetBtn = element.querySelector('.copy-target-btn') as HTMLButtonElement | null;
-
-        if (copySourceBtn) {
+        // Wire copy source button
+        if (refs.copySourceBtn) {
             const translationId = translation.id;
-            copySourceBtn.addEventListener('click', function() {
+            refs.copySourceBtn.addEventListener('click', function() {
                 const t = allTranslations.find(function(x) { return x.id === translationId; });
                 if (!t) return;
                 ensureEntries(t);
@@ -1299,9 +1269,10 @@ function renderTranslationItem(container: HTMLElement, translation: Translation)
             });
         }
 
-        if (copyTargetBtn) {
+        // Wire copy target button
+        if (refs.copyTargetBtn) {
             const translationId = translation.id;
-            copyTargetBtn.addEventListener('click', function() {
+            refs.copyTargetBtn.addEventListener('click', function() {
                 const t = allTranslations.find(function(x) { return x.id === translationId; });
                 if (!t) return;
                 ensureEntries(t);
@@ -1312,141 +1283,135 @@ function renderTranslationItem(container: HTMLElement, translation: Translation)
             });
         }
 
-        const editSource = element.querySelector('.translation-edit-source') as HTMLTextAreaElement | null;
-        const editIntent = element.querySelector('.translation-edit-intent') as HTMLTextAreaElement | null;
-        const editArea = element.querySelector('.translation-edit-area') as HTMLElement | null;
-        const retranslateBtn = element.querySelector('.retranslate-btn') as HTMLButtonElement | null;
-
-        if (retranslateBtn) {
-            retranslateBtn.addEventListener('click', function() {
-                const newSource = editSource?.value.trim() ?? '';
+        // Wire retranslate button
+        if (refs.retranslateBtn) {
+            refs.retranslateBtn.addEventListener('click', function() {
+                const newSource = refs.editSource?.value.trim() ?? '';
                 if (!newSource) {
                     ui.displayError("Source text cannot be empty");
                     return;
                 }
-                if (editArea) editArea.style.display = 'none';
+                if (refs.editArea) refs.editArea.style.display = 'none';
                 if (translation.pill === 'question') {
                     ensureEntries(translation);
                     const entry = translation.entries[translation.activeEntryIndex ?? 0];
                     if (entry) entry.source = newSource;
                     retryTranslation(translation.id);
                 } else {
-                    const newIntent = editIntent?.value.trim() ?? '';
+                    const newIntent = refs.editIntent?.value.trim() ?? '';
                     retranslateFromEdit(translation.id, newSource, newIntent);
                 }
             });
         }
 
-        const editToggleBtn = element.querySelector('.edit-toggle-btn') as HTMLButtonElement | null;
-
-        if (editToggleBtn && editArea) {
-            editToggleBtn.addEventListener('click', function() {
+        // Wire edit toggle button
+        if (refs.editToggleBtn && refs.editArea) {
+            refs.editToggleBtn.addEventListener('click', function() {
                 ensureEntries(translation);
                 const activeEntry = translation.entries[translation.activeEntryIndex ?? 0];
-                if (editSource) editSource.value = activeEntry?.source ?? (translation as any).source ?? '';
-                if (editIntent) editIntent.value = activeEntry?.intent ?? (translation as any).intent ?? '';
-                if (editArea.style.display === 'none') {
-                    editArea.style.display = 'block';
+                if (refs.editSource) refs.editSource.value = activeEntry?.source ?? (translation as any).source ?? '';
+                if (refs.editIntent) refs.editIntent.value = activeEntry?.intent ?? (translation as any).intent ?? '';
+                if (refs.editArea!.style.display === 'none') {
+                    refs.editArea!.style.display = 'block';
                 } else {
-                    editArea.style.display = 'none';
+                    refs.editArea!.style.display = 'none';
                 }
             });
         }
 
-        const regenerateTranslationBtn = element.querySelector('.regenerate-translation-btn') as HTMLButtonElement | null;
-        if (regenerateTranslationBtn) {
+        // Wire regenerate translation button
+        if (refs.regenerateTranslationBtn) {
             const translationId = translation.id;
-            regenerateTranslationBtn.addEventListener('click', function() {
+            refs.regenerateTranslationBtn.addEventListener('click', function() {
                 regenerateTranslationById(translationId);
             });
         }
 
-        const regenerateLiteralBtn = element.querySelector('.regenerate-literal-btn') as HTMLButtonElement | null;
-        if (regenerateLiteralBtn) {
+        // Wire regenerate literal button
+        if (refs.regenerateLiteralBtn) {
             const translationId = translation.id;
-            regenerateLiteralBtn.addEventListener('click', function() {
+            refs.regenerateLiteralBtn.addEventListener('click', function() {
                 regenerateIndependentSections(translationId);
             });
         }
 
-        const regenerateInterpretationBtn = element.querySelector('.regenerate-interpretation-btn') as HTMLButtonElement | null;
-        if (regenerateInterpretationBtn) {
+        // Wire regenerate interpretation button
+        if (refs.regenerateInterpretationBtn) {
             const translationId = translation.id;
-            regenerateInterpretationBtn.addEventListener('click', function() {
+            refs.regenerateInterpretationBtn.addEventListener('click', function() {
                 regenerateInterpretation(translationId);
             });
         }
 
-        setupToggleHandler(element, translation);
-
-        if (translation.pill === 'question') {
-            const ctxToggle = element.querySelector('.include-in-context-toggle') as HTMLInputElement | null;
-            if (ctxToggle) {
-                ctxToggle.checked = translation.includeInContext !== false;
-                ctxToggle.addEventListener('change', function() {
-                    translation.includeInContext = ctxToggle.checked;
-                    saveSessionTranslation(currentSessionId, translation);
-                });
-            }
+        // Wire stop generation button
+        if (refs.stopGenerationBtn) {
+            const translationId = translation.id;
+            refs.stopGenerationBtn.addEventListener('click', function() {
+                stopGeneration(translationId);
+            });
         }
 
-        const retranslationTabs = element.querySelector('.retranslation-tabs') as HTMLElement | null;
-        if (retranslationTabs) {
-            retranslationTabs.style.display = 'none';
+        setupToggleHandler(refs, translation);
+
+        // Wire include-in-context toggle for questions
+        if (translation.pill === 'question' && refs.includeInContextToggle) {
+            refs.includeInContextToggle.checked = translation.includeInContext !== false;
+            refs.includeInContextToggle.addEventListener('change', function() {
+                translation.includeInContext = refs.includeInContextToggle!.checked;
+                saveSessionTranslation(currentSessionId, translation);
+            });
+        }
+
+        // Initially hide retranslation tabs
+        if (refs.retranslationTabsEl) {
+            refs.retranslationTabsEl.style.display = 'none';
         }
 
         container.insertBefore(element, container.firstChild);
     }
 
-    if (element && !element.dataset.wordsHandler) {
-        const wordsTab = element.querySelector('#words-tab-' + translation.id) as HTMLElement | null;
-        const wordsContentEl = element.querySelector('.translation-words') as HTMLElement | null;
-        if (wordsTab && wordsContentEl) {
-            wordsTab.addEventListener('click', function() {
-                ensureEntries(translation);
-                console.log('[WordsTab] Clicked, wordData:', translation.entries?.[translation.activeEntryIndex ?? 0]?.wordData?.length, 'wordPending:', translation.entries?.[translation.activeEntryIndex ?? 0]?.wordPending);
-                renderWordContent(wordsContentEl, translation);
-            });
-            element.dataset.wordsHandler = 'true';
-        }
+    const refs = domRefsMap.get(translation);
+    if (!refs) return;
+
+    // Wire words tab click handler (runs once when element is first added to DOM)
+    if (refs.wordsTab && refs.wordsContent && !element.dataset.wordsHandler) {
+        refs.wordsTab.addEventListener('click', function() {
+            ensureEntries(translation);
+            console.log('[WordsTab] Clicked, wordData:', translation.entries?.[translation.activeEntryIndex ?? 0]?.wordData?.length, 'wordPending:', translation.entries?.[translation.activeEntryIndex ?? 0]?.wordPending);
+            renderWordContent(refs.wordsContent!, translation);
+        });
+        element.dataset.wordsHandler = 'true';
     }
 
-    updateTranslationItem(translation);
+    updateTranslationItemContent(translation, refs);
 }
 
 /**
- * Updates an existing translation item's dynamic fields in the DOM
- * Does NOT create elements - use renderTranslationItem for that
+ * Looks up the captured DOM refs for a translation and updates the item's DOM.
+ * This is the public wrapper that auto-resolves refs from the domRefsMap.
  * @param {Translation} translation - Translation object with updated data
  * @returns {void}
  */
 function updateTranslationItem(translation: Translation): void {
-    const element = document.getElementById('translation-' + translation.id);
-    if (!element) return;
+    const refs = domRefsMap.get(translation);
+    if (refs) {
+        updateTranslationItemContent(translation, refs);
+    }
+}
 
-    element.dataset.pill = translation.pill;
+/**
+ * Updates an existing translation item's dynamic fields in the DOM using captured DOM refs.
+ * Does NOT create elements - use renderTranslationItem for that.
+ * For streaming state, use setupStreamingDisplay/updateStreamingContent/teardownStreamingDisplay instead.
+ * @param {Translation} translation - Translation object with updated data
+ * @param {TranslationDomRefs} refs - Captured DOM references for this translation item
+ * @returns {void}
+ */
+function updateTranslationItemContent(translation: Translation, refs: TranslationDomRefs): void {
+    refs.element.dataset.pill = translation.pill;
 
     ensureEntries(translation);
     const entry = translation.entries[translation.activeEntryIndex ?? 0];
-
-    const sourceEl = element.querySelector('.translation-source') as HTMLElement | null;
-    const targetEl = element.querySelector('.translation-target') as HTMLElement | null;
-    const literalEl = element.querySelector('.translation-literal') as HTMLElement | null;
-    const explanationEl = element.querySelector('.translation-explanation') as HTMLElement | null;
-    const nuancesEl = element.querySelector('.translation-nuances') as HTMLElement | null;
-    const spinnerEl = element.querySelector('.translation-spinner') as HTMLElement | null;
-    const errorEl = element.querySelector('.translation-error') as HTMLElement | null;
-    const promptEl = element.querySelector('.translation-prompt') as HTMLElement | null;
-    const modelNameEl = element.querySelector('.translation-model-name') as HTMLElement | null;
-    const charCountEl = element.querySelector('.translation-char-count') as HTMLElement | null;
-    const regenerateLiteralBtn = element.querySelector('.regenerate-literal-btn') as HTMLButtonElement | null;
-    const regenerateInterpretationBtn = element.querySelector('.regenerate-interpretation-btn') as HTMLButtonElement | null;
-    const sectionsArea = element.querySelector('.translation-sections-area') as HTMLElement | null;
-    const toggleSectionsBtn = element.querySelector('.toggle-sections-btn') as HTMLButtonElement | null;
-    const interpretationEl = element.querySelector('.translation-interpretation') as HTMLElement | null;
-    const wordsPane = element.querySelector('#words-pane-' + translation.id) as HTMLElement | null;
-    const wordsContent = element.querySelector('.translation-words') as HTMLElement | null;
-    const retranslationTabsEl = element.querySelector('.retranslation-tabs') as HTMLElement | null;
 
     const entrySource = entry?.source ?? (translation as any).source ?? '';
     const entryTranslation = entry?.translation ?? (translation as any).translation ?? '';
@@ -1463,24 +1428,24 @@ function updateTranslationItem(translation: Translation): void {
     const entryModelName = entry?.modelName ?? (translation as any).modelName ?? '';
     const entryWordData = literalEntry?.wordData ?? (translation as any).wordData;
     const entryWordPending = literalEntry?.wordPending ?? false;
-    const entryIntent = entry?.intent ?? (translation as any).intent ?? '';
 
-    if (sourceEl) {
-        sourceEl.innerHTML = renderMarkdown(normalizeForMarkdown(entrySource));
+    if (refs.sourceEl) {
+        refs.sourceEl.innerHTML = renderMarkdown(normalizeForMarkdown(entrySource));
     }
-    if (promptEl) {
-        promptEl.textContent = entryPrompt;
+    if (refs.promptEl) {
+        refs.promptEl.textContent = entryPrompt;
     }
-    if (modelNameEl) {
-        modelNameEl.textContent = entryModelName;
+    if (refs.modelNameEl) {
+        refs.modelNameEl.textContent = entryModelName;
     }
 
-    if (retranslationTabsEl) {
-        retranslationTabsEl.innerHTML = '';
+    // Build retranslation tabs (entries > 1)
+    if (refs.retranslationTabsEl) {
+        refs.retranslationTabsEl.innerHTML = '';
         if (translation.entries.length <= 1) {
-            retranslationTabsEl.style.display = 'none';
+            refs.retranslationTabsEl.style.display = 'none';
         } else {
-            retranslationTabsEl.style.display = '';
+            refs.retranslationTabsEl.style.display = '';
             const idx = translation.activeEntryIndex ?? 0;
             const ul = document.createElement('ul');
             ul.className = 'nav nav-tabs';
@@ -1502,112 +1467,128 @@ function updateTranslationItem(translation: Translation): void {
                 li.appendChild(btn);
                 ul.appendChild(li);
             }
-            retranslationTabsEl.appendChild(ul);
+            refs.retranslationTabsEl.appendChild(ul);
         }
     }
 
     if (translation.status === 'pending') {
-        if (spinnerEl) spinnerEl.style.display = 'block';
-        if (errorEl) errorEl.style.display = 'none';
-        if (targetEl) targetEl.innerHTML = '';
-        if (regenerateLiteralBtn) regenerateLiteralBtn.style.display = 'none';
-        if (charCountEl) {
-            charCountEl.textContent = `(${entrySource.length}/—)`;
+        if (refs.spinnerEl) refs.spinnerEl.style.display = 'block';
+        if (refs.errorEl) refs.errorEl.style.display = 'none';
+        if (refs.targetEl) refs.targetEl.innerHTML = '';
+        if (refs.regenerateLiteralBtn) refs.regenerateLiteralBtn.style.display = 'none';
+        if (refs.stopGenerationBtn) refs.stopGenerationBtn.style.display = 'none';
+        if (refs.charCountEl) {
+            refs.charCountEl.textContent = `(${entrySource.length}/—)`;
+        }
+    } else if (translation.status === 'streaming') {
+        if (refs.spinnerEl) refs.spinnerEl.style.display = 'none';
+        if (refs.errorEl) refs.errorEl.style.display = 'none';
+        if (refs.stopGenerationBtn) refs.stopGenerationBtn.style.display = 'inline-block';
+        if (refs.regenerateLiteralBtn) refs.regenerateLiteralBtn.style.display = 'none';
+        if (refs.charCountEl) {
+            refs.charCountEl.textContent = `(${entrySource.length}/—)`;
         }
     } else if (translation.status === 'error') {
-        if (spinnerEl) spinnerEl.style.display = 'none';
-        if (targetEl) targetEl.innerHTML = '';
-        if (regenerateLiteralBtn) regenerateLiteralBtn.style.display = 'none';
-        if (charCountEl) {
-            charCountEl.textContent = `(${entrySource.length}/—)`;
+        if (refs.spinnerEl) refs.spinnerEl.style.display = 'none';
+        if (refs.targetEl) refs.targetEl.innerHTML = '';
+        if (refs.regenerateLiteralBtn) refs.regenerateLiteralBtn.style.display = 'none';
+        if (refs.stopGenerationBtn) refs.stopGenerationBtn.style.display = 'none';
+        if (refs.charCountEl) {
+            refs.charCountEl.textContent = `(${entrySource.length}/—)`;
         }
-        if (errorEl) {
-            errorEl.style.display = 'block';
-            const errorMsg = errorEl.querySelector('.error-message') as HTMLElement | null;
-            if (errorMsg) {
-                errorMsg.textContent = translation.error ?? "Translation failed";
+        if (refs.errorEl) {
+            refs.errorEl.style.display = 'block';
+            if (refs.errorMessageEl) {
+                refs.errorMessageEl.textContent = translation.error ?? "Translation failed";
             }
         }
     } else {
-        if (spinnerEl) spinnerEl.style.display = 'none';
-        if (errorEl) errorEl.style.display = 'none';
-        if (targetEl) {
+        // 'complete' status
+        if (refs.spinnerEl) refs.spinnerEl.style.display = 'none';
+        if (refs.errorEl) refs.errorEl.style.display = 'none';
+        if (refs.stopGenerationBtn) refs.stopGenerationBtn.style.display = 'none';
+        if (refs.targetEl) {
             if (!/\S/.test(entryTranslation)) {
-                targetEl.innerHTML = '';
-                if (errorEl) {
-                    errorEl.style.display = 'block';
-                    const errorMsg = errorEl.querySelector('.error-message') as HTMLElement | null;
-                    if (errorMsg) errorMsg.textContent = 'Translation returned empty content. Try again.';
+                refs.targetEl.innerHTML = '';
+                if (refs.errorEl) {
+                    refs.errorEl.style.display = 'block';
+                    if (refs.errorMessageEl) refs.errorMessageEl.textContent = 'Translation returned empty content. Try again.';
                 }
-                if (charCountEl) charCountEl.textContent = `(${entrySource.length}/0)`;
-                if (regenerateLiteralBtn) regenerateLiteralBtn.style.display = 'none';
+                if (refs.charCountEl) refs.charCountEl.textContent = `(${entrySource.length}/0)`;
+                if (refs.regenerateLiteralBtn) refs.regenerateLiteralBtn.style.display = 'none';
             } else if (translation.pill === 'question') {
-                targetEl.innerHTML = renderMarkdown(entryTranslation);
-                const toggleAnswerBtn = element.querySelector('.toggle-answer-btn') as HTMLButtonElement | null;
+                refs.targetEl.innerHTML = renderMarkdown(entryTranslation);
                 if (translation.answerCollapsed) {
-                    targetEl.classList.add('answer-collapsed');
-                    if (toggleAnswerBtn) toggleAnswerBtn.textContent = '▲';
+                    refs.targetEl.classList.add('answer-collapsed');
+                    if (refs.toggleAnswerBtn) refs.toggleAnswerBtn.textContent = '▲';
                 } else {
-                    targetEl.classList.remove('answer-collapsed');
-                    if (toggleAnswerBtn) toggleAnswerBtn.textContent = '▼';
+                    refs.targetEl.classList.remove('answer-collapsed');
+                    if (refs.toggleAnswerBtn) refs.toggleAnswerBtn.textContent = '▼';
                 }
             } else {
-                targetEl.innerHTML = renderMarkdown(normalizeForMarkdown(entryTranslation));
+                refs.targetEl.innerHTML = renderMarkdown(normalizeForMarkdown(entryTranslation));
             }
         }
-        if (charCountEl) {
-            charCountEl.textContent = `(${entrySource.length}/${entryTranslation.length})`;
+        if (refs.charCountEl) {
+            refs.charCountEl.textContent = `(${entrySource.length}/${entryTranslation.length})`;
         }
 
-        if (literalEl) {
-            if (entryLiteralPending) {
-                literalEl.innerHTML = '<div class="spinner-border spinner-border-sm" role="status"></div><span style="margin-left: 0.5rem;">Retranslating...</span>';
-                if (regenerateLiteralBtn) regenerateLiteralBtn.style.display = 'none';
+        if (refs.literalEl) {
+            const literalStreamState = literalStreamingStateMap.get(translation);
+            if (literalStreamState) {
+                // Literal streaming is active; DOM is managed by streaming callbacks
+                if (refs.regenerateLiteralBtn) refs.regenerateLiteralBtn.style.display = 'none';
+            } else if (entryLiteralPending) {
+                refs.literalEl.innerHTML = '<div class="spinner-border spinner-border-sm" role="status"></div><span style="margin-left: 0.5rem;">Retranslating...</span>';
+                if (refs.regenerateLiteralBtn) refs.regenerateLiteralBtn.style.display = 'none';
             } else if (entryLiteralRetranslation) {
-                literalEl.innerHTML = renderMarkdown(entryLiteralRetranslation);
-                if (regenerateLiteralBtn) regenerateLiteralBtn.style.display = currentLiteralModel ? 'inline-block' : 'none';
+                refs.literalEl.innerHTML = renderMarkdown(entryLiteralRetranslation);
+                if (refs.regenerateLiteralBtn) refs.regenerateLiteralBtn.style.display = currentLiteralModel ? 'inline-block' : 'none';
             } else {
-                literalEl.innerHTML = '';
-                if (regenerateLiteralBtn) regenerateLiteralBtn.style.display = currentLiteralModel ? 'inline-block' : 'none';
+                refs.literalEl.innerHTML = '';
+                if (refs.regenerateLiteralBtn) refs.regenerateLiteralBtn.style.display = currentLiteralModel ? 'inline-block' : 'none';
             }
         }
-        if (explanationEl) {
-            explanationEl.innerHTML = entryExplanation ? renderMarkdown(entryExplanation) : '';
+        if (refs.explanationEl) {
+            refs.explanationEl.innerHTML = entryExplanation ? renderMarkdown(entryExplanation) : '';
         }
-        if (nuancesEl) {
-            nuancesEl.innerHTML = entryNuances ? renderMarkdown(entryNuances) : '';
+        if (refs.nuancesEl) {
+            refs.nuancesEl.innerHTML = entryNuances ? renderMarkdown(entryNuances) : '';
         }
 
-        if (interpretationEl) {
+        if (refs.interpretationEl) {
             if (entryInterpretationPending) {
-                interpretationEl.innerHTML = '<div class="spinner-border spinner-border-sm" role="status"></div><span style="margin-left: 0.5rem;">Interpreting...</span>';
-                if (regenerateInterpretationBtn) regenerateInterpretationBtn.style.display = 'none';
+                refs.interpretationEl.innerHTML = '<div class="spinner-border spinner-border-sm" role="status"></div><span style="margin-left: 0.5rem;">Interpreting...</span>';
+                if (refs.regenerateInterpretationBtn) refs.regenerateInterpretationBtn.style.display = 'none';
             } else if (entryInterpretation) {
-                interpretationEl.innerHTML = renderMarkdown(entryInterpretation);
-                if (regenerateInterpretationBtn) regenerateInterpretationBtn.style.display = currentInterpretationModel ? 'inline-block' : 'none';
+                refs.interpretationEl.innerHTML = renderMarkdown(entryInterpretation);
+                if (refs.regenerateInterpretationBtn) refs.regenerateInterpretationBtn.style.display = currentInterpretationModel ? 'inline-block' : 'none';
             } else {
-                interpretationEl.innerHTML = '';
-                if (regenerateInterpretationBtn) regenerateInterpretationBtn.style.display = currentInterpretationModel ? 'inline-block' : 'none';
+                refs.interpretationEl.innerHTML = '';
+                if (refs.regenerateInterpretationBtn) refs.regenerateInterpretationBtn.style.display = currentInterpretationModel ? 'inline-block' : 'none';
             }
         }
 
-        if (regenerateLiteralBtn) regenerateLiteralBtn.style.display = currentLiteralModel ? 'inline-block' : 'none';
-        if (regenerateInterpretationBtn) regenerateInterpretationBtn.style.display = currentInterpretationModel ? 'inline-block' : 'none';
+        if (refs.regenerateLiteralBtn) refs.regenerateLiteralBtn.style.display = currentLiteralModel ? 'inline-block' : 'none';
+        if (refs.regenerateInterpretationBtn) refs.regenerateInterpretationBtn.style.display = currentInterpretationModel ? 'inline-block' : 'none';
 
-        if (sectionsArea && toggleSectionsBtn) {
+        if (refs.sectionsArea && refs.toggleSectionsBtn) {
             if (translation.sectionsCollapsed) {
-                sectionsArea.classList.add('translation-sections-collapsed');
-                toggleSectionsBtn.textContent = '▶';
+                refs.sectionsArea.classList.add('translation-sections-collapsed');
+                refs.toggleSectionsBtn.textContent = '▶';
             } else {
-                sectionsArea.classList.remove('translation-sections-collapsed');
-                toggleSectionsBtn.textContent = '▼';
+                refs.sectionsArea.classList.remove('translation-sections-collapsed');
+                refs.toggleSectionsBtn.textContent = '▼';
             }
         }
     }
 
-    if (wordsPane && wordsContent && wordsPane.classList.contains('active')) {
-        wordsContent.innerHTML = '';
-        renderWordContent(wordsContent, translation);
+    if (refs.wordsTab) {
+        const wordsPane = refs.element.querySelector('#words-pane-' + translation.id) as HTMLElement | null;
+        if (wordsPane && refs.wordsContent && wordsPane.classList.contains('active')) {
+            refs.wordsContent.innerHTML = '';
+            renderWordContent(refs.wordsContent, translation);
+        }
     }
 }
 
@@ -1658,12 +1639,19 @@ export async function retryTranslation(translationId: string): Promise<void> {
         return;
     }
 
+    // Abort any existing stream for this translation
+    const existingStreamState = streamingStateMap.get(translation);
+    if (existingStreamState) {
+        existingStreamState.abort();
+        streamingStateMap.delete(translation);
+    }
+
     ensureEntries(translation);
     const activeIdx = translation.activeEntryIndex ?? 0;
     const entry = translation.entries[activeIdx];
     if (!entry) return;
 
-    translation.status = 'pending';
+    translation.status = 'streaming';
     translation.error = null;
     translation.entries[activeIdx].wordDefinitions = undefined;
     translation.entries[activeIdx].wordData = undefined;
@@ -1684,98 +1672,28 @@ export async function retryTranslation(translationId: string): Promise<void> {
         const myLangName = myLang?.name ?? session?.myLanguage ?? 'English';
         console.log(`[retryTranslation] Re-asking question with model: ${effectiveModel}, chars: ${entry.source.length}`);
         const userMessage = await buildQuestionMessage(entry.source, myLangName);
-        try {
-            const result = await sendChatMessage(
-                config!.openRouterApiKey!,
-                userMessage,
-                QUESTION_SYSTEM_PROMPT,
-                effectiveModel!,
-                reasoningLevel,
-                config.questionTemperature
-            );
-            translation.entries[activeIdx].translation = result;
-            if (!result || !/\S/.test(result)) {
-                console.log('[retryTranslation] API returned empty question answer');
-                translation.status = 'error';
-                translation.error = 'Question answer returned empty. Try again.';
-            } else {
-                translation.status = 'complete';
-                syncTopLevelFromActive(translation);
-                saveSessionTranslation(currentSessionId, translation);
-            }
-        } catch (error) {
-            translation.status = 'error';
-            translation.error = error instanceof Error ? error.message : "Failed to get answer";
-        }
-        renderAllTranslations();
-        await refreshBalance();
+
+        // Delegate to question streaming handler
+        await handleQuestionStreaming(translation, userMessage, effectiveModel, reasoningLevel);
         return;
     }
 
-    let instructions: string;
-    const theirLang = LANGUAGES.find(function(l) { return l.id === session?.theirLanguage; });
-    const myLang = LANGUAGES.find(function(l) { return l.id === session?.myLanguage; });
-    if (translation.pill === 'input') {
-        instructions = INPUT_INSTRUCTIONS.replace('[LANGUAGE]', myLang?.name ?? session?.myLanguage ?? 'English');
-    } else {
-        const translationInstructions = session?.translationInstructions ?? '';
-        const translationInstructionsBlock = translationInstructions
-            ? `The following are instructions on how the translation should be styled and presented:\n<TRANSLATIONINSTRUCTIONS>${translationInstructions}</TRANSLATIONINSTRUCTIONS>`
-            : '';
-        const intentBlock = entry.intent
-            ? `The following is guidance on the intent of the text to be translated:\n<INTENT>${entry.intent}</INTENT>`
-            : '';
-        instructions = OUTPUT_INSTRUCTIONS.replace('[TRANSLATION_INSTRUCTIONS_BLOCK]', translationInstructionsBlock);
-        instructions = instructions.replace('[INTENT_BLOCK]', intentBlock);
-        instructions = instructions.replace('[LANGUAGE]', myLang?.name ?? session?.myLanguage ?? 'English');
-        instructions = instructions.replace('[TARGET_LANGUAGE]', theirLang?.name ?? session?.theirLanguage ?? 'Foreign');
-    }
-
-    const userMessage = await buildUserMessage(translation.pill, entry.source, instructions);
+    console.log(`[retryTranslation] Retrying translation with model: ${effectiveModel}, mode: ${translation.pill}`);
 
     const systemPrompt = translation.pill === 'input' ? INPUT_SYSTEM_PROMPT : OUTPUT_SYSTEM_PROMPT;
 
-    try {
-        const result = await translateStructured(
-            config!.openRouterApiKey!,
-            userMessage,
-            systemPrompt,
-            effectiveModel!,
-            reasoningLevel,
-            config!.temperature
-        );
-
-        if (!result.translation || !/\S/.test(result.translation)) {
-            console.log('[retryTranslation] API returned empty translation - model:', effectiveModel, 'text:', entry.source.substring(0, 100));
-            translation.status = 'error';
-            translation.error = 'Translation returned empty content. Try again.';
-            syncTopLevelFromActive(translation);
-            await saveSessionTranslation(currentSessionId, translation);
-            updateTranslationItem(translation);
-            await refreshBalance();
-            return;
+    // Delegate to streaming handler with timestamp rename and no background tasks
+    await handleTranslateStreaming(
+        translation,
+        translation.pill,
+        systemPrompt,
+        effectiveModel,
+        reasoningLevel,
+        {
+            oldTimestampToDelete: translation.timestamp,
+            skipBackgroundTasks: true
         }
-
-        translation.entries[activeIdx].translation = result.translation;
-        translation.entries[activeIdx].explanation = result.explanation;
-        translation.entries[activeIdx].nuances = result.nuances;
-        translation.entries[activeIdx].reasoning = result.reasoning;
-        translation.entries[activeIdx].reasoningDetails = result.reasoningDetails;
-        translation.entries[activeIdx].model = effectiveModel;
-        translation.entries[activeIdx].modelName = getModelName(effectiveModel);
-        translation.status = 'complete';
-        syncTopLevelFromActive(translation);
-        const oldTimestamp = translation.timestamp;
-        translation.timestamp = Date.now();
-        await saveSessionTranslation(currentSessionId, translation);
-        await deleteSessionTranslation(currentSessionId, oldTimestamp);
-    } catch (error) {
-        translation.status = 'error';
-        translation.error = error instanceof Error ? error.message : "Translation failed";
-    }
-
-    updateTranslationItem(translation);
-    await refreshBalance();
+    );
 }
 
 /**
@@ -1807,80 +1725,69 @@ async function regenerateTranslationById(translationId: string): Promise<void> {
         return;
     }
 
+    // Abort any existing stream
+    const existingStreamState = streamingStateMap.get(translation);
+    if (existingStreamState) {
+        existingStreamState.abort();
+        streamingStateMap.delete(translation);
+    }
+
     ensureEntries(translation);
     const activeIdx = translation.activeEntryIndex ?? 0;
     const currentEntry = translation.entries[activeIdx];
     if (!currentEntry) return;
 
-    translation.status = 'pending';
+    // Create the new entry entry with current source and intent
+    const newEntry: TranslationEntry = {
+        source: currentEntry.source,
+        intent: currentEntry.intent,
+        model: currentEntry.model,
+        modelName: currentEntry.modelName,
+        prompt: currentEntry.prompt,
+        promptContent: currentEntry.promptContent,
+        translation: '',
+        explanation: '',
+        nuances: '',
+        reasoning: '',
+        reasoningDetails: '',
+        literalRetranslation: undefined,
+        literalPending: false,
+        wordDefinitions: undefined,
+        wordData: undefined,
+        wordPending: false,
+        interpretation: undefined,
+        interpretationPending: false
+    };
+    translation.entries.push(newEntry);
+    translation.activeEntryIndex = translation.entries.length - 1;
+    translation.status = 'streaming';
     translation.error = null;
-    updateTranslationItem(translation);
+    renderAllTranslations();
 
     const session = await loadSession(currentSessionId);
     const effectiveModel = getTranslationModelToUse(session);
-    const reasoningLevel = session?.reasoning ?? 'none';
-    const myLang = LANGUAGES.find(function(l) { return l.id === session?.myLanguage; });
-    const instructions = INPUT_INSTRUCTIONS.replace('[LANGUAGE]', myLang?.name ?? session?.myLanguage ?? 'English');
-    const userMessage = await buildUserMessage('input', currentEntry.source, instructions);
-    const systemPrompt = translation.pill === 'input' ? INPUT_SYSTEM_PROMPT : OUTPUT_SYSTEM_PROMPT;
-    try {
-        const result = await translateStructured(
-            config!.openRouterApiKey!,
-            userMessage,
-            systemPrompt,
-            effectiveModel!,
-            reasoningLevel,
-            config!.temperature
-        );
-
-        if (!result.translation || !/\S/.test(result.translation)) {
-            console.log('[regenerateTranslationById] API returned empty translation - model:', effectiveModel, 'text:', currentEntry.source.substring(0, 100));
-            translation.status = 'error';
-            translation.error = 'Translation returned empty content. Try again.';
-            syncTopLevelFromActive(translation);
-            await saveSessionTranslation(currentSessionId, translation);
-            updateTranslationItem(translation);
-            await refreshBalance();
-            return;
-        }
-
-        /** @type {TranslationEntry} */
-        const newEntry: TranslationEntry = {
-            source: currentEntry.source,
-            intent: currentEntry.intent,
-            model: effectiveModel ?? '',
-            modelName: getModelName(effectiveModel ?? ''),
-            prompt: currentEntry.prompt,
-            promptContent: currentEntry.promptContent,
-            translation: result.translation,
-            explanation: result.explanation,
-            nuances: result.nuances,
-            reasoning: result.reasoning,
-            reasoningDetails: result.reasoningDetails,
-            literalRetranslation: undefined,
-            literalPending: false,
-            wordDefinitions: undefined,
-            wordData: undefined,
-            wordPending: false,
-            interpretation: undefined,
-            interpretationPending: false
-        };
-        translation.entries.push(newEntry);
-        translation.activeEntryIndex = translation.entries.length - 1;
-        translation.status = 'complete';
-        syncTopLevelFromActive(translation);
-        const oldTimestamp = translation.timestamp;
-        translation.timestamp = Date.now();
-        await saveSessionTranslation(currentSessionId, translation);
-        await deleteSessionTranslation(currentSessionId, oldTimestamp);
-        updateTranslationItem(translation);
-    } catch (error) {
-        translation.status = 'error';
-        translation.error = error instanceof Error ? error.message : "Translation failed";
-        updateTranslationItem(translation);
+    if (!config || !effectiveModel || !config!.openRouterApiKey!) {
+        ui.displayError("Cannot regenerate: no model selected or no API key");
+        return;
     }
+    const reasoningLevel = session?.reasoning ?? 'none';
 
-    await refreshBalance();
+    const systemPrompt = INPUT_SYSTEM_PROMPT;
+
+    console.log(`[regenerateTranslationById] Regenerating with model: ${effectiveModel}`);
+
+    // Delegate to streaming handler with timestamp rename and no background tasks
+    await handleTranslateStreaming(
+        translation,
+        'input',
+        systemPrompt,
+        effectiveModel,
+        reasoningLevel,
+        {
+            oldTimestampToDelete: translation.timestamp,
+            skipBackgroundTasks: true
+        }
+    );
 }
 
 /**
@@ -1895,6 +1802,13 @@ export async function retranslateFromEdit(translationId: string, newSource: stri
 
     if (!translation) {
         return;
+    }
+
+    // Abort any existing stream
+    const existingStreamState = streamingStateMap.get(translation);
+    if (existingStreamState) {
+        existingStreamState.abort();
+        streamingStateMap.delete(translation);
     }
 
     const session = await loadSession(currentSessionId);
@@ -1912,7 +1826,7 @@ export async function retranslateFromEdit(translationId: string, newSource: stri
         ? session?.interlocutorName ?? theirLang?.name ?? 'Foreign'
         : 'Me';
 
-    translation.status = 'pending';
+    translation.status = 'streaming';
     translation.error = null;
     translation.entries = [{
         source: newSource,
@@ -1936,160 +1850,29 @@ export async function retranslateFromEdit(translationId: string, newSource: stri
     }];
     translation.activeEntryIndex = 0;
     syncTopLevelFromActive(translation);
-    updateTranslationItem(translation);
+    renderAllTranslations();
 
-    let instructions: string;
-    if (translation.pill === 'input') {
-        instructions = INPUT_INSTRUCTIONS.replace('[LANGUAGE]', myLangName);
-    } else {
-        const translationInstructions = session?.translationInstructions ?? '';
-        const translationInstructionsBlock = translationInstructions
-            ? `The following are instructions on how the translation should be styled and presented:\n<TRANSLATIONINSTRUCTIONS>${translationInstructions}</TRANSLATIONINSTRUCTIONS>`
-            : '';
-        const intentBlock = newIntent
-            ? `The following is guidance on the intent of the text to be translated:\n<INTENT>${newIntent}</INTENT>`
-            : '';
-        instructions = OUTPUT_INSTRUCTIONS.replace('[TRANSLATION_INSTRUCTIONS_BLOCK]', translationInstructionsBlock);
-        instructions = instructions.replace('[INTENT_BLOCK]', intentBlock);
-        instructions = instructions.replace('[LANGUAGE]', myLangName);
-        instructions = instructions.replace('[TARGET_LANGUAGE]', theirLang?.name ?? session?.theirLanguage ?? 'Foreign');
+    if (translation.pill === 'question') {
+        console.error('[retranslateFromEdit] Cannot retranslate a question');
+        return;
     }
+    const mode = translation.pill;
+    console.log(`[retranslateFromEdit] Starting streaming translation with model: ${effectiveModel}, mode: ${mode}`);
 
-    const userMessage = await buildUserMessage(translation.pill, newSource, instructions);
+    const systemPrompt = mode === 'input' ? INPUT_SYSTEM_PROMPT : OUTPUT_SYSTEM_PROMPT;
 
-    const systemPrompt = translation.pill === 'input' ? INPUT_SYSTEM_PROMPT : OUTPUT_SYSTEM_PROMPT;
-    console.log(`[translate] Starting translation with model: ${effectiveModel}, mode: ${translation.pill}`);
-
-    try {
-        const result = await translateStructured(
-            config!.openRouterApiKey!,
-            userMessage,
-            systemPrompt,
-            effectiveModel!,
-            reasoningLevel,
-            config!.temperature
-        );
-
-        if (!result.translation || !/\S/.test(result.translation)) {
-            console.log('[retranslateFromEdit] API returned empty translation - model:', effectiveModel, 'text:', newSource.substring(0, 100));
-            translation.status = 'error';
-            translation.error = 'Translation returned empty content. Try again.';
-            syncTopLevelFromActive(translation);
-            const oldTs = translation.timestamp;
-            translation.timestamp = Date.now();
-            await saveSessionTranslation(currentSessionId, translation);
-            await deleteSessionTranslation(currentSessionId, oldTs);
-            updateTranslationItem(translation);
-            await refreshBalance();
-            return;
+    // Delegate to streaming handler with timestamp rename and background tasks
+    await handleTranslateStreaming(
+        translation,
+        mode,
+        systemPrompt,
+        effectiveModel,
+        reasoningLevel,
+        {
+            oldTimestampToDelete: translation.timestamp,
+            skipBackgroundTasks: false
         }
-
-        translation.entries[0].translation = result.translation;
-        translation.entries[0].explanation = result.explanation;
-        translation.entries[0].nuances = result.nuances;
-        translation.entries[0].reasoning = result.reasoning;
-        translation.entries[0].reasoningDetails = result.reasoningDetails;
-        translation.entries[0].model = effectiveModel ?? '';
-        translation.entries[0].modelName = getModelName(effectiveModel ?? '');
-        translation.status = 'complete';
-        syncTopLevelFromActive(translation);
-        const oldTimestamp = translation.timestamp;
-        translation.timestamp = Date.now();
-        await saveSessionTranslation(currentSessionId, translation);
-        await deleteSessionTranslation(currentSessionId, oldTimestamp);
-
-        currentLiteralModel = session?.literalModel ?? null;
-        /** @type {Promise<void>[]} */
-        const tasks: Promise<void>[] = [];
-
-        if (session?.literalModel) {
-            translation.entries[0].literalPending = true;
-            tasks.push((async () => {
-                try {
-                    const literalPrompt = translation.pill === 'input'
-                        ? LITERAL_RETRANSLATION_PROMPT
-                        : OUTPUT_LITERAL_RETRANSLATION_PROMPT;
-                    const literalSystemPrompt = literalPrompt.replace(/\[LANGUAGE\]/g, myLangName);
-                    const literalUserMessage = result.translation;
-                    const literalResult = await sendChatMessage(
-                        config!.openRouterApiKey!,
-                        literalUserMessage,
-                        literalSystemPrompt,
-                        session.literalModel!,
-                        'none',
-                        config!.temperature
-                    );
-                    translation.entries[0].literalRetranslation = literalResult;
-                    translation.entries[0].literalPending = false;
-                    syncTopLevelFromActive(translation);
-                    saveSessionTranslation(currentSessionId, translation);
-                } catch (literalError) {
-                    console.error('[retranslateFromEdit] Literal retranslation failed:', literalError);
-                    translation.entries[0].literalPending = false;
-                }
-            })());
-        }
-
-        const wordDefModel = session?.literalModel ?? effectiveModel;
-        if (wordDefModel && result.translation) {
-            translation.entries[0].wordPending = true;
-            tasks.push((async () => {
-                try {
-                    console.log('[wordDefinitions] Starting word definitions with model:', wordDefModel);
-                    const wordXml = await fetchWordDefinitions(wordDefModel, result.translation, myLangName);
-                    translation.entries[0].wordDefinitions = wordXml;
-                    translation.entries[0].wordData = parseWordDefinitions(wordXml);
-                    console.log('[wordDefinitions] Parsed', translation.entries[0].wordData.length, 'word items');
-                    translation.entries[0].wordPending = false;
-                    syncTopLevelFromActive(translation);
-                    saveSessionTranslation(currentSessionId, translation);
-                } catch (wordDefError) {
-                    console.error('[wordDefinitions] Failed:', wordDefError);
-                    translation.entries[0].wordPending = false;
-                }
-            })());
-        }
-
-        if (session?.interpretationModel && result.translation) {
-            translation.entries[0].interpretationPending = true;
-            tasks.push((async () => {
-                try {
-                    const message = await buildInterpretationMessage(translation);
-                    console.log('[interpretation] Starting interpretation with model:', session.interpretationModel);
-                    const interpretationResult = await sendChatMessage(
-                        config!.openRouterApiKey!,
-                        message,
-                        INTERPRETATION_PROMPT,
-                        session.interpretationModel!,
-                        session?.interpretationReasoning ?? 'none',
-                        config!.temperature
-                    );
-                    translation.entries[0].interpretation = interpretationResult;
-                    translation.entries[0].interpretationPending = false;
-                    syncTopLevelFromActive(translation);
-                    saveSessionTranslation(currentSessionId, translation);
-                    updateTranslationItem(translation);
-                } catch (interpretationError) {
-                    console.error('[interpretation] Failed:', interpretationError);
-                    translation.entries[0].interpretationPending = false;
-                    updateTranslationItem(translation);
-                }
-            })());
-        }
-
-        if (tasks.length > 0) {
-            Promise.all(tasks)
-                .then(() => updateTranslationItem(translation))
-                .catch(() => updateTranslationItem(translation));
-        }
-        updateTranslationItem(translation);
-    } catch (error) {
-        translation.status = 'error';
-        translation.error = error instanceof Error ? error.message : "Translation failed";
-        updateTranslationItem(translation);
-    }
-
-    await refreshBalance();
+    );
 }
 
 /**
@@ -2131,7 +1914,7 @@ export async function regenerateInterpretation(translationId: string): Promise<v
     try {
         const message = await buildInterpretationMessage(translation);
         console.log('[regenerateInterpretation] Starting interpretation with model:', session.interpretationModel);
-        const interpretationResult = await sendChatMessage(
+        const { content: interpretationResult, generationId } = await sendChatMessage(
             config!.openRouterApiKey!,
             message,
             INTERPRETATION_PROMPT,
@@ -2140,6 +1923,10 @@ export async function regenerateInterpretation(translationId: string): Promise<v
             config!.temperature
         );
         entry.interpretation = interpretationResult;
+
+        // Fetch generation info after 1s delay
+        storeGenerationInfo(generationId, config!.openRouterApiKey!, entry);
+
         entry.interpretationPending = false;
         syncTopLevelFromActive(translation);
         saveSessionTranslation(currentSessionId, translation);
@@ -2208,28 +1995,14 @@ export async function regenerateIndependentSections(translationId: string): Prom
     const tasks: Promise<void>[] = [];
 
     if (session?.literalModel) {
-        tasks.push((async () => {
-            try {
-                const literalResult = await sendChatMessage(
-                    config!.openRouterApiKey!,
-                    literalUserMessage,
-                    literalSystemPrompt,
-                    session.literalModel!,
-                    'none',
-                    config!.temperature
-                );
-                console.log('[regenerateLiteral] Literal result:', literalResult.substring(0, 200));
-                entry.literalRetranslation = literalResult;
-                entry.literalPending = false;
-                syncTopLevelFromActive(translation);
-                saveSessionTranslation(currentSessionId, translation);
-                updateTranslationItem(translation);
-            } catch (literalError) {
-                console.error('[regenerateLiteral] Literal retranslation failed:', literalError);
-                entry.literalPending = false;
-                updateTranslationItem(translation);
-            }
-        })());
+        console.log('[regenerateLiteral] Starting literal retranslation streaming with model:', session.literalModel);
+        handleLiteralRetranslationStreaming(
+            translation,
+            literalUserMessage,
+            session.literalModel,
+            myLangName,
+            translation.pill === 'input' ? 'input' : 'output'
+        );
     }
 
     const wordDefModel = session?.literalModel ?? effectiveModel;
@@ -2243,8 +2016,12 @@ export async function regenerateIndependentSections(translationId: string): Prom
                 const wordText = translation.pill === 'input'
                     ? entry.source
                     : entry.translation;
-                const wordXml = await fetchWordDefinitions(wordDefModel, wordText, myLangName);
+                const { xml: wordXml, generationId: wordGenerationId } = await fetchWordDefinitions(wordDefModel, wordText, myLangName);
                 entry.wordDefinitions = wordXml;
+
+                // Fetch generation info after 1s delay
+                storeGenerationInfo(wordGenerationId, config!.openRouterApiKey!, entry);
+
                 entry.wordData = parseWordDefinitions(wordXml);
                 console.log('[wordDefinitions] Parsed', entry.wordData.length, 'word items');
                 entry.wordPending = false;
@@ -2272,7 +2049,7 @@ export async function regenerateIndependentSections(translationId: string): Prom
             try {
                 const message = await buildInterpretationMessage(translation);
                 console.log('[interpretation] Starting interpretation with model:', session.interpretationModel);
-                const interpretationResult = await sendChatMessage(
+                const { content: interpretationResult, generationId } = await sendChatMessage(
                     config!.openRouterApiKey!,
                     message,
                     INTERPRETATION_PROMPT,
@@ -2281,6 +2058,10 @@ export async function regenerateIndependentSections(translationId: string): Prom
                     config!.temperature
                 );
                 entry.interpretation = interpretationResult;
+
+                // Fetch generation info after 1s delay
+                storeGenerationInfo(generationId, config!.openRouterApiKey!, entry);
+
                 entry.interpretationPending = false;
                 syncTopLevelFromActive(translation);
                 saveSessionTranslation(currentSessionId, translation);
@@ -2309,10 +2090,10 @@ export async function regenerateIndependentSections(translationId: string): Prom
  * @returns {Promise<string>} Raw XML response
  * @throws {Error} If API request fails
  */
-async function fetchWordDefinitions(model: string, text: string, outputLanguage: string): Promise<string> {
+async function fetchWordDefinitions(model: string, text: string, outputLanguage: string): Promise<{ xml: string; generationId: string }> {
     const prompt = WORD_DEFINITIONS_PROMPT.replace('[TEXT]', text).replace('[LANGUAGE]', outputLanguage);
     console.log('[wordDefinitions] Sending API request, text length:', text.length);
-    const result = await sendChatMessage(
+    const { content, generationId } = await sendChatMessage(
         config!.openRouterApiKey!,
         prompt,
         'You are a linguistic analysis tool. Output only the requested XML structure with no additional text.',
@@ -2320,8 +2101,8 @@ async function fetchWordDefinitions(model: string, text: string, outputLanguage:
         'none',
         config!.temperature
     );
-    console.log('[wordDefinitions] API response length:', result.length, 'first 200 chars:', result.substring(0, 200));
-    return result;
+    console.log('[wordDefinitions] API response length:', content.length, 'first 200 chars:', content.substring(0, 200));
+    return { xml: content, generationId: generationId };
 }
 
 /**
@@ -2500,4 +2281,702 @@ function renderWordContent(container: HTMLElement, translation: Translation): vo
             container.appendChild(document.createElement('br'));
         }
     }
+}
+
+// ===== Streaming Display Functions =====
+
+/**
+ * Sets up the streaming display structure inside the translation target element.
+ * Creates a markdown-rendered area for completed paragraphs and a raw text span
+ * for the current incomplete paragraph. Shows the stop button and hides interactive controls.
+ * @param {TranslationDomRefs} refs - Captured DOM references
+ * @param {Translation} translation - The translation being streamed
+ * @returns {void}
+ */
+function setupStreamingDisplay(refs: TranslationDomRefs, translation: Translation): void {
+    if (!refs.targetEl) return;
+
+    // Create streaming DOM structure
+    refs.targetEl.innerHTML =
+        '<div class="streaming-markdown"></div>' +
+        '<span class="streaming-raw"></span>';
+
+    // Show stop button, hide interactive buttons
+    if (refs.stopGenerationBtn) refs.stopGenerationBtn.style.display = 'inline-block';
+    if (refs.retryBtn) refs.retryBtn.style.display = 'none';
+    if (refs.regenerateTranslationBtn) refs.regenerateTranslationBtn.style.display = 'none';
+    if (refs.regenerateLiteralBtn) refs.regenerateLiteralBtn.style.display = 'none';
+    if (refs.regenerateInterpretationBtn) refs.regenerateInterpretationBtn.style.display = 'none';
+    if (refs.spinnerEl) refs.spinnerEl.style.display = 'none';
+    if (refs.errorEl) refs.errorEl.style.display = 'none';
+    if (refs.thinkingEl) refs.thinkingEl.style.display = 'none';
+
+    // Update char count for streaming state
+    const sourceLen = translation.entries?.[0]?.source?.length ?? 0;
+    if (refs.charCountEl) {
+        refs.charCountEl.textContent = `(${sourceLen}/—)`;
+    }
+}
+
+/**
+ * Updates the streaming display with new accumulated text and reasoning content.
+ * Shows reasoning (thinking) content while main text hasn't arrived yet.
+ * Renders completed paragraphs as markdown, shows current paragraph as raw text.
+ * Strips XML tags from the display text during streaming for cleaner output.
+ * @param {TranslationDomRefs} refs - Captured DOM references
+ * @param {StreamingState} streamingState - Current streaming state for this translation
+ * @param {string} text - Accumulated main content text
+ * @param {string} reasoning - Accumulated reasoning content text
+ * @returns {void}
+ */
+function updateStreamingContent(
+    refs: TranslationDomRefs,
+    streamingState: StreamingState,
+    text: string,
+    reasoning: string
+): void {
+    // Handle reasoning (thinking) display
+    const hasReasoning = reasoning.length > 0;
+    const hasText = text.length > 0;
+
+    if (refs.thinkingEl) {
+        if (hasReasoning && !hasText) {
+            refs.thinkingEl.style.display = '';
+            if (refs.thinkingContentEl) {
+                refs.thinkingContentEl.textContent = reasoning;
+            }
+        } else {
+            refs.thinkingEl.style.display = 'none';
+        }
+    }
+
+    if (!hasText) return;
+
+    // Strip XML tags for cleaner display during streaming
+    const displayText = text.replace(/<\/?[^>]+>/g, '');
+
+    // Find the streaming structure inside target element
+    const markdownEl = refs.targetEl?.querySelector('.streaming-markdown') as HTMLElement | null;
+    const rawEl = refs.targetEl?.querySelector('.streaming-raw') as HTMLElement | null;
+    if (!markdownEl || !rawEl) return;
+
+    // Check if new paragraphs were completed since last render
+    const lastDoubleNewline = displayText.lastIndexOf('\n\n');
+
+    if (lastDoubleNewline !== -1 && lastDoubleNewline + 2 > streamingState.lastRenderedBreakIndex) {
+        const completedPart = displayText.substring(0, lastDoubleNewline + 2);
+        markdownEl.innerHTML = renderMarkdown(normalizeForMarkdown(completedPart));
+        streamingState.lastRenderedBreakIndex = lastDoubleNewline + 2;
+    }
+
+    // Show current incomplete paragraph as raw text
+    const remainingText = displayText.substring(streamingState.lastRenderedBreakIndex);
+    rawEl.textContent = remainingText;
+}
+
+/**
+ * Tears down the streaming display structure, clearing the target element for
+ * the final rendered view. Hides the stop button and thinking element.
+ * @param {TranslationDomRefs} refs - Captured DOM references
+ * @returns {void}
+ */
+function teardownStreamingDisplay(refs: TranslationDomRefs): void {
+    if (refs.targetEl) {
+        refs.targetEl.innerHTML = '';
+    }
+    if (refs.stopGenerationBtn) {
+        refs.stopGenerationBtn.style.display = 'none';
+    }
+    if (refs.thinkingEl) {
+        refs.thinkingEl.style.display = 'none';
+    }
+}
+
+/**
+ * Extracts a structured TranslationResult from raw text by parsing XML tags.
+ * Falls back to using the full text as translation if no TRANSLATION tag is found.
+ * @param {string} rawText - Raw response text with XML tags
+ * @returns {{translation: string, explanation: string, nuances: string}}
+ */
+function extractStructuredResult(rawText: string): { translation: string; explanation: string; nuances: string } {
+    const result = {
+        translation: parseTag(rawText, 'TRANSLATION'),
+        explanation: parseTag(rawText, 'EXPLANATION'),
+        nuances: parseTag(rawText, 'NUANCES')
+    };
+
+    if (!result.translation) {
+        result.translation = rawText;
+    }
+
+    return result;
+}
+
+// ===== Streaming Orchestration Functions =====
+
+/**
+ * Fetches generation info from OpenRouter after a 1-second delay.
+ * Required because OpenRouter's generation info endpoint needs time to propagate.
+ * @param {string} apiKey - OpenRouter API key
+ * @param {string} generationId - Generation ID from the API response
+ * @returns {Promise<import('./types/api').GenerationInfo | null>} Generation info or null on failure
+ */
+async function fetchGenerationInfoWithDelay(apiKey: string, generationId: string): Promise<import('./types/api').GenerationInfo | null> {
+    await new Promise(function(resolve) { return setTimeout(resolve, 1000); });
+    try {
+        const { getGenerationInfo } = await import('./openrouter');
+        const info = await getGenerationInfo(apiKey, generationId);
+        console.log('[GenerationInfo] ID:', generationId, 'Tokens:', info.usage, 'Cost:', info.cost);
+        return info;
+    } catch (error) {
+        console.error('[GenerationInfo] Failed for', generationId, ':', error);
+        return null;
+    }
+}
+
+/**
+ * Stores generation info (usage tokens, cost) on a TranslationEntry.
+ * Only stores if generationId is provided and entry exists.
+ * @param {string | null} generationId - OpenRouter generation ID
+ * @param {string} apiKey - OpenRouter API key
+ * @param {import('./types/translation').TranslationEntry | null | undefined} entry - Entry to store info on
+ * @returns {Promise<void>}
+ */
+async function storeGenerationInfo(
+    generationId: string | null,
+    apiKey: string,
+    entry: TranslationEntry | null | undefined
+): Promise<void> {
+    if (!generationId || !entry) return;
+    const genInfo = await fetchGenerationInfoWithDelay(apiKey, generationId);
+    if (genInfo) {
+        entry.generationId = generationId;
+        entry.usage = {
+            promptTokens: genInfo.usage?.prompt_tokens,
+            completionTokens: genInfo.usage?.completion_tokens,
+            totalTokens: genInfo.usage?.total_tokens
+        };
+        entry.cost = genInfo.cost;
+    }
+}
+
+// ===== Literal Retranslation Streaming =====
+
+/**
+ * Sets up the streaming display for literal retranslation.
+ * Clears the literal element, hides the regenerate button.
+ * @param {TranslationDomRefs} refs - Captured DOM references
+ * @returns {void}
+ */
+function setupLiteralStreamingDisplay(refs: TranslationDomRefs): void {
+    if (!refs.literalEl) return;
+    refs.literalEl.textContent = '';
+    if (refs.regenerateLiteralBtn) refs.regenerateLiteralBtn.style.display = 'none';
+}
+
+/**
+ * Updates the literal retranslation streaming display with new text.
+ * Sets plain text content (no markdown) on the literal element.
+ * @param {TranslationDomRefs} refs - Captured DOM references
+ * @param {string} text - Accumulated literal text
+ * @returns {void}
+ */
+function updateLiteralStreamingContent(refs: TranslationDomRefs, text: string): void {
+    if (!refs.literalEl) return;
+    refs.literalEl.textContent = text;
+}
+
+/**
+ * Tears down the literal streaming display.
+ * Clears literal element (will be re-rendered by updateTranslationItem on completion).
+ * @param {TranslationDomRefs} refs - Captured DOM references
+ * @returns {void}
+ */
+function teardownLiteralStreamingDisplay(refs: TranslationDomRefs): void {
+    if (refs.literalEl) {
+        refs.literalEl.textContent = '';
+    }
+}
+
+/**
+ * Handles literal retranslation streaming.
+ * Builds the prompt, calls streamSendChatMessage with no reasoning,
+ * and updates the literal element during streaming.
+ * On completion, saves the result to OPFS and calls updateTranslationItem.
+ * @param {Translation} translation - The translation to produce literal for
+ * @param {string} text - The text to literally retranslate
+ * @param {string} model - Literal model ID
+ * @param {string} myLangName - Language name for prompt
+ * @param {'input' | 'output'} mode - Translation mode
+ * @returns {void}
+ */
+function handleLiteralRetranslationStreaming(
+    translation: Translation,
+    text: string,
+    model: string,
+    myLangName: string,
+    mode: 'input' | 'output'
+): void {
+    const refs = domRefsMap.get(translation);
+    if (!refs) return;
+
+    const literalPrompt = mode === 'input'
+        ? LITERAL_RETRANSLATION_PROMPT
+        : OUTPUT_LITERAL_RETRANSLATION_PROMPT;
+    const literalSystemPrompt = literalPrompt.replace(/\[LANGUAGE\]/g, myLangName);
+
+    console.log('[handleLiteralRetranslationStreaming] Starting with model:', model);
+
+    const entry = translation.entries[translation.activeEntryIndex ?? 0];
+    if (!entry) return;
+
+    entry.literalPending = true;
+    entry.literalRetranslation = undefined;
+
+    setupLiteralStreamingDisplay(refs);
+    updateTranslationItem(translation);
+
+    const abortHandle = streamSendChatMessage(
+        config!.openRouterApiKey!,
+        text,
+        literalSystemPrompt,
+        model,
+        {
+            onChunk: function(accumulatedText: string): void {
+                const streamState = literalStreamingStateMap.get(translation);
+                if (!streamState) return;
+                streamState.accumulatedText = accumulatedText;
+                updateLiteralStreamingContent(refs!, accumulatedText);
+            },
+            onDone: function(fullText: string, fullReasoning: string, generationId: string | null): void {
+                literalStreamingStateMap.delete(translation);
+
+                // Fetch generation info after 1s delay
+                if (generationId) {
+                    storeGenerationInfo(generationId, config!.openRouterApiKey!, entry);
+                }
+
+                entry.literalRetranslation = fullText;
+                entry.literalPending = false;
+                syncTopLevelFromActive(translation);
+                saveSessionTranslation(currentSessionId, translation);
+                teardownLiteralStreamingDisplay(refs!);
+                updateTranslationItem(translation);
+            },
+            onError: function(error: Error): void {
+                literalStreamingStateMap.delete(translation);
+                console.error('[handleLiteralRetranslationStreaming] Error:', error);
+                entry.literalPending = false;
+                teardownLiteralStreamingDisplay(refs!);
+                updateTranslationItem(translation);
+            }
+        },
+        'none',
+        config!.temperature
+    );
+
+    literalStreamingStateMap.set(translation, {
+        abort: abortHandle.abort,
+        accumulatedText: ''
+    });
+}
+
+/**
+ * Aborts an active streaming generation for a translation.
+ * Sets status to 'error' and cleans up DOM.
+ * @param {Translation} translation - Translation whose stream to abort
+ * @returns {void}
+ */
+function abortExistingStream(translation: Translation): void {
+    const streamState = streamingStateMap.get(translation);
+    if (streamState) {
+        streamState.abort();
+        streamingStateMap.delete(translation);
+    }
+    translation.status = 'error';
+    translation.error = 'Generation stopped';
+    const refs = domRefsMap.get(translation);
+    if (refs) {
+        teardownStreamingDisplay(refs);
+        updateTranslationItemContent(translation, refs);
+    }
+}
+
+/**
+ * Stops generation for a translation by its ID.
+ * Public entry point for the stop generation button.
+ * @param {string} translationId - ID of the translation whose generation to stop
+ * @returns {void}
+ */
+function stopGeneration(translationId: string): void {
+    const translation = allTranslations.find(function(t) { return t.id === translationId; });
+    if (!translation) return;
+    abortExistingStream(translation);
+}
+
+/**
+ * Runs background tasks after a structured translation stream completes.
+ * Tasks: literal retranslation, word definitions, interpretation.
+ * All use non-streaming API calls and save independently to OPFS.
+ * @param {Translation} translation - The completed translation
+ * @param {'input' | 'output'} mode - Translation mode
+ * @param {string} sourceText - Original source text
+ * @param {string} translationText - The resulting translation text
+ * @returns {Promise<void>}
+ */
+async function startBackgroundTasksAfterStreaming(
+    translation: Translation,
+    mode: 'input' | 'output',
+    sourceText: string,
+    translationText: string
+): Promise<void> {
+    const session = await loadSession(currentSessionId);
+    const myLang = LANGUAGES.find(function(l) { return l.id === session?.myLanguage; });
+    const myLangName = myLang?.name ?? session?.myLanguage ?? 'English';
+
+    /** @type {Promise<void>[]} */
+    const tasks: Promise<void>[] = [];
+
+    if (session?.literalModel) {
+        const literalUserMessage = mode === 'input'
+            ? sourceText
+            : translationText;
+        console.log('[translateLiteral] Starting literal retranslation streaming with model:', session.literalModel);
+        handleLiteralRetranslationStreaming(
+            translation,
+            literalUserMessage,
+            session.literalModel,
+            myLangName,
+            mode
+        );
+    }
+
+    const wordDefModel = session?.literalModel ?? session?.model;
+    if (wordDefModel && translationText) {
+        translation.entries[0].wordPending = true;
+        tasks.push((async () => {
+            try {
+                console.log('[wordDefinitions] Starting word definitions with model:', wordDefModel);
+                const { xml: wordXml, generationId: wordGenerationId } = await fetchWordDefinitions(wordDefModel, translationText, myLangName);
+                translation.entries[0].wordDefinitions = wordXml;
+
+                // Fetch generation info after 1s delay
+                storeGenerationInfo(wordGenerationId, config!.openRouterApiKey!, translation.entries[0]);
+
+                translation.entries[0].wordData = parseWordDefinitions(wordXml);
+                console.log('[wordDefinitions] Parsed', translation.entries[0].wordData.length, 'word items');
+                translation.entries[0].wordPending = false;
+                syncTopLevelFromActive(translation);
+                saveSessionTranslation(currentSessionId, translation);
+                updateTranslationItem(translation);
+            } catch (wordDefError) {
+                console.error('[wordDefinitions] Failed:', wordDefError);
+                translation.entries[0].wordPending = false;
+                updateTranslationItem(translation);
+            }
+        })());
+    }
+
+    if (mode === 'output' && session?.interpretationModel) {
+        translation.entries[0].interpretationPending = true;
+        tasks.push((async () => {
+            try {
+                const message = await buildInterpretationMessage(translation);
+                console.log('[interpretation] Starting interpretation with model:', session.interpretationModel);
+                const { content: interpretationResult, generationId } = await sendChatMessage(
+                    config!.openRouterApiKey!,
+                    message,
+                    INTERPRETATION_PROMPT,
+                    session.interpretationModel!,
+                    session?.interpretationReasoning ?? 'none',
+                    config!.temperature
+                );
+                translation.entries[0].interpretation = interpretationResult;
+
+                // Fetch generation info after 1s delay
+                storeGenerationInfo(generationId, config!.openRouterApiKey!, translation.entries[0]);
+
+                translation.entries[0].interpretationPending = false;
+                syncTopLevelFromActive(translation);
+                saveSessionTranslation(currentSessionId, translation);
+                updateTranslationItem(translation);
+            } catch (interpretationError) {
+                console.error('[interpretation] Failed:', interpretationError);
+                translation.entries[0].interpretationPending = false;
+                updateTranslationItem(translation);
+            }
+        })());
+    }
+
+    if (tasks.length > 0) {
+        Promise.all(tasks)
+            .then(() => updateTranslationItem(translation))
+            .catch(() => updateTranslationItem(translation));
+    }
+}
+
+/**
+ * Options for customizing handleTranslateStreaming behavior.
+ * @property {number} oldTimestampToDelete - If set, renames timestamp and deletes the old OPFS file after save (for retry/regenerate)
+ * @property {boolean} skipBackgroundTasks - If true, skips literal retranslation, word definitions, and interpretation after completion
+ */
+interface TranslateStreamingOptions {
+    oldTimestampToDelete?: number;
+    skipBackgroundTasks?: boolean;
+}
+
+/**
+ * Structured translation using streaming: creates the streaming display, calls the
+ * streaming API, and handles incremental content updates and completion.
+ * Supports optional customization for retry/regenerate paths via options.
+ * @param {Translation} translation - The translation object (already added to allTranslations)
+ * @param {'input' | 'output'} mode - Translation mode
+ * @param {string} systemPrompt - System prompt
+ * @param {string} effectiveModel - Model ID to use
+ * @param {string} reasoningLevel - Reasoning effort level
+ * @param {TranslateStreamingOptions} options - Optional customization
+ * @returns {Promise<void>}
+ */
+async function handleTranslateStreaming(
+    translation: Translation,
+    mode: 'input' | 'output',
+    systemPrompt: string,
+    effectiveModel: string,
+    reasoningLevel: string,
+    options?: TranslateStreamingOptions
+): Promise<void> {
+    const refs = domRefsMap.get(translation);
+    if (!refs) return;
+
+    // Build user message with background, history, and instructions
+    const activeEntry = translation.entries[translation.activeEntryIndex ?? 0];
+    if (!activeEntry) return;
+    const sourceText = activeEntry.source;
+
+    const session = await loadSession(currentSessionId);
+    const myLang = LANGUAGES.find(function(l) { return l.id === session?.myLanguage; });
+    const myLangName = myLang?.name ?? session?.myLanguage ?? 'English';
+    const theirLang = LANGUAGES.find(function(l) { return l.id === session?.theirLanguage; });
+    const theirLangName = theirLang?.name ?? session?.theirLanguage ?? 'Foreign';
+
+    let instructions: string;
+    if (mode === 'input') {
+        instructions = INPUT_INSTRUCTIONS.replace('[LANGUAGE]', myLangName);
+    } else {
+        const intentTextarea = document.getElementById('intent-textarea') as HTMLTextAreaElement | null;
+        const intent = intentTextarea?.value.trim() ?? '';
+        const translationInstructions = session?.translationInstructions ?? '';
+        const translationInstructionsBlock = translationInstructions
+            ? `The following are instructions on how the translation should be styled and presented:\n<TRANSLATIONINSTRUCTIONS>${translationInstructions}</TRANSLATIONINSTRUCTIONS>`
+            : '';
+        const intentBlock = intent
+            ? `The following is guidance on the intent of the text to be translated:\n<INTENT>${intent}</INTENT>`
+            : '';
+        instructions = OUTPUT_INSTRUCTIONS.replace('[TRANSLATION_INSTRUCTIONS_BLOCK]', translationInstructionsBlock);
+        instructions = instructions.replace('[INTENT_BLOCK]', intentBlock);
+        instructions = instructions.replace('[LANGUAGE]', myLangName);
+        instructions = instructions.replace('[TARGET_LANGUAGE]', theirLangName);
+        if (intentTextarea) {
+            intentTextarea.value = '';
+        }
+    }
+
+    const userMessage = await buildUserMessage(mode, sourceText, instructions);
+
+    // Set up streaming display
+    setupStreamingDisplay(refs, translation);
+
+    // Start streaming
+    const abortHandle = streamTranslateStructured(
+        config!.openRouterApiKey!,
+        userMessage,
+        systemPrompt,
+        effectiveModel,
+        {
+            onChunk: function(text: string, reasoning: string): void {
+                const streamState = streamingStateMap.get(translation);
+                if (!streamState) return;
+                streamState.accumulatedText = text;
+                streamState.accumulatedReasoning = reasoning;
+                updateStreamingContent(refs!, streamState, text, reasoning);
+            },
+            onDone: function(fullText: string, fullReasoning: string, generationId: string | null): void {
+                streamingStateMap.delete(translation);
+
+                // Fetch generation info after 1s delay (fire-and-forget)
+                const activeEntry = translation.entries[translation.activeEntryIndex ?? 0];
+                if (generationId && activeEntry) {
+                    storeGenerationInfo(generationId, config!.openRouterApiKey!, activeEntry);
+                }
+
+                // Handle empty response
+                if (!fullText || !/\S/.test(fullText)) {
+                    console.log('[handleTranslateStreaming] API returned empty - model:', effectiveModel, 'text:', sourceText.substring(0, 100));
+                    translation.status = 'error';
+                    translation.error = 'Translation returned empty content. Try again.';
+                    teardownStreamingDisplay(refs!);
+                    syncTopLevelFromActive(translation);
+                    saveSessionTranslation(currentSessionId, translation);
+                    updateTranslationItemContent(translation, refs!);
+                    refreshBalance();
+                    return;
+                }
+
+                // Parse XML tags from the complete response
+                const result = extractStructuredResult(fullText);
+
+                // Handle empty translation content
+                if (!result.translation || !/\S/.test(result.translation)) {
+                    console.log('[handleTranslateStreaming] Empty translation tag - model:', effectiveModel);
+                    translation.status = 'error';
+                    translation.error = 'Translation returned empty content. Try again.';
+                    teardownStreamingDisplay(refs!);
+                    syncTopLevelFromActive(translation);
+                    saveSessionTranslation(currentSessionId, translation);
+                    updateTranslationItemContent(translation, refs!);
+                    refreshBalance();
+                    return;
+                }
+
+                // Populate the active entry with parsed results
+                if (activeEntry) {
+                    activeEntry.translation = result.translation;
+                    activeEntry.explanation = result.explanation;
+                    activeEntry.nuances = result.nuances;
+                    activeEntry.model = effectiveModel;
+                    activeEntry.modelName = getModelName(effectiveModel);
+                }
+                translation.status = 'complete';
+                syncTopLevelFromActive(translation);
+
+                // Handle optional timestamp rename (for retry/regenerate)
+                const oldTs = options?.oldTimestampToDelete;
+                if (oldTs) {
+                    translation.timestamp = Date.now();
+                }
+
+                // Save to OPFS
+                saveSessionTranslation(currentSessionId, translation);
+
+                // Delete old timestamp if renaming
+                if (oldTs) {
+                    (async () => {
+                        try {
+                            await deleteSessionTranslation(currentSessionId, oldTs);
+                        } catch (e) {
+                            console.error('[handleTranslateStreaming] Error deleting old timestamp:', e);
+                        }
+                    })();
+                }
+
+                // Tear down streaming and show final result
+                teardownStreamingDisplay(refs!);
+                updateTranslationItemContent(translation, refs!);
+
+                // Refresh balance
+                refreshBalance();
+            },
+            onError: function(error: Error): void {
+                streamingStateMap.delete(translation);
+                console.error('[handleTranslateStreaming] Error:', error);
+                translation.status = 'error';
+                translation.error = error.message;
+                teardownStreamingDisplay(refs!);
+                updateTranslationItemContent(translation, refs!);
+                refreshBalance();
+            }
+        },
+        reasoningLevel,
+        config!.temperature
+    );
+
+    // Store streaming state for management (abort, pause-as-needed tracking)
+    streamingStateMap.set(translation, {
+        abort: abortHandle.abort,
+        accumulatedText: '',
+        accumulatedReasoning: '',
+        lastRenderedBreakIndex: 0
+    });
+}
+
+/**
+ * Question answering using streaming: creates the streaming display, calls the
+ * streaming API, and handles incremental content updates and completion.
+ * @param {Translation} translation - The question translation object
+ * @param {string} userMessage - The formatted user message
+ * @param {string} effectiveModel - Model ID to use
+ * @param {string} reasoningLevel - Reasoning effort level
+ * @returns {Promise<void>}
+ */
+async function handleQuestionStreaming(
+    translation: Translation,
+    userMessage: string,
+    effectiveModel: string,
+    reasoningLevel: string
+): Promise<void> {
+    const refs = domRefsMap.get(translation);
+    if (!refs) return;
+
+    // Set up streaming display
+    setupStreamingDisplay(refs, translation);
+
+    // Start streaming
+    const abortHandle = streamSendChatMessage(
+        config!.openRouterApiKey!,
+        userMessage,
+        QUESTION_SYSTEM_PROMPT,
+        effectiveModel,
+        {
+            onChunk: function(text: string, reasoning: string): void {
+                const streamState = streamingStateMap.get(translation);
+                if (!streamState) return;
+                streamState.accumulatedText = text;
+                streamState.accumulatedReasoning = reasoning;
+                updateStreamingContent(refs!, streamState, text, reasoning);
+            },
+            onDone: function(fullText: string, fullReasoning: string, generationId: string | null): void {
+                streamingStateMap.delete(translation);
+
+                // Fetch generation info after 1s delay (fire-and-forget)
+                if (generationId) {
+                    storeGenerationInfo(generationId, config!.openRouterApiKey!, translation.entries[0]);
+                }
+
+                translation.entries[0].translation = fullText;
+
+                if (!fullText || !/\S/.test(fullText)) {
+                    console.log('[handleQuestionStreaming] API returned empty answer');
+                    translation.status = 'error';
+                    translation.error = 'Question answer returned empty. Try again.';
+                } else {
+                    translation.status = 'complete';
+                }
+
+                teardownStreamingDisplay(refs!);
+                syncTopLevelFromActive(translation);
+                saveSessionTranslation(currentSessionId, translation);
+                updateTranslationItemContent(translation, refs!);
+                refreshBalance();
+            },
+            onError: function(error: Error): void {
+                streamingStateMap.delete(translation);
+                console.error('[handleQuestionStreaming] Error:', error);
+                translation.status = 'error';
+                translation.error = error.message;
+                teardownStreamingDisplay(refs!);
+                updateTranslationItemContent(translation, refs!);
+                refreshBalance();
+            }
+        },
+        reasoningLevel,
+        config!.questionTemperature
+    );
+
+    // Store streaming state
+    streamingStateMap.set(translation, {
+        abort: abortHandle.abort,
+        accumulatedText: '',
+        accumulatedReasoning: '',
+        lastRenderedBreakIndex: 0
+    });
 }

@@ -804,9 +804,7 @@ export async function listTranslations(pill: 'input' | 'output', limit: number =
                 const file = await fileHandle.getFile();
                 const content = await file.text();
                 const translation = JSON.parse(content) as Translation;
-                if (translation.status === 'complete') {
-                    translations.push(translation);
-                }
+                translations.push(translation);
             } catch (e) {
                 if (DEBUG_TRANSLATIONS) {
                     console.warn(`[listTranslations] Skipping invalid translation file: ${timestamp}`);
@@ -1084,7 +1082,7 @@ export async function listSessionTranslations(sessionId: string, pill: 'input' |
                 const file = await fileHandle.getFile();
                 const content = await file.text();
                 const translation = JSON.parse(content) as Translation;
-                if (translation.status === 'complete' && (translation.pill === pill || (pill === 'output' && translation.pill === 'question'))) {
+                if (translation.pill === pill || (pill === 'output' && translation.pill === 'question')) {
                     translations.push(translation);
                 }
             } catch (e) {

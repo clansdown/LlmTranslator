@@ -47,7 +47,7 @@
         }
 
         .pane-content {
-            padding: 1rem 0;
+            padding: 0.5rem 0;
         }
 
         .text-justify {
@@ -181,6 +181,27 @@
             background-color: var(--bs-info-border-subtle);
         }
 
+        .translation-thinking {
+            display: flex;
+            flex-direction: column-reverse;
+            padding: 0.5rem 0.75rem;
+            font-size: 0.85rem;
+            color: var(--bs-secondary-color);
+            font-style: italic;
+            border-bottom: 1px solid var(--bs-border-color);
+            max-height: 200px;
+            min-height: 0;
+            overflow: hidden;
+        }
+
+        .thinking-content {
+            margin-top: auto;
+            margin-bottom: 0;
+            white-space: pre-wrap;
+            word-break: break-all;
+            overflow-wrap: break-word;
+        }
+
         .conversation-wrapper {
             max-width: 46rem;
             margin: 0 auto;
@@ -233,31 +254,31 @@
         <div class="conversation-wrapper">
             <main>
                 <div class="tab-content row g-3 p-3">
-                    <div class="col-12" id="translation-pane">
+                    <div class="col-12 mt-0" id="translation-pane">
                         <div class="translation-pane">
-                            <div class="pane-toolbar">
-                                <div class="row g-2 align-items-center">
-                                    <div class="col-auto">
-                                        <button type="button" class="btn btn-primary" id="translate-btn" disabled>
-                                            Me
-                                        </button>
-                                        <button type="button" class="btn btn-secondary ms-1" id="ask-btn" disabled>
-                                            Ask
-                                        </button>
-                                        <button type="button" class="btn btn-primary ms-1" id="input-btn" disabled>
-                                            Them
-                                        </button>
-                                    </div>
-                                    <div class="col">
-                                        <select class="form-select form-select-sm ms-2" id="model-override" aria-label="Override model" style="width: auto;">
-                                            <option value="">Default LLM</option>
-                                        </select>
-                                    </div>
-                                </div>
-                            </div>
                             <div class="pane-content">
                                 <textarea class="form-control form-control-sm mb-2" id="intent-textarea" rows="1" placeholder="Intent (e.g., be friendly, stern tone)..."></textarea>
                                 <textarea class="pane-textarea" id="source-textarea" placeholder="Type text to translate..."></textarea>
+                                <div class="pane-toolbar mt-2">
+                                    <div class="row g-2 align-items-center">
+                                        <div class="col-auto">
+                                            <button type="button" class="btn btn-primary" id="translate-btn" disabled>
+                                                Me
+                                            </button>
+                                            <button type="button" class="btn btn-secondary ms-1" id="ask-btn" disabled>
+                                                Ask
+                                            </button>
+                                            <button type="button" class="btn btn-primary ms-1" id="input-btn" disabled>
+                                                Them
+                                            </button>
+                                        </div>
+                                        <div class="col">
+                                            <select class="form-select form-select-sm ms-2" id="model-override" aria-label="Override model" style="width: auto;">
+                                                <option value="">Default LLM</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                </div>
                                 <div id="translations-container"></div>
                             </div>
                         </div>
@@ -279,6 +300,7 @@
                 </div>
                 <div class="col text-end">
                     <span class="ms-2 translation-model-name"></span>
+                    <button type="button" class="btn btn-sm btn-outline-danger stop-generation-btn ms-2" style="display: none;" title="Stop generation">⏹</button>
                     <button type="button" class="btn btn-sm btn-outline-secondary delete-translation-btn ms-2" title="Delete message">✕</button>
                 </div>
             </div>
@@ -293,6 +315,9 @@
                     <button type="button" class="btn btn-sm btn-outline-secondary copy-source-btn" title="Copy to clipboard">📋</button>
                     <button type="button" class="btn btn-sm btn-outline-secondary edit-toggle-btn mt-1" title="Edit">✏️</button>
                 </div>
+            </div>
+            <div class="translation-thinking" style="display: none;">
+                <div class="thinking-content"></div>
             </div>
             <div class="retranslation-tabs px-3 py-1" style="border-top: 1px solid var(--bs-border-color); border-bottom: 1px solid var(--bs-border-color);"></div>
             <div class="row px-3">
@@ -353,8 +378,10 @@
                 </div>
             </div>
             <div class="translation-error" style="display: none; padding: 0.75rem; background: var(--bs-danger-bg-subtle); color: var(--bs-danger);">
-                <div class="error-message"></div>
-                <button type="button" class="btn btn-sm btn-outline-danger mt-2 retry-btn">Retry</button>
+                <div class="d-flex align-items-center gap-2">
+                    <div class="error-message flex-grow-1"></div>
+                    <button type="button" class="btn btn-sm btn-outline-danger retry-btn">Retry</button>
+                </div>
             </div>
         </div>
     </template>
@@ -371,6 +398,7 @@
                 </div>
                 <div class="col text-end">
                     <span class="ms-2 translation-model-name"></span>
+                    <button type="button" class="btn btn-sm btn-outline-danger stop-generation-btn ms-2" style="display: none;" title="Stop generation">⏹</button>
                     <button type="button" class="btn btn-sm btn-outline-secondary delete-translation-btn ms-2" title="Delete message">✕</button>
                 </div>
             </div>
@@ -379,6 +407,9 @@
                 <div class="col-auto p-1">
                     <button type="button" class="btn btn-sm btn-outline-secondary copy-source-btn" title="Copy to clipboard">📋</button>
                 </div>
+            </div>
+            <div class="translation-thinking" style="display: none;">
+                <div class="thinking-content"></div>
             </div>
             <div class="retranslation-tabs px-3 py-1" style="border-top: 1px solid var(--bs-border-color); border-bottom: 1px solid var(--bs-border-color);"></div>
             <div class="row px-3">
@@ -433,8 +464,10 @@
                 </div>
             </div>
             <div class="translation-error" style="display: none; padding: 0.75rem; background: var(--bs-danger-bg-subtle); color: var(--bs-danger);">
-                <div class="error-message"></div>
-                <button type="button" class="btn btn-sm btn-outline-danger mt-2 retry-btn">Retry</button>
+                <div class="d-flex align-items-center gap-2">
+                    <div class="error-message flex-grow-1"></div>
+                    <button type="button" class="btn btn-sm btn-outline-danger retry-btn">Retry</button>
+                </div>
             </div>
         </div>
     </template>
@@ -452,6 +485,7 @@
                 </div>
                 <div class="col text-end">
                     <span class="ms-2 translation-model-name"></span>
+                    <button type="button" class="btn btn-sm btn-outline-danger stop-generation-btn ms-2" style="display: none;" title="Stop generation">⏹</button>
                     <button type="button" class="btn btn-sm btn-outline-secondary delete-translation-btn ms-2" title="Delete message">✕</button>
                 </div>
             </div>
@@ -466,6 +500,9 @@
                 <textarea class="form-control form-control-sm translation-edit-source mb-1" rows="5" placeholder="Edit question..."></textarea>
                 <button type="button" class="btn btn-sm btn-primary retranslate-btn">Regenerate</button>
             </div>
+            <div class="translation-thinking" style="display: none;">
+                <div class="thinking-content"></div>
+            </div>
             <div class="row px-3">
                 <div class="col text-justify p-2">
                     <div class="translation-target"></div>
@@ -479,8 +516,10 @@
                 </div>
             </div>
             <div class="translation-error" style="display: none; padding: 0.75rem; background: var(--bs-danger-bg-subtle); color: var(--bs-danger);">
-                <div class="error-message"></div>
-                <button type="button" class="btn btn-sm btn-outline-danger mt-2 retry-btn">Retry</button>
+                <div class="d-flex align-items-center gap-2">
+                    <div class="error-message flex-grow-1"></div>
+                    <button type="button" class="btn btn-sm btn-outline-danger retry-btn">Retry</button>
+                </div>
             </div>
         </div>
     </template>

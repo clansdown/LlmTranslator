@@ -99,3 +99,110 @@ export interface GenerationInfo {
     };
     cost?: number;
 }
+
+/**
+ * Represents the delta (new token data) within a streaming chat completion chunk.
+ * In streaming mode, each chunk delivers a small piece of the full response via delta fields.
+ * @property {string} content - New text content for this chunk (accumulated across chunks)
+ * @property {string} role - Role of the message author (usually 'assistant')
+ * @property {StreamingReasoningDetail[]} reasoning_details - Reasoning tokens from reasoning-capable models
+ */
+export interface StreamingDelta {
+    content?: string;
+    role?: string;
+    reasoning_details?: StreamingReasoningDetail[];
+}
+
+/**
+ * A reasoning detail entry from a reasoning-capable model's streaming output.
+ * Represents one atomic reasoning token or summary block.
+ */
+export interface StreamingReasoningTextDetail {
+    type: 'reasoning.text';
+    text: string;
+    id: string;
+    format: string;
+    index: number;
+}
+
+/**
+ * A summary-type reasoning detail indicating a reasoning summary block.
+ */
+export interface StreamingReasoningSummaryDetail {
+    type: 'reasoning.summary';
+    summary: string;
+    id: string;
+    format: string;
+}
+
+/**
+ * An encrypted reasoning detail whose content is not visible.
+ */
+export interface StreamingReasoningEncryptedDetail {
+    type: 'reasoning.encrypted';
+    data: string;
+    id: string;
+    format: string;
+}
+
+/**
+ * Union type for all possible reasoning detail shapes in streaming mode.
+ */
+export type StreamingReasoningDetail = StreamingReasoningTextDetail | StreamingReasoningSummaryDetail | StreamingReasoningEncryptedDetail;
+
+/**
+ * A single choice entry within a streaming chat completion chunk.
+ * Streaming choices use `delta` instead of `message` (used in non-streaming responses).
+ * @property {string | null} finish_reason - Why the stream finished (stop, length, error, etc.)
+ * @property {string | null} native_finish_reason - The provider's original finish reason
+ * @property {StreamingDelta} delta - The incremental content for this chunk
+ * @property {StreamingError} error - Provider-side error, if any
+ */
+export interface StreamingChoice {
+    finish_reason: string | null;
+    native_finish_reason: string | null;
+    delta: StreamingDelta;
+    error?: StreamingError;
+}
+
+/**
+ * Error object that may appear in a streaming chunk (mid-stream errors).
+ */
+export interface StreamingError {
+    code: number;
+    message: string;
+}
+
+/**
+ * A single SSE chunk from a streaming chat completion response.
+ * The object type is 'chat.completion.chunk' (not 'chat.completion').
+ * @property {StreamingChoice[]} choices - Streaming choices (typically one)
+ * @property {UsageObject} usage - Usage statistics (only present in the final chunk)
+ */
+export interface StreamingChatCompletionChunk {
+    id: string;
+    object: string;
+    created: number;
+    model: string;
+    choices: StreamingChoice[];
+    usage?: UsageObject;
+}
+
+/**
+ * Callback interface for streaming chat completion consumers.
+ * onChunk is called repeatedly during streaming with accumulated content.
+ * onDone signals successful stream completion with the full text.
+ * onError signals a failure during streaming.
+ */
+export interface StreamCallbacks {
+    onChunk: (accumulatedText: string, accumulatedReasoning: string) => void;
+    onDone: (fullText: string, fullReasoning: string, generationId: string | null) => void;
+    onError: (error: Error) => void;
+}
+
+/**
+ * Handle returned by streaming functions, allowing the caller to abort mid-stream.
+ */
+export interface StreamingAbortHandle {
+    abort: () => void;
+}
