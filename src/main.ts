@@ -225,8 +225,6 @@ export async function init(): Promise<void> {
     translation.setupTextareaKeyHandlers();
     setupSessionSelectorHandler();
     setupNewSessionButtonHandler();
-    await translation.loadTranslationHistory();
-
     settings.setConfig(config);
 
     settings.setupSettingsButton(document.getElementById("config-button") as HTMLButtonElement);

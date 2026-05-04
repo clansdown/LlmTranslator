@@ -95,9 +95,12 @@ interface TranslationDomRefs {
     regenerateTranslationBtn: HTMLButtonElement | null;
     regenerateLiteralBtn: HTMLButtonElement | null;
     regenerateInterpretationBtn: HTMLButtonElement | null;
+    regenerateAnswerBtn: HTMLButtonElement | null;
     stopGenerationBtn: HTMLButtonElement | null;
     copySourceBtn: HTMLButtonElement | null;
     copyTargetBtn: HTMLButtonElement | null;
+    copyAnswerBtn: HTMLButtonElement | null;
+    saveAnswerBtn: HTMLButtonElement | null;
     retranslationTabsEl: HTMLElement | null;
     wordsTab: HTMLElement | null;
     wordsContent: HTMLElement | null;
@@ -273,6 +276,37 @@ export async function setCurrentSession(sessionId: string): Promise<void> {
 
     for (const t of allTranslations) {
         ensureEntries(t);
+    }
+
+    // Fix up interrupted translations from potential previous crashes
+    for (const t of allTranslations) {
+        const entry = t.entries[t.activeEntryIndex ?? 0];
+        let needsSave = false;
+        if (entry) {
+            if (t.status === 'streaming' || t.status === 'pending') {
+                t.status = 'error';
+                t.error = 'Generation was interrupted.';
+                needsSave = true;
+            }
+            if (entry.literalPending) {
+                entry.literalPending = false;
+                needsSave = true;
+            }
+            if (entry.wordPending) {
+                entry.wordPending = false;
+                needsSave = true;
+            }
+            if (entry.interpretationPending) {
+                entry.interpretationPending = false;
+                needsSave = true;
+            }
+            if (needsSave) {
+                syncTopLevelFromActive(t);
+                saveSessionTranslation(currentSessionId, t).catch(function(e: unknown) {
+                    console.error('[setCurrentSession] Failed to save fixed translation:', e);
+                });
+            }
+        }
     }
 
     renderAllTranslations();
@@ -466,62 +500,7 @@ export async function initializeDefaultSession(): Promise<void> {
     }
 }
 
-/**
- * Loads translation history for the current session from OPFS into memory
- * @returns {Promise<void>}
- */
-export async function loadTranslationHistory(): Promise<void> {
-    if (DEBUG_TRANSLATIONS) {
-        console.log('[loadTranslationHistory] Loading translation history...');
-    }
-    const MAX_HISTORY = 1000;
 
-    const inputItems = await listSessionTranslations(currentSessionId, 'input', MAX_HISTORY);
-    const outputItems = await listSessionTranslations(currentSessionId, 'output', MAX_HISTORY);
-    const questionItems = await listSessionTranslations(currentSessionId, 'question', MAX_HISTORY);
-    allTranslations = [...inputItems, ...outputItems, ...questionItems]
-        .sort(function(a, b) { return b.timestamp - a.timestamp; });
-
-    for (const t of allTranslations) {
-        ensureEntries(t);
-        const entry = t.entries[t.activeEntryIndex ?? 0];
-        let needsSave = false;
-        if (entry) {
-            if (t.status === 'streaming' || t.status === 'pending') {
-                t.status = 'error';
-                t.error = 'Generation was interrupted.';
-                needsSave = true;
-            }
-            if (entry.literalPending) {
-                entry.literalPending = false;
-                needsSave = true;
-            }
-            if (entry.wordPending) {
-                entry.wordPending = false;
-                needsSave = true;
-            }
-            if (entry.interpretationPending) {
-                entry.interpretationPending = false;
-                needsSave = true;
-            }
-            if (needsSave) {
-                syncTopLevelFromActive(t);
-                saveSessionTranslation(currentSessionId, t).catch(function(e: unknown) {
-                    console.error('[loadTranslationHistory] Failed to save fixed translation:', e);
-                });
-            }
-        }
-    }
-
-    if (DEBUG_TRANSLATIONS) {
-        console.log(`[loadTranslationHistory] Loaded ${allTranslations.length} total translations`);
-    }
-    renderAllTranslations();
-
-    if (DEBUG_TRANSLATIONS) {
-        console.log('[loadTranslationHistory] Translation history loaded');
-    }
-}
 
 /**
  * Builds the history section for the user message
@@ -529,7 +508,7 @@ export async function loadTranslationHistory(): Promise<void> {
  * @param {boolean} includeQuestions - Whether to include question/answer pairs in history
  * @returns {string} History section or empty string
  */
-function buildHistorySection(includeQuestions: boolean = true, sourcesOnly: boolean = false): string {
+function buildHistorySection(includeQuestions: boolean = true, sourcesOnly: boolean = false, respectQuestionToggle: boolean = true): string {
     const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
     const now = Date.now();
     const cutoff = now - SEVEN_DAYS_MS;
@@ -569,7 +548,7 @@ function buildHistorySection(includeQuestions: boolean = true, sourcesOnly: bool
             if (!sourcesOnly) {
                 history += `<ME>${entry.translation}</ME>\n`;
             }
-        } else if (t.pill === 'question' && includeQuestions && t.includeInContext !== false) {
+        } else if (t.pill === 'question' && includeQuestions && (!respectQuestionToggle || t.includeInContext === true)) {
             history += `<USERQUESTION>${entry.source}</USERQUESTION>\n`;
             if (!sourcesOnly) {
                 history += `<AGENTANSWER>${entry.translation}</AGENTANSWER>\n`;
@@ -624,7 +603,7 @@ function ensureEntries(translation: Translation): void {
     };
     translation.entries = [entry];
     translation.activeEntryIndex = 0;
-    translation.includeInContext = (translation as any).includeInContext;
+    translation.includeInContext = (translation as any).includeInContext ?? false;
 }
 
 /**
@@ -861,7 +840,7 @@ async function buildUserMessage(pill: 'input' | 'output' | 'question', sourceTex
         message += `<BACKGROUND>${background}</BACKGROUND>\n\n`;
     }
 
-    const history = buildHistorySection(pill !== 'input');
+    const history = buildHistorySection(pill !== 'input', false, true);
     if (history) {
         message += history + "\n\n";
     }
@@ -979,7 +958,7 @@ async function buildQuestionMessage(questionText: string, myLanguage?: string): 
         message += `<BACKGROUND>${background}</BACKGROUND>\n\n`;
     }
 
-    const history = buildHistorySection(true, true);
+    const history = buildHistorySection(true, true, false);
     if (history) {
         message += history + "\n\n";
     }
@@ -1035,6 +1014,7 @@ export async function askQuestion(): Promise<void> {
     const translation: Translation = {
         id: generateUuid(),
         pill: 'question',
+        includeInContext: false,
         entries: [{
             source: questionText,
             intent: '',
@@ -1121,10 +1101,21 @@ function setupToggleHandler(refs: TranslationDomRefs, translation: Translation):
                 refs.targetEl!.classList.remove('answer-collapsed');
                 refs.toggleAnswerBtn!.textContent = '▲';
                 translation.answerCollapsed = false;
+                // Show side-toolbar buttons when expanding, if translation is complete with content
+                const entryTranslation2 = translation.entries[translation.activeEntryIndex ?? 0]?.translation ?? '';
+                if (translation.status === 'complete' && /\S/.test(entryTranslation2)) {
+                    if (refs.regenerateAnswerBtn) refs.regenerateAnswerBtn.style.display = 'inline-block';
+                    if (refs.copyAnswerBtn) refs.copyAnswerBtn.style.display = 'inline-block';
+                    if (refs.saveAnswerBtn) refs.saveAnswerBtn.style.display = 'inline-block';
+                }
             } else {
                 refs.targetEl!.classList.add('answer-collapsed');
                 refs.toggleAnswerBtn!.textContent = '▼';
                 translation.answerCollapsed = true;
+                // Hide side-toolbar buttons when collapsing
+                if (refs.regenerateAnswerBtn) refs.regenerateAnswerBtn.style.display = 'none';
+                if (refs.copyAnswerBtn) refs.copyAnswerBtn.style.display = 'none';
+                if (refs.saveAnswerBtn) refs.saveAnswerBtn.style.display = 'none';
             }
             saveSessionTranslation(currentSessionId, translation);
         });
@@ -1142,6 +1133,14 @@ function setupToggleHandler(refs: TranslationDomRefs, translation: Translation):
 function renderTranslationItem(container: HTMLElement, translation: Translation): void {
     const elementId = 'translation-' + translation.id;
     let element = document.getElementById(elementId);
+
+    if (element) {
+        const existingRefs = domRefsMap.get(translation);
+        if (!existingRefs) {
+            element.remove();
+            element = null;
+        }
+    }
 
     if (!element) {
         const template = translation.pill === 'question'
@@ -1223,9 +1222,12 @@ function renderTranslationItem(container: HTMLElement, translation: Translation)
             regenerateTranslationBtn: element.querySelector('.regenerate-translation-btn') as HTMLButtonElement | null,
             regenerateLiteralBtn: element.querySelector('.regenerate-literal-btn') as HTMLButtonElement | null,
             regenerateInterpretationBtn: element.querySelector('.regenerate-interpretation-btn') as HTMLButtonElement | null,
+            regenerateAnswerBtn: element.querySelector('.regenerate-answer-btn') as HTMLButtonElement | null,
             stopGenerationBtn: element.querySelector('.stop-generation-btn') as HTMLButtonElement | null,
             copySourceBtn: element.querySelector('.copy-source-btn') as HTMLButtonElement | null,
             copyTargetBtn: element.querySelector('.copy-target-btn') as HTMLButtonElement | null,
+            copyAnswerBtn: element.querySelector('.copy-answer-btn') as HTMLButtonElement | null,
+            saveAnswerBtn: element.querySelector('.save-answer-btn') as HTMLButtonElement | null,
             retranslationTabsEl: element.querySelector('.retranslation-tabs') as HTMLElement | null,
             wordsTab: element.querySelector('#words-tab-' + translation.id) as HTMLElement | null,
             wordsContent: element.querySelector('.translation-words') as HTMLElement | null,
@@ -1280,6 +1282,39 @@ function renderTranslationItem(container: HTMLElement, translation: Translation)
                 navigator.clipboard.writeText(txt).catch(function() {
                     console.log('Failed to copy translation text');
                 });
+            });
+        }
+
+        // Wire copy answer button
+        if (refs.copyAnswerBtn) {
+            const translationId = translation.id;
+            refs.copyAnswerBtn.addEventListener('click', function() {
+                const t = allTranslations.find(function(x) { return x.id === translationId; });
+                if (!t) return;
+                ensureEntries(t);
+                const txt = t.entries?.[t.activeEntryIndex ?? 0]?.translation ?? (t as any).translation ?? '';
+                navigator.clipboard.writeText(txt).catch(function() {
+                    console.log('Failed to copy answer text');
+                });
+            });
+        }
+
+        // Wire save answer button
+        if (refs.saveAnswerBtn) {
+            const translationId = translation.id;
+            refs.saveAnswerBtn.addEventListener('click', function() {
+                const t = allTranslations.find(function(x) { return x.id === translationId; });
+                if (!t) return;
+                ensureEntries(t);
+                const txt = t.entries?.[t.activeEntryIndex ?? 0]?.translation ?? (t as any).translation ?? '';
+                if (!txt) return;
+                const blob = new Blob([txt], { type: 'text/markdown' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'answer.md';
+                a.click();
+                URL.revokeObjectURL(url);
             });
         }
 
@@ -1343,6 +1378,14 @@ function renderTranslationItem(container: HTMLElement, translation: Translation)
             });
         }
 
+        // Wire regenerate answer button
+        if (refs.regenerateAnswerBtn) {
+            const translationId = translation.id;
+            refs.regenerateAnswerBtn.addEventListener('click', function() {
+                retryTranslation(translationId);
+            });
+        }
+
         // Wire stop generation button
         if (refs.stopGenerationBtn) {
             const translationId = translation.id;
@@ -1355,7 +1398,7 @@ function renderTranslationItem(container: HTMLElement, translation: Translation)
 
         // Wire include-in-context toggle for questions
         if (translation.pill === 'question' && refs.includeInContextToggle) {
-            refs.includeInContextToggle.checked = translation.includeInContext !== false;
+            refs.includeInContextToggle.checked = translation.includeInContext === true;
             refs.includeInContextToggle.addEventListener('change', function() {
                 translation.includeInContext = refs.includeInContextToggle!.checked;
                 saveSessionTranslation(currentSessionId, translation);
@@ -1476,6 +1519,9 @@ function updateTranslationItemContent(translation: Translation, refs: Translatio
         if (refs.errorEl) refs.errorEl.style.display = 'none';
         if (refs.targetEl) refs.targetEl.innerHTML = '';
         if (refs.regenerateLiteralBtn) refs.regenerateLiteralBtn.style.display = 'none';
+        if (refs.regenerateAnswerBtn) refs.regenerateAnswerBtn.style.display = 'none';
+        if (refs.copyAnswerBtn) refs.copyAnswerBtn.style.display = 'none';
+        if (refs.saveAnswerBtn) refs.saveAnswerBtn.style.display = 'none';
         if (refs.stopGenerationBtn) refs.stopGenerationBtn.style.display = 'none';
         if (refs.charCountEl) {
             refs.charCountEl.textContent = `(${entrySource.length}/—)`;
@@ -1485,6 +1531,9 @@ function updateTranslationItemContent(translation: Translation, refs: Translatio
         if (refs.errorEl) refs.errorEl.style.display = 'none';
         if (refs.stopGenerationBtn) refs.stopGenerationBtn.style.display = 'inline-block';
         if (refs.regenerateLiteralBtn) refs.regenerateLiteralBtn.style.display = 'none';
+        if (refs.regenerateAnswerBtn) refs.regenerateAnswerBtn.style.display = 'none';
+        if (refs.copyAnswerBtn) refs.copyAnswerBtn.style.display = 'none';
+        if (refs.saveAnswerBtn) refs.saveAnswerBtn.style.display = 'none';
         if (refs.charCountEl) {
             refs.charCountEl.textContent = `(${entrySource.length}/—)`;
         }
@@ -1492,6 +1541,9 @@ function updateTranslationItemContent(translation: Translation, refs: Translatio
         if (refs.spinnerEl) refs.spinnerEl.style.display = 'none';
         if (refs.targetEl) refs.targetEl.innerHTML = '';
         if (refs.regenerateLiteralBtn) refs.regenerateLiteralBtn.style.display = 'none';
+        if (refs.regenerateAnswerBtn) refs.regenerateAnswerBtn.style.display = translation.pill === 'question' ? 'inline-block' : 'none';
+        if (refs.copyAnswerBtn) refs.copyAnswerBtn.style.display = translation.pill === 'question' ? 'inline-block' : 'none';
+        if (refs.saveAnswerBtn) refs.saveAnswerBtn.style.display = translation.pill === 'question' ? 'inline-block' : 'none';
         if (refs.stopGenerationBtn) refs.stopGenerationBtn.style.display = 'none';
         if (refs.charCountEl) {
             refs.charCountEl.textContent = `(${entrySource.length}/—)`;
@@ -1518,12 +1570,18 @@ function updateTranslationItemContent(translation: Translation, refs: Translatio
                 if (refs.regenerateLiteralBtn) refs.regenerateLiteralBtn.style.display = 'none';
             } else if (translation.pill === 'question') {
                 refs.targetEl.innerHTML = renderMarkdown(entryTranslation);
+                if (refs.regenerateAnswerBtn) refs.regenerateAnswerBtn.style.display = 'inline-block';
+                if (refs.copyAnswerBtn) refs.copyAnswerBtn.style.display = 'inline-block';
+                if (refs.saveAnswerBtn) refs.saveAnswerBtn.style.display = 'inline-block';
                 if (translation.answerCollapsed) {
                     refs.targetEl.classList.add('answer-collapsed');
-                    if (refs.toggleAnswerBtn) refs.toggleAnswerBtn.textContent = '▲';
+                    if (refs.toggleAnswerBtn) refs.toggleAnswerBtn.textContent = '▼';
+                    if (refs.regenerateAnswerBtn) refs.regenerateAnswerBtn.style.display = 'none';
+                    if (refs.copyAnswerBtn) refs.copyAnswerBtn.style.display = 'none';
+                    if (refs.saveAnswerBtn) refs.saveAnswerBtn.style.display = 'none';
                 } else {
                     refs.targetEl.classList.remove('answer-collapsed');
-                    if (refs.toggleAnswerBtn) refs.toggleAnswerBtn.textContent = '▼';
+                    if (refs.toggleAnswerBtn) refs.toggleAnswerBtn.textContent = '▲';
                 }
             } else {
                 refs.targetEl.innerHTML = renderMarkdown(normalizeForMarkdown(entryTranslation));
@@ -2307,7 +2365,10 @@ function setupStreamingDisplay(refs: TranslationDomRefs, translation: Translatio
     if (refs.regenerateTranslationBtn) refs.regenerateTranslationBtn.style.display = 'none';
     if (refs.regenerateLiteralBtn) refs.regenerateLiteralBtn.style.display = 'none';
     if (refs.regenerateInterpretationBtn) refs.regenerateInterpretationBtn.style.display = 'none';
-    if (refs.spinnerEl) refs.spinnerEl.style.display = 'none';
+    if (refs.regenerateAnswerBtn) refs.regenerateAnswerBtn.style.display = 'none';
+    if (refs.copyAnswerBtn) refs.copyAnswerBtn.style.display = 'none';
+    if (refs.saveAnswerBtn) refs.saveAnswerBtn.style.display = 'none';
+    if (refs.spinnerEl) refs.spinnerEl.style.display = 'block';
     if (refs.errorEl) refs.errorEl.style.display = 'none';
     if (refs.thinkingEl) refs.thinkingEl.style.display = 'none';
 
@@ -2335,9 +2396,12 @@ function updateStreamingContent(
     text: string,
     reasoning: string
 ): void {
-    // Handle reasoning (thinking) display
+    // Hide spinner once any content starts arriving
     const hasReasoning = reasoning.length > 0;
     const hasText = text.length > 0;
+    if (refs.spinnerEl) {
+        refs.spinnerEl.style.display = (hasReasoning || hasText) ? 'none' : 'block';
+    }
 
     if (refs.thinkingEl) {
         if (hasReasoning && !hasText) {
@@ -2389,6 +2453,9 @@ function teardownStreamingDisplay(refs: TranslationDomRefs): void {
     }
     if (refs.thinkingEl) {
         refs.thinkingEl.style.display = 'none';
+    }
+    if (refs.spinnerEl) {
+        refs.spinnerEl.style.display = 'none';
     }
 }
 
@@ -2518,7 +2585,10 @@ function handleLiteralRetranslationStreaming(
     mode: 'input' | 'output'
 ): void {
     const refs = domRefsMap.get(translation);
-    if (!refs) return;
+    if (!refs) {
+        console.warn('[handleLiteralRetranslationStreaming] No DOM refs for translation', translation.id);
+        return;
+    }
 
     const literalPrompt = mode === 'input'
         ? LITERAL_RETRANSLATION_PROMPT
@@ -2746,7 +2816,10 @@ async function handleTranslateStreaming(
     options?: TranslateStreamingOptions
 ): Promise<void> {
     const refs = domRefsMap.get(translation);
-    if (!refs) return;
+    if (!refs) {
+        console.warn('[handleTranslateStreaming] No DOM refs for translation', translation.id);
+        return;
+    }
 
     // Build user message with background, history, and instructions
     const activeEntry = translation.entries[translation.activeEntryIndex ?? 0];
@@ -2915,7 +2988,10 @@ async function handleQuestionStreaming(
     reasoningLevel: string
 ): Promise<void> {
     const refs = domRefsMap.get(translation);
-    if (!refs) return;
+    if (!refs) {
+        console.warn('[handleQuestionStreaming] No DOM refs for translation', translation.id);
+        return;
+    }
 
     // Set up streaming display
     setupStreamingDisplay(refs, translation);
