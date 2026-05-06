@@ -3,6 +3,8 @@
  * Contains all UI manipulation and display functions
  */
 
+import { STATE } from './state';
+
 /**
  * Displays an error message using a Bootstrap alert
  * @param {string} message - Error message to display
@@ -62,4 +64,50 @@ export function showSyncProgress(current: number, total: number): void {
  */
 export function hideSyncProgress(complete?: boolean): void {
     // TODO: Implement hiding sync progress
+}
+
+/**
+ * Updates the cloud sync UI elements (toolbar button icon/state)
+ * @returns {void}
+ */
+export function updateCloudSyncUI(): void {
+    const btn = document.getElementById('cloud-sync-btn') as HTMLButtonElement | null;
+    if (!btn) return;
+
+    const sync = STATE.cloudSync;
+
+    if (!sync.enabled) {
+        btn.style.display = 'none';
+        return;
+    }
+
+    btn.style.display = '';
+
+    if (sync.isSyncing) {
+        btn.textContent = '↻';
+        btn.className = 'btn btn-outline-warning btn-sm';
+        btn.disabled = true;
+    } else if (sync.lastError) {
+        btn.textContent = '!';
+        btn.className = 'btn btn-outline-danger btn-sm';
+        btn.disabled = false;
+        btn.title = 'Sync error: ' + sync.lastError;
+    } else if (sync.lastSyncTime) {
+        const minutesAgo = Math.floor((Date.now() - new Date(sync.lastSyncTime).getTime()) / 60000);
+        if (minutesAgo > 10) {
+            btn.textContent = '↑';
+            btn.className = 'btn btn-outline-info btn-sm';
+            btn.title = 'Last synced ' + minutesAgo + ' min ago';
+        } else {
+            btn.textContent = '☁';
+            btn.className = 'btn btn-outline-success btn-sm';
+            btn.title = 'Synced ' + minutesAgo + ' min ago';
+        }
+        btn.disabled = false;
+    } else {
+        btn.textContent = '☁';
+        btn.className = 'btn btn-outline-secondary btn-sm';
+        btn.title = 'Never synced';
+        btn.disabled = false;
+    }
 }

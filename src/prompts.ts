@@ -66,10 +66,14 @@ export const OUTPUT_INSTRUCTIONS: string =
 
 [INTENT_BLOCK]
 
+[TAG_INSTRUCTIONS_BLOCK]
+
 Consider any background context and conversation history provided.
 The explanation and nuances sections should be in [LANGUAGE], while the translation should be in [TARGET_LANGUAGE].
 Follow the system prompt's guidelines for structuring your response.
-Try to preserve the original text's formatting, such as line breaks and paragraph breaks, as much as possible in the <TRANSLATION> tag.`;
+Try to preserve the original text's formatting, such as line breaks and paragraph breaks, as much as possible in the <TRANSLATION> tag.
+Ensure that the translation is inside <TRANSLATION></TRANSLATION> tags, the explanation is inside <EXPLANATION></EXPLANATION> tags, 
+and the nuances are inside <NUANCES></NUANCES> tags, with no additional text outside these tags.`;
 
 /**
  * System prompt for literal retranslation (input mode)

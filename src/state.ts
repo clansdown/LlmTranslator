@@ -21,6 +21,13 @@ export const STATE: AppState = {
         syncEnabled: false,
         syncProgress: null
     },
+    cloudSync: {
+        enabled: false,
+        deleteRemoteOnLocalDelete: true,
+        lastSyncTime: null,
+        isSyncing: false,
+        lastError: null
+    },
     conversationView: {
         minRatingFilter: null,
         entryElementCache: new Map(),

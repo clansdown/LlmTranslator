@@ -65,6 +65,14 @@ export interface ExternalSyncState {
     syncProgress: { current: number; total: number } | null;
 }
 
+export interface CloudSyncState {
+    enabled: boolean;
+    deleteRemoteOnLocalDelete: boolean;
+    lastSyncTime: string | null;
+    isSyncing: boolean;
+    lastError: string | null;
+}
+
 export interface ConversationViewState {
     minRatingFilter: number | null;
     entryElementCache: Map<string, HTMLElement>;
@@ -107,5 +115,6 @@ export interface AppState {
     isGenerating: boolean;
     deferredPrompt: Event | null;
     externalSync: ExternalSyncState;
+    cloudSync: CloudSyncState;
     conversationView: ConversationViewState;
 }

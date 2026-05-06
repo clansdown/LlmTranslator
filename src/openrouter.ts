@@ -12,7 +12,8 @@ import type {
     Message,
     StreamingChatCompletionChunk,
     StreamCallbacks,
-    StreamingAbortHandle
+    StreamingAbortHandle,
+    StreamUsage
 } from './types/api';
 import type { Config } from './types/config';
 import { DEBUG_API_CALLS } from './debug';
@@ -943,6 +944,7 @@ export function streamChatCompletion(
             let accumulatedText = "";
             let accumulatedReasoning = "";
             let generationId: string | null = null;
+            let usage: StreamUsage | null = null;
             let streamEnded = false;
 
             while (!streamEnded) {
@@ -999,6 +1001,15 @@ export function streamChatCompletion(
 
                             callbacks.onChunk(accumulatedText, accumulatedReasoning);
                         }
+
+                        // Capture usage from the final chunk (OpenRouter sends it in the last chunk before [DONE])
+                        if (chunk.usage) {
+                            usage = {
+                                prompt_tokens: chunk.usage.prompt_tokens ?? 0,
+                                completion_tokens: chunk.usage.completion_tokens ?? 0,
+                                total_tokens: chunk.usage.total_tokens ?? 0
+                            };
+                        }
                     } catch (parseError) {
                         if (parseError instanceof SyntaxError) {
                             console.error('[API] Failed to parse streaming chunk:', parseError.message, 'line:', trimmedLine);
@@ -1010,7 +1021,7 @@ export function streamChatCompletion(
             }
 
             if (DEBUG_API_CALLS) console.log(`[API] streamChatCompletion completed - model: ${model}, generationId: ${generationId}`);
-            callbacks.onDone(accumulatedText, accumulatedReasoning, generationId);
+            callbacks.onDone(accumulatedText, accumulatedReasoning, generationId, usage ?? undefined);
         } catch (error) {
             if (aborted) return;
             if (error instanceof DOMException && error.name === 'AbortError') return;

@@ -8,8 +8,12 @@ import * as ui from './ui';
 import * as translation from './translation';
 import { saveApiKey } from './main';
 import { LANGUAGES } from './languages';
+import { getDefaultTags } from './defaultTranslationTags';
+import * as cloudSync from './cloudSync';
+import { STATE } from './state';
 import type { Config } from './types/config';
 import type { VisionModel } from './types/api';
+import type { TranslationTag } from './types/translationTag';
 import type { ReasoningLevel } from './types/session';
 
 /**
@@ -84,9 +88,22 @@ interface SettingsReferences {
     defaultLiteralModelSelect: HTMLSelectElement;
     defaultInterpretationModelSelect: HTMLSelectElement;
     defaultInterpretationReasoningSelect: HTMLSelectElement;
+    tagsListContainer: HTMLDivElement;
+    tagNameInput: HTMLInputElement;
+    tagGuidanceInput: HTMLInputElement;
+    addTagButton: HTMLButtonElement;
+    resetTagsButton: HTMLButtonElement;
+    cloudSyncEnabledInput: HTMLInputElement;
+    cloudSyncDeleteRemoteInput: HTMLInputElement;
+    cloudSyncNowButton: HTMLButtonElement;
+    cloudSyncLastSpan: HTMLSpanElement;
+    cloudSyncStatusDiv: HTMLDivElement;
 }
 
 let refs: SettingsReferences | null = null;
+
+/** @type {TranslationTag[]} */
+let currentEditorTags: TranslationTag[] = [];
 
 /**
  * Sets the application config reference
@@ -156,7 +173,17 @@ function openSettingsModal(): void {
             defaultReasoningSelect: settingsModalElement.querySelector('#settings-default-reasoning') as HTMLSelectElement,
             defaultLiteralModelSelect: settingsModalElement.querySelector('#settings-default-literal-model') as HTMLSelectElement,
             defaultInterpretationModelSelect: settingsModalElement.querySelector('#settings-default-interpretation-model') as HTMLSelectElement,
-            defaultInterpretationReasoningSelect: settingsModalElement.querySelector('#settings-default-interpretation-reasoning') as HTMLSelectElement
+            defaultInterpretationReasoningSelect: settingsModalElement.querySelector('#settings-default-interpretation-reasoning') as HTMLSelectElement,
+            tagsListContainer: settingsModalElement.querySelector('#settings-tags-list') as HTMLDivElement,
+            tagNameInput: settingsModalElement.querySelector('#settings-tag-name') as HTMLInputElement,
+            tagGuidanceInput: settingsModalElement.querySelector('#settings-tag-guidance') as HTMLInputElement,
+            addTagButton: settingsModalElement.querySelector('#settings-add-tag-btn') as HTMLButtonElement,
+            resetTagsButton: settingsModalElement.querySelector('#settings-reset-tags-btn') as HTMLButtonElement,
+            cloudSyncEnabledInput: settingsModalElement.querySelector('#settings-cloud-sync-enabled') as HTMLInputElement,
+            cloudSyncDeleteRemoteInput: settingsModalElement.querySelector('#settings-cloud-sync-delete-remote') as HTMLInputElement,
+            cloudSyncNowButton: settingsModalElement.querySelector('#settings-cloud-sync-now') as HTMLButtonElement,
+            cloudSyncLastSpan: settingsModalElement.querySelector('#settings-cloud-sync-last') as HTMLSpanElement,
+            cloudSyncStatusDiv: settingsModalElement.querySelector('#settings-cloud-sync-status') as HTMLDivElement
         };
 
         setupEventListeners();
@@ -234,6 +261,39 @@ function setupEventListeners(): void {
         syncModelsFromApproval();
     });
 
+    refs.addTagButton.addEventListener('click', addTag);
+    refs.tagNameInput.addEventListener('keydown', function(event: KeyboardEvent) {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            addTag();
+        }
+    });
+    refs.tagGuidanceInput.addEventListener('keydown', function(event: KeyboardEvent) {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            addTag();
+        }
+    });
+    refs.resetTagsButton.addEventListener('click', resetTagsToDefaults);
+
+    refs.cloudSyncEnabledInput.addEventListener('change', function() {
+        if (refs!.cloudSyncEnabledInput.checked) {
+            cloudSync.enableCloudSync();
+        } else {
+            cloudSync.disableCloudSync();
+        }
+        populateCloudSyncSettings();
+    });
+
+    refs.cloudSyncDeleteRemoteInput.addEventListener('change', function() {
+        cloudSync.setDeleteRemoteOnLocalDelete(refs!.cloudSyncDeleteRemoteInput.checked);
+    });
+
+    refs.cloudSyncNowButton.addEventListener('click', async function() {
+        await cloudSync.triggerManualSync();
+        populateCloudSyncSettings();
+    });
+
     if (settingsModalElement) {
         settingsModalElement.querySelectorAll('[data-bs-toggle="tab"]').forEach(function(btn) {
             btn.addEventListener('shown.bs.tab', async function() {
@@ -264,6 +324,40 @@ async function populateSettingsForm(): Promise<void> {
     populateDefaultMyLanguageDropdown();
     await populateDefaultModelDropdowns();
     populateModelsTab();
+    populateCloudSyncSettings();
+}
+
+/**
+ * Populates the cloud sync settings controls
+ * @returns {void}
+ */
+function populateCloudSyncSettings(): void {
+    if (!refs) return;
+
+    refs.cloudSyncEnabledInput.checked = STATE.cloudSync.enabled;
+    refs.cloudSyncDeleteRemoteInput.checked = STATE.cloudSync.deleteRemoteOnLocalDelete;
+
+    const lastSync = STATE.cloudSync.lastSyncTime;
+    if (lastSync) {
+        const d = new Date(lastSync);
+        refs.cloudSyncLastSpan.textContent = 'Last sync: ' + d.toLocaleString();
+    } else {
+        refs.cloudSyncLastSpan.textContent = 'Last sync: never';
+    }
+
+    if (STATE.cloudSync.isSyncing) {
+        refs.cloudSyncStatusDiv.textContent = 'Syncing...';
+        refs.cloudSyncNowButton.disabled = true;
+    } else if (STATE.cloudSync.lastError) {
+        refs.cloudSyncStatusDiv.textContent = 'Error: ' + STATE.cloudSync.lastError;
+        refs.cloudSyncNowButton.disabled = false;
+    } else if (STATE.cloudSync.enabled) {
+        refs.cloudSyncStatusDiv.textContent = 'Cloud sync is active';
+        refs.cloudSyncNowButton.disabled = false;
+    } else {
+        refs.cloudSyncStatusDiv.textContent = 'Cloud sync is disabled';
+        refs.cloudSyncNowButton.disabled = false;
+    }
 }
 
 /**
@@ -822,6 +916,8 @@ function loadSessionIntoEditor(sessionId: string): void {
             refs.sessionTranslationInstructionsInput.value = session.translationInstructions ?? '';
             refs.sessionTheirLanguageSelect.value = session.theirLanguage ?? 'english';
             refs.sessionMyLanguageSelect.value = session.myLanguage ?? config?.defaultMyLanguage ?? 'english';
+            currentEditorTags = session.translationTags ? JSON.parse(JSON.stringify(session.translationTags)) : [];
+            renderTagList();
         } else if (refs) {
             refs.sessionNameInput.value = '';
             refs.sessionInterlocutorNameInput.value = '';
@@ -832,6 +928,8 @@ function loadSessionIntoEditor(sessionId: string): void {
             refs.sessionBackgroundInput.value = '';
             refs.sessionReasoningSelect.value = 'none';
             refs.sessionTranslationInstructionsInput.value = '';
+            currentEditorTags = [];
+            renderTagList();
         }
     });
 }
@@ -849,6 +947,8 @@ function clearSessionEditor(): void {
     refs.sessionTranslationInstructionsInput.value = '';
     refs.sessionTheirLanguageSelect.value = 'english';
     refs.sessionMyLanguageSelect.value = config?.defaultMyLanguage ?? 'english';
+    currentEditorTags = [];
+    renderTagList();
 }
 
 /**
@@ -866,6 +966,99 @@ function updateDeleteSessionButton(): void {
     } else {
         refs.deleteSessionButton.title = 'Delete this session';
     }
+}
+
+/**
+ * Renders the tag list in the settings editor
+ * @returns {void}
+ */
+function renderTagList(): void {
+    if (!refs) return;
+    refs.tagsListContainer.innerHTML = '';
+
+    if (currentEditorTags.length === 0) {
+        refs.tagsListContainer.textContent = 'No tags defined.';
+        return;
+    }
+
+    currentEditorTags.forEach(function(tag, index) {
+        const item = document.createElement('div');
+        item.className = 'tag-item';
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'tag-name';
+        nameSpan.textContent = tag.openTag + '...' + tag.closeTag;
+        const guidanceSpan = document.createElement('span');
+        guidanceSpan.className = 'tag-guidance';
+        guidanceSpan.textContent = tag.guidance;
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'btn btn-sm btn-outline-danger';
+        deleteBtn.textContent = '✕';
+        deleteBtn.title = 'Remove tag "' + tag.name + '"';
+        deleteBtn.addEventListener('click', function() {
+            removeTag(index);
+        });
+        item.appendChild(nameSpan);
+        item.appendChild(guidanceSpan);
+        item.appendChild(deleteBtn);
+        refs!.tagsListContainer.appendChild(item);
+    });
+}
+
+/**
+ * Adds a new tag from the input fields
+ * @returns {void}
+ */
+function addTag(): void {
+    if (!refs) return;
+    const name = refs.tagNameInput.value.trim();
+    const guidance = refs.tagGuidanceInput.value.trim();
+
+    if (!name) {
+        ui.displayError('Tag name is required');
+        return;
+    }
+    if (!guidance) {
+        ui.displayError('Tag guidance is required');
+        return;
+    }
+
+    const tag: TranslationTag = {
+        name: name,
+        openTag: '<' + name + '>',
+        closeTag: '</' + name + '>',
+        guidance: guidance
+    };
+
+    currentEditorTags.push(tag);
+    renderTagList();
+
+    refs.tagNameInput.value = '';
+    refs.tagGuidanceInput.value = '';
+    refs.tagNameInput.focus();
+}
+
+/**
+ * Removes a tag at the given index
+ * @param {number} index - Index of tag to remove
+ * @returns {void}
+ */
+function removeTag(index: number): void {
+    if (index >= 0 && index < currentEditorTags.length) {
+        currentEditorTags.splice(index, 1);
+        renderTagList();
+    }
+}
+
+/**
+ * Resets tags to language defaults for the current session
+ * @returns {void}
+ */
+function resetTagsToDefaults(): void {
+    if (!refs || !selectedSessionIdInModal) return;
+
+    const theirLanguage = refs.sessionTheirLanguageSelect.value;
+    currentEditorTags = getDefaultTags(theirLanguage);
+    renderTagList();
 }
 
 /**
@@ -898,6 +1091,7 @@ async function saveSession(): Promise<void> {
     session.background = refs.sessionBackgroundInput.value;
     session.reasoning = refs.sessionReasoningSelect.value as ReasoningLevel;
     session.translationInstructions = refs.sessionTranslationInstructionsInput.value || null;
+    session.translationTags = currentEditorTags.length > 0 ? currentEditorTags : undefined;
     session.theirLanguage = refs.sessionTheirLanguageSelect.value;
     session.myLanguage = refs.sessionMyLanguageSelect.value;
     session.interlocutorName = refs.sessionInterlocutorNameInput.value.trim() || undefined;

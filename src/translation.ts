@@ -11,8 +11,9 @@ import { LANGUAGES } from './languages';
 import { INPUT_SYSTEM_PROMPT, OUTPUT_SYSTEM_PROMPT, INPUT_INSTRUCTIONS, OUTPUT_INSTRUCTIONS, LITERAL_RETRANSLATION_PROMPT, OUTPUT_LITERAL_RETRANSLATION_PROMPT, QUESTION_SYSTEM_PROMPT, WORD_DEFINITIONS_PROMPT, INTERPRETATION_PROMPT } from './prompts';
 import { renderMarkdown, normalizeForMarkdown } from './markdown';
 import type { Translation, TranslationEntry, TranslationWordItem, WordItem, PunctItem, NewlineItem } from './types/translation';
-import type { StreamingAbortHandle, StreamCallbacks } from './types/api';
+import type { StreamingAbortHandle, StreamCallbacks, StreamUsage } from './types/api';
 import type { Config } from './types/config';
+import type { TranslationTag } from './types/translationTag';
 import type { TranslationSession, ReasoningLevel } from './types/session';
 
 /**
@@ -796,6 +797,31 @@ export function setupTextareaKeyHandlers(): void {
                     translate('output');
                 }
             }
+        });
+
+        initTagPopup();
+
+        sourceTextarea.addEventListener('mouseup', async function() {
+            const start = sourceTextarea.selectionStart;
+            const end = sourceTextarea.selectionEnd;
+            const text = sourceTextarea.value.substring(start, end).trim();
+            if (!text || !tagPopupElement) {
+                hideTagPopup();
+                return;
+            }
+
+            const session = await loadSession(currentSessionId);
+            const tags = session?.translationTags ?? [];
+            if (tags.length === 0) {
+                hideTagPopup();
+                return;
+            }
+
+            showTagPopup(sourceTextarea, tags);
+        });
+
+        sourceTextarea.addEventListener('blur', function() {
+            setTimeout(hideTagPopup, 200);
         });
     }
 }
@@ -2016,11 +2042,10 @@ export async function regenerateIndependentSections(translationId: string): Prom
     }
 
     const session = await loadSession(currentSessionId);
-    if (!session?.literalModel) {
-        console.error('[regenerateLiteral] No literal model configured');
+    if (!session) {
+        console.error('[regenerateLiteral] No session found');
         return;
     }
-
     const effectiveModel = getTranslationModelToUse(session);
     if (!config || !config!.openRouterApiKey!) {
         console.error('[regenerateLiteral] No API key');
@@ -2372,6 +2397,11 @@ function setupStreamingDisplay(refs: TranslationDomRefs, translation: Translatio
     if (refs.errorEl) refs.errorEl.style.display = 'none';
     if (refs.thinkingEl) refs.thinkingEl.style.display = 'none';
 
+    // Clear dependent sections from previous translations
+    if (refs.literalEl) refs.literalEl.textContent = 'Awaiting translation...';
+    if (refs.interpretationEl) refs.interpretationEl.textContent = 'Awaiting translation...';
+    if (refs.wordsContent) refs.wordsContent.textContent = 'Awaiting translation...';
+
     // Update char count for streaming state
     const sourceLen = translation.entries?.[0]?.source?.length ?? 0;
     if (refs.charCountEl) {
@@ -2479,6 +2509,156 @@ function extractStructuredResult(rawText: string): { translation: string; explan
     return result;
 }
 
+// ===== Translation Tag Helpers =====
+
+/**
+ * Builds the tag instructions block for the prompt if any tags are detected in source text
+ * @param {TranslationTag[] | undefined} tags - Session's defined tags
+ * @param {string} sourceText - Text being translated
+ * @returns {string} Tag instructions block or empty string
+ */
+function buildTagInstructionsBlock(tags: TranslationTag[] | undefined, sourceText: string): string {
+    if (!tags || tags.length === 0) return '';
+
+    const detectedTags = tags.filter(function(tag) {
+        return sourceText.includes(tag.openTag);
+    });
+
+    if (detectedTags.length === 0) return '';
+
+    const tagList = detectedTags.map(function(tag) {
+        return `- ${tag.openTag}...${tag.closeTag}: ${tag.guidance}`;
+    }).join('\n');
+
+    return `You may encounter the following inline tags in the source text. Use them as guidance for that portion only, then remove the tags from your output:\n${tagList}`;
+}
+
+/**
+ * Strips recognized translation tags from translated text
+ * Only strips well-formed opening and closing tags independently
+ * @param {string} text - Translation text potentially containing tags
+ * @param {TranslationTag[]} tags - Defined tags to strip
+ * @returns {string} Text with tags removed
+ */
+function stripTranslationTags(text: string, tags: TranslationTag[]): string {
+    let cleaned = text;
+    for (const tag of tags) {
+        const openEscaped = tag.openTag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const closeEscaped = tag.closeTag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        cleaned = cleaned.replace(new RegExp(openEscaped, 'g'), '');
+        cleaned = cleaned.replace(new RegExp(closeEscaped, 'g'), '');
+    }
+    return cleaned;
+}
+
+// ===== Text Selection Tag Popup =====
+
+/** @type {HTMLDivElement | null} */
+let tagPopupElement: HTMLDivElement | null = null;
+
+/** @type {HTMLDivElement | null} */
+let tagPopupButtonsContainer: HTMLDivElement | null = null;
+
+/**
+ * Initializes the tag popup element from the template
+ * @returns {void}
+ */
+function initTagPopup(): void {
+    if (tagPopupElement) return;
+
+    const template = document.getElementById('tag-popup-template') as HTMLTemplateElement | null;
+    if (!template) return;
+
+    const clone = template.content.cloneNode(true) as DocumentFragment;
+    tagPopupElement = clone.firstElementChild as HTMLDivElement;
+    tagPopupButtonsContainer = tagPopupElement.querySelector('.tag-popup-buttons') as HTMLDivElement;
+    document.body.appendChild(tagPopupElement);
+}
+
+/**
+ * Shows the tag popup underneath the selected text in the textarea
+ * Uses a mirror element to compute the pixel position of the selection
+ * @param {HTMLTextAreaElement} textarea - The source textarea element
+ * @param {TranslationTag[]} tags - Available tags to show
+ * @returns {void}
+ */
+function showTagPopup(textarea: HTMLTextAreaElement, tags: TranslationTag[]): void {
+    if (!tagPopupElement || !tagPopupButtonsContainer) return;
+
+    const container = tagPopupButtonsContainer;
+    const popup = tagPopupElement;
+
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    if (start === end) {
+        hideTagPopup();
+        return;
+    }
+
+    container.innerHTML = '';
+
+    tags.forEach(function(tag) {
+        const btn = document.createElement('button');
+        btn.className = 'btn btn-sm btn-outline-secondary';
+        btn.textContent = tag.name;
+        btn.title = tag.guidance;
+        btn.addEventListener('click', function() {
+            const text = textarea.value;
+            const selectedText = text.substring(start, end);
+            const wrappedText = tag.openTag + selectedText + tag.closeTag;
+
+            textarea.value = text.substring(0, start) + wrappedText + text.substring(end);
+            textarea.selectionStart = textarea.selectionEnd = start + wrappedText.length;
+            textarea.focus();
+            hideTagPopup();
+        });
+        container.appendChild(btn);
+    });
+
+    // Mirror element technique for computing textarea selection position
+    const mirror = document.createElement('div');
+    const computed = window.getComputedStyle(textarea);
+    mirror.style.position = 'absolute';
+    mirror.style.top = '0';
+    mirror.style.left = '0';
+    mirror.style.visibility = 'hidden';
+    mirror.style.whiteSpace = 'pre-wrap';
+    mirror.style.wordWrap = 'break-word';
+    mirror.style.overflow = 'hidden';
+    mirror.style.width = computed.width;
+    mirror.style.height = computed.height;
+    mirror.style.padding = computed.padding;
+    mirror.style.border = computed.border;
+    mirror.style.font = computed.font;
+    mirror.style.lineHeight = computed.lineHeight;
+    mirror.style.letterSpacing = computed.letterSpacing;
+
+    const textBefore = textarea.value.substring(0, start);
+    const selected = textarea.value.substring(start, end);
+    mirror.textContent = textBefore;
+    const marker = document.createElement('span');
+    marker.textContent = selected || '.';
+    mirror.appendChild(marker);
+
+    document.body.appendChild(mirror);
+    const markerRect = marker.getBoundingClientRect();
+    document.body.removeChild(mirror);
+
+    popup.style.display = 'block';
+    popup.style.left = Math.max(0, markerRect.left + markerRect.width / 2 - popup.offsetWidth / 2) + 'px';
+    popup.style.top = (markerRect.bottom + window.scrollY + 4) + 'px';
+}
+
+/**
+ * Hides the tag popup
+ * @returns {void}
+ */
+function hideTagPopup(): void {
+    if (tagPopupElement) {
+        tagPopupElement.style.display = 'none';
+    }
+}
+
 // ===== Streaming Orchestration Functions =====
 
 /**
@@ -2489,7 +2669,7 @@ function extractStructuredResult(rawText: string): { translation: string; explan
  * @returns {Promise<import('./types/api').GenerationInfo | null>} Generation info or null on failure
  */
 async function fetchGenerationInfoWithDelay(apiKey: string, generationId: string): Promise<import('./types/api').GenerationInfo | null> {
-    await new Promise(function(resolve) { return setTimeout(resolve, 1000); });
+    await new Promise(function(resolve) { return setTimeout(resolve, 3000); });
     try {
         const { getGenerationInfo } = await import('./openrouter');
         const info = await getGenerationInfo(apiKey, generationId);
@@ -2618,7 +2798,7 @@ function handleLiteralRetranslationStreaming(
                 streamState.accumulatedText = accumulatedText;
                 updateLiteralStreamingContent(refs!, accumulatedText);
             },
-            onDone: function(fullText: string, fullReasoning: string, generationId: string | null): void {
+            onDone: function(fullText: string, fullReasoning: string, generationId: string | null, usage?: StreamUsage): void {
                 literalStreamingStateMap.delete(translation);
 
                 // Fetch generation info after 1s delay
@@ -2849,6 +3029,7 @@ async function handleTranslateStreaming(
         instructions = instructions.replace('[INTENT_BLOCK]', intentBlock);
         instructions = instructions.replace('[LANGUAGE]', myLangName);
         instructions = instructions.replace('[TARGET_LANGUAGE]', theirLangName);
+        instructions = instructions.replace('[TAG_INSTRUCTIONS_BLOCK]', buildTagInstructionsBlock(session?.translationTags, sourceText));
         if (intentTextarea) {
             intentTextarea.value = '';
         }
@@ -2873,13 +3054,21 @@ async function handleTranslateStreaming(
                 streamState.accumulatedReasoning = reasoning;
                 updateStreamingContent(refs!, streamState, text, reasoning);
             },
-            onDone: function(fullText: string, fullReasoning: string, generationId: string | null): void {
+            onDone: function(fullText: string, fullReasoning: string, generationId: string | null, usage?: StreamUsage): void {
                 streamingStateMap.delete(translation);
 
-                // Fetch generation info after 1s delay (fire-and-forget)
                 const activeEntry = translation.entries[translation.activeEntryIndex ?? 0];
-                if (generationId && activeEntry) {
-                    storeGenerationInfo(generationId, config!.openRouterApiKey!, activeEntry);
+
+                // Populate token usage from streaming response (avoids generation info API call)
+                if (usage && activeEntry) {
+                    activeEntry.usage = {
+                        promptTokens: usage.prompt_tokens,
+                        completionTokens: usage.completion_tokens,
+                        totalTokens: usage.total_tokens
+                    };
+                    activeEntry.generationId = generationId ?? undefined;
+                } else if (generationId && activeEntry) {
+                    activeEntry.generationId = generationId;
                 }
 
                 // Handle empty response
@@ -2897,6 +3086,11 @@ async function handleTranslateStreaming(
 
                 // Parse XML tags from the complete response
                 const result = extractStructuredResult(fullText);
+
+                // Strip translation tags from output (output mode only)
+                if (mode === 'output' && session?.translationTags && session.translationTags.length > 0) {
+                    result.translation = stripTranslationTags(result.translation, session.translationTags);
+                }
 
                 // Handle empty translation content
                 if (!result.translation || !/\S/.test(result.translation)) {
@@ -2948,6 +3142,11 @@ async function handleTranslateStreaming(
 
                 // Refresh balance
                 refreshBalance();
+
+                // Trigger dependent API calls (literal retranslation, word definitions, interpretation)
+                if (!options?.skipBackgroundTasks) {
+                    regenerateIndependentSections(translation.id);
+                }
             },
             onError: function(error: Error): void {
                 streamingStateMap.delete(translation);
@@ -3010,7 +3209,7 @@ async function handleQuestionStreaming(
                 streamState.accumulatedReasoning = reasoning;
                 updateStreamingContent(refs!, streamState, text, reasoning);
             },
-            onDone: function(fullText: string, fullReasoning: string, generationId: string | null): void {
+            onDone: function(fullText: string, fullReasoning: string, generationId: string | null, usage?: StreamUsage): void {
                 streamingStateMap.delete(translation);
 
                 // Fetch generation info after 1s delay (fire-and-forget)

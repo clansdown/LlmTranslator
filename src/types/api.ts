@@ -63,6 +63,16 @@ export interface UsageObject {
     prompt_cache_miss_tokens?: number;
 }
 
+/**
+ * Token usage data from the final streaming chunk.
+ * Only available in the last chunk before [DONE].
+ */
+export interface StreamUsage {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+}
+
 export interface ImageConfig {
     imageSize?: '1K' | '2K' | '4K';
     aspectRatio?: '1:1' | '16:9' | '3:2' | '21:9';
@@ -196,7 +206,7 @@ export interface StreamingChatCompletionChunk {
  */
 export interface StreamCallbacks {
     onChunk: (accumulatedText: string, accumulatedReasoning: string) => void;
-    onDone: (fullText: string, fullReasoning: string, generationId: string | null) => void;
+    onDone: (fullText: string, fullReasoning: string, generationId: string | null, usage?: StreamUsage) => void;
     onError: (error: Error) => void;
 }
 

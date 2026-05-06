@@ -5,6 +5,21 @@ let clerkInstance: Clerk | null = null;
 let clerkEnabled = false;
 
 /**
+ * Gets the current Clerk session token for API authentication
+ * @param {{ skipCache?: boolean }} [options] - Pass skipCache: true to bypass Clerk's internal cache
+ * @returns {Promise<string | null>} Session token or null if not signed in
+ */
+export async function getClerkToken(options?: { skipCache?: boolean }): Promise<string | null> {
+    if (!clerkInstance?.isSignedIn || !clerkInstance.session) return null;
+    try {
+        return await clerkInstance.session.getToken(options);
+    } catch (e) {
+        console.error('[auth] Failed to get Clerk token:', e);
+        return null;
+    }
+}
+
+/**
  * Checks whether Clerk is available and a publishable key is present
  * @returns {boolean}
  */

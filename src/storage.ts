@@ -26,7 +26,9 @@
 import type { Conversation, ConversationSummary } from './types/state';
 import type { Translation } from './types/translation';
 import type { TranslationSession } from './types/session';
+import { getDefaultTags } from './defaultTranslationTags';
 import { DEBUG_TRANSLATIONS, DEBUG_SESSIONS } from './debug';
+import { queueSync } from './cloudSync';
 import { saveImageToExternal, saveConversationToExternal, saveSummaryToExternal, saveReferenceImageToExternal } from './externalSync';
 
 const STORAGE_PREFERENCES_DIR: string = "preferences";
@@ -76,6 +78,7 @@ export async function savePreference(key: string, value: string): Promise<void> 
         const writable = await fileHandle.createWritable();
         await writable.write(value);
         await writable.close();
+        queueSync();
     } catch (e) {
         console.error("Error saving preference:", e);
     }
@@ -854,6 +857,7 @@ export async function saveSession(session: TranslationSession): Promise<void> {
         const writable = await fileHandle.createWritable();
         await writable.write(JSON.stringify(session, null, 2));
         await writable.close();
+        queueSync();
         if (DEBUG_SESSIONS) {
             console.log(`[saveSession] Saved session ${session.id} successfully`);
         }
@@ -894,6 +898,9 @@ export async function loadSession(sessionId: string): Promise<TranslationSession
         }
         if (!session.interlocutorName) {
             session.interlocutorName = session.name;
+        }
+        if (!session.translationTags) {
+            session.translationTags = getDefaultTags(session.theirLanguage);
         }
         if (DEBUG_SESSIONS) {
             console.log(`[loadSession] Loaded session ${sessionId}: ${session.name}`);
@@ -1010,6 +1017,7 @@ export async function getOrCreateDefaultSession(model?: string | null, theirLang
         reasoning: "none",
         literalModel: null,
         interlocutorName: model ?? "",
+        translationTags: getDefaultTags(theirLanguage ?? 'english'),
         createdAt: Date.now()
     };
 
@@ -1033,6 +1041,7 @@ export async function saveSessionTranslation(sessionId: string, translation: Tra
         const writable = await fileHandle.createWritable();
         await writable.write(JSON.stringify(translation, null, 2));
         await writable.close();
+        queueSync();
         if (DEBUG_TRANSLATIONS) {
             console.log(`[saveSessionTranslation] Saved translation ${translation.timestamp} for session ${sessionId}`);
         }

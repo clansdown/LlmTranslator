@@ -49,21 +49,21 @@ function fetchModels(apiKey) { ... }
 function handleApiKeyEntry() { ... }
 ```
 
-### Arrays/Objects - REQUIRED @type
-- Every inline array `[]` or object `{}` needs `@type` JSDoc
-- Exception: Variables assigned from well-documented function returns
+### TypeScript Type Annotations
+- Prefer explicit TypeScript type annotations over `@type` JSDoc for variables
+- Every module-level variable, parameter, and return value should have an explicit type where TypeScript cannot infer it precisely
+- Inline arrays `[]` and objects `{}` must be typed with a TypeScript annotation, not `@type` JSDoc
 
-```javascript
-// GOOD
-/** @type {Array<{role: string, content: string}>} */
-const conversationHistory = [];
+```typescript
+// GOOD - TypeScript explicit type
+let conversationHistory: Array<{role: string, content: string}> = [];
 
-// GOOD - from documented function
-const slots = generateTimeSlots(); // No @type needed
+// GOOD - TypeScript infers the type from the generic return
+const slots = generateTimeSlots(); // No annotation needed
 
-// BAD - NO @type
-let selectedModel = null;
+// BAD - Untyped array or object (implicit any or inference too broad)
 let conversationHistory = [];
+let selectedModel = null;
 ```
 
 ### @typedef for Complex Types
@@ -312,8 +312,8 @@ Before submitting any code changes, verify:
 - [ ] Every function has JSDoc with @param, @returns
 - [ ] Every function that throws has @throws
 - [ ] All variables use let or const (no var declarations)
-- [ ] Every inline array `[]` has @type comment
-- [ ] Every inline object `{}` has @type comment
+- [ ] Every inline array `[]` has an explicit TypeScript type annotation
+- [ ] Every inline object `{}` has an explicit TypeScript type annotation
 - [ ] No single-letter variable names (except trivial loop counters)
 - [ ] No abbreviations in names
 - [ ] Functions under 100 lines

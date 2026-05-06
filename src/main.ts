@@ -9,6 +9,7 @@ import * as ui from './ui';
 import * as settings from './settings';
 import * as translation from './translation';
 import { initAuth, getClerk, mountAuthComponent, isSignedIn } from './auth';
+import { initCloudSync } from './cloudSync';
 import type { Config } from './types/config';
 
 /**
@@ -229,8 +230,17 @@ export async function init(): Promise<void> {
 
     settings.setupSettingsButton(document.getElementById("config-button") as HTMLButtonElement);
 
+    const cloudSyncBtn = document.getElementById('cloud-sync-btn') as HTMLButtonElement | null;
+    if (cloudSyncBtn) {
+        cloudSyncBtn.addEventListener('click', async function() {
+            const { triggerManualSync } = await import('./cloudSync');
+            await triggerManualSync();
+        });
+    }
+
     await loadApiKey();
     await setupAuthButton();
+    await initCloudSync();
     console.log("LLM Translator initialized");
 }
 
@@ -271,8 +281,12 @@ async function setupAuthButton(): Promise<void> {
         }
     });
 
-    modalEl.addEventListener('hidden.bs.modal', function() {
+    modalEl.addEventListener('hidden.bs.modal', async function() {
         modalBody.innerHTML = '';
+        if (isSignedIn()) {
+            const { initCloudSync } = await import('./cloudSync');
+            await initCloudSync();
+        }
     });
 }
 
