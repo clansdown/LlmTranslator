@@ -304,6 +304,7 @@ export async function saveImage(timestamp: number, imageData: string): Promise<n
 
         saveImageToExternal(timestamp, imageData, nextIndex);
         await recordWrite('conversations/' + timestamp + '/images/' + nextIndex + '.png', computeHash(bytes.buffer));
+        queueSync();
 
         return nextIndex;
     } catch (e) {
@@ -765,6 +766,7 @@ export async function saveTranslation(pill: 'input' | 'output', translation: Tra
         await writable.write(json);
         await writable.close();
         await recordWrite('translations/' + pill + '/' + translation.timestamp + '.json', computeHash(json));
+        queueSync();
         if (DEBUG_TRANSLATIONS) {
             console.log(`[saveTranslation] Saved ${pill} translation ${translation.timestamp} successfully`);
         }
