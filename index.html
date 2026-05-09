@@ -629,6 +629,9 @@
                             <li class="nav-item" role="presentation">
                                 <button type="button" class="nav-link" id="models-tab-btn" data-bs-toggle="tab" data-bs-target="#models-content" role="tab" aria-controls="models-content" aria-selected="false">Models</button>
                             </li>
+                            <li class="nav-item" role="presentation">
+                                <button type="button" class="nav-link" id="cloud-sync-tab-btn" data-bs-toggle="tab" data-bs-target="#cloud-sync-content" role="tab" aria-controls="cloud-sync-content" aria-selected="false">Cloud Sync</button>
+                            </li>
                         </ul>
                         <div class="tab-content" id="settings-tab-content">
                             <div class="tab-pane fade show active" id="settings-content" role="tabpanel" aria-labelledby="settings-tab-btn">
@@ -714,22 +717,6 @@
                                         </select>
                                     </div>
                                 </div>
-                                <hr>
-                                <h6>Cloud Sync</h6>
-                                <p class="text-muted small mb-2">Syncing requires being signed in through Clerk. Backblaze B2 storage via Cloudflare Worker.</p>
-                                <div class="form-check form-switch mb-2">
-                                    <input class="form-check-input" type="checkbox" id="settings-cloud-sync-enabled" aria-label="Enable cloud sync">
-                                    <label class="form-check-label" for="settings-cloud-sync-enabled">Enable cloud sync</label>
-                                </div>
-                                <div class="form-check form-switch mb-2">
-                                    <input class="form-check-input" type="checkbox" id="settings-cloud-sync-delete-remote" aria-label="Delete from cloud when deleted locally">
-                                    <label class="form-check-label" for="settings-cloud-sync-delete-remote">Delete from cloud when deleted locally</label>
-                                </div>
-                                <div class="mb-2">
-                                    <button type="button" class="btn btn-sm btn-outline-primary" id="settings-cloud-sync-now">Sync now</button>
-                                    <span class="text-muted small ms-2" id="settings-cloud-sync-last">Last sync: never</span>
-                                </div>
-                                <div id="settings-cloud-sync-status" class="text-muted small"></div>
                             </div>
                             <div class="tab-pane fade" id="conversations-content" role="tabpanel" aria-labelledby="conversations-tab-btn">
                                 <div class="row g-2 mt-3">
@@ -862,6 +849,24 @@
                                 <div id="settings-models-list" style="max-height: 400px; overflow-y: auto; border: 1px solid var(--bs-border-color); border-radius: 0.375rem; padding: 0.5rem;">
                                 </div>
                             </div>
+                            <div class="tab-pane fade" id="cloud-sync-content" role="tabpanel" aria-labelledby="cloud-sync-tab-btn">
+                                <h6>Cloud Sync</h6>
+                                <p class="text-muted small mb-2">Syncing requires being signed in through Clerk. Backblaze B2 storage via Cloudflare Worker.</p>
+                                <div class="form-check form-switch mb-2">
+                                    <input class="form-check-input" type="checkbox" id="settings-cloud-sync-enabled" aria-label="Enable cloud sync">
+                                    <label class="form-check-label" for="settings-cloud-sync-enabled">Enable cloud sync</label>
+                                </div>
+                                <div class="form-check form-switch mb-2">
+                                    <input class="form-check-input" type="checkbox" id="settings-cloud-sync-delete-remote" aria-label="Delete from cloud when deleted locally">
+                                    <label class="form-check-label" for="settings-cloud-sync-delete-remote">Delete from cloud when deleted locally</label>
+                                </div>
+                                <div class="mb-2">
+                                    <button type="button" class="btn btn-sm btn-outline-primary" id="settings-cloud-sync-now">Sync now</button>
+                                    <button type="button" class="btn btn-sm btn-outline-danger ms-1" id="settings-cloud-sync-resync" title="Delete manifest and re-sync everything">Complete re-sync</button>
+                                    <span class="text-muted small ms-2" id="settings-cloud-sync-last">Last sync: never</span>
+                                </div>
+                                <div id="settings-cloud-sync-status" class="text-muted small"></div>
+                            </div>
                         </div>
                     </div>
                     <div class="modal-footer">
@@ -917,11 +922,56 @@
                         </div>
                         <div class="modal-body">
                             <p>The following files will be deleted:</p>
-                            <ul class="sync-deletion-list"></ul>
+                            <ul class="sync-deletion-list list-group list-group-flush"></ul>
                         </div>
                         <div class="modal-footer">
                             <button type="button" class="btn btn-secondary sync-deletion-skip-btn" data-bs-dismiss="modal">Skip deletions</button>
                             <button type="button" class="btn btn-danger sync-deletion-confirm-btn" data-bs-dismiss="modal">Delete</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </template>
+
+        <!-- initial-sync-modal-template: Modal shown on first-time cloud sync for new devices -->
+        <template id="initial-sync-modal-template">
+            <div class="modal fade" tabindex="-1" aria-labelledby="initial-sync-modal-title" aria-hidden="true">
+                <div class="modal-dialog modal-dialog-centered">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title" id="initial-sync-modal-title">First-time Cloud Sync</h5>
+                        </div>
+                        <div class="modal-body">
+                            <p>This device hasn't synced before. Choose how to handle your data:</p>
+                            <div class="d-grid gap-2">
+                                <button type="button" class="btn btn-primary initial-sync-download-btn">
+                                    Download from Cloud
+                                </button>
+                                <button type="button" class="btn btn-outline-secondary initial-sync-upload-btn">
+                                    Upload Local Data
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </template>
+
+        <!-- sync-conflict-modal-template: Modal for resolving sync conflicts per-file -->
+        <template id="sync-conflict-modal-template">
+            <div class="modal fade" tabindex="-1">
+                <div class="modal-dialog modal-lg">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title">Sync Conflicts</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                        <div class="modal-body">
+                            <p class="text-muted small">The following files changed on both sides since the last sync. Choose which version to keep for each file.</p>
+                            <div class="sync-conflict-list list-group list-group-flush"></div>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-primary sync-conflict-confirm-btn" data-bs-dismiss="modal">Confirm Resolutions</button>
                         </div>
                     </div>
                 </div>

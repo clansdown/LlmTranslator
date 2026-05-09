@@ -128,6 +128,8 @@ interface StreamingState {
     accumulatedText: string;
     accumulatedReasoning: string;
     lastRenderedBreakIndex: number;
+    translationComplete: boolean;
+    backgroundTasksTriggered: boolean;
 }
 
 /**
@@ -135,6 +137,35 @@ interface StreamingState {
  * @type {WeakMap<Translation, StreamingState>}
  */
 const streamingStateMap: WeakMap<Translation, StreamingState> = new WeakMap();
+
+/**
+ * Extracts only the TRANSLATION portion of text for display during streaming.
+ * Once </TRANSLATION> is seen, the translation is complete and non-translation
+ * content (explanation, nuances) should not be shown in the target area.
+ * @param {string} text - Raw accumulated streaming text
+ * @returns {{ displayText: string; isComplete: boolean }}
+ */
+function extractTranslationForDisplay(text: string): { displayText: string; isComplete: boolean } {
+    const openIdx = text.indexOf('<TRANSLATION>');
+    const closeIdx = text.indexOf('</TRANSLATION>');
+
+    if (openIdx !== -1 && closeIdx !== -1) {
+        return {
+            displayText: text.substring(openIdx + '<TRANSLATION>'.length, closeIdx),
+            isComplete: true
+        };
+    } else if (openIdx !== -1) {
+        return {
+            displayText: text.substring(openIdx + '<TRANSLATION>'.length),
+            isComplete: false
+        };
+    } else {
+        return {
+            displayText: text.replace(/<\/?[^>]+>/g, ''),
+            isComplete: false
+        };
+    }
+}
 
 /**
  * Ephemeral streaming state for literal retranslation streaming.
@@ -878,96 +909,109 @@ async function buildUserMessage(pill: 'input' | 'output' | 'question', sourceTex
 }
 
 /**
+ * Guards against concurrent calls to translate() and askQuestion().
+ * Prevents spurious "Please enter text to translate" errors caused by
+ * duplicate event firings where the second call finds an empty textarea.
+ * @type {boolean}
+ */
+let isTranslatingOrAsking = false;
+
+/**
  * Performs translation for the specified mode using streaming
  * @param {'input' | 'output'} mode - Which mode to translate
  * @returns {Promise<void>}
  */
 export async function translate(mode: 'input' | 'output'): Promise<void> {
-    if (!config) {
-        ui.displayError("Please select a model first");
-        return;
+    if (isTranslatingOrAsking) return;
+    isTranslatingOrAsking = true;
+    try {
+        if (!config) {
+            ui.displayError("Please select a model first");
+            return;
+        }
+
+        if (!config.openRouterApiKey) {
+            ui.displayError("Please enter your API key first");
+            return;
+        }
+
+        const textarea = document.getElementById('source-textarea') as HTMLTextAreaElement | null;
+        if (!textarea) {
+            return;
+        }
+
+        const sourceText = textarea.value.trim();
+        if (!sourceText) {
+            ui.displayError("Please enter text to translate");
+            return;
+        }
+
+        textarea.value = '';
+
+        const session = await loadSession(currentSessionId);
+        const effectiveModel = getTranslationModelToUse(session);
+        if (!effectiveModel) {
+            ui.displayError("Please select a model first");
+            return;
+        }
+        const reasoningLevel = session?.reasoning ?? 'none';
+        currentLiteralModel = session?.literalModel ?? null;
+        const theirLang = LANGUAGES.find(function(l) { return l.id === session?.theirLanguage; });
+        const myLang = LANGUAGES.find(function(l) { return l.id === session?.myLanguage; });
+        const myLangName = myLang?.name ?? session?.myLanguage ?? 'English';
+
+        const promptName = mode === 'input'
+            ? (session?.interlocutorName ?? theirLang?.name ?? 'Foreign')
+            : 'Me';
+
+        const translation: Translation = {
+            id: generateUuid(),
+            pill: mode,
+            entries: [{
+                source: sourceText,
+                intent: '',
+                model: effectiveModel ?? '',
+                modelName: getModelName(effectiveModel ?? ''),
+                prompt: promptName,
+                promptContent: '',
+                translation: '',
+                explanation: '',
+                nuances: '',
+                reasoning: '',
+                reasoningDetails: '',
+                literalRetranslation: undefined,
+                literalPending: false,
+                wordDefinitions: undefined,
+                wordData: undefined,
+                wordPending: false,
+                interpretation: undefined,
+                interpretationPending: false
+            }],
+            activeEntryIndex: 0,
+            timestamp: Date.now(),
+            status: 'streaming',
+            error: null
+        };
+
+        allTranslations.push(translation);
+        const container = document.getElementById('translations-container');
+        if (container) {
+            renderTranslationItem(container, translation);
+        }
+
+        const systemPrompt = mode === 'input' ? INPUT_SYSTEM_PROMPT : OUTPUT_SYSTEM_PROMPT;
+        console.log(`[translate] Starting streaming translation with model: ${effectiveModel}, mode: ${mode}`);
+
+        await handleTranslateStreaming(
+            translation,
+            mode,
+            systemPrompt,
+            effectiveModel,
+            reasoningLevel
+        );
+    } finally {
+        isTranslatingOrAsking = false;
     }
-
-    if (!config!.openRouterApiKey!) {
-        ui.displayError("Please enter your API key first");
-        return;
-    }
-
-    const textarea = document.getElementById('source-textarea') as HTMLTextAreaElement | null;
-    if (!textarea) {
-        return;
-    }
-
-    const sourceText = textarea.value.trim();
-    if (!sourceText) {
-        ui.displayError("Please enter text to translate");
-        return;
-    }
-
-    textarea.value = '';
-
-    const session = await loadSession(currentSessionId);
-    const effectiveModel = getTranslationModelToUse(session);
-    if (!effectiveModel) {
-        ui.displayError("Please select a model first");
-        return;
-    }
-    const reasoningLevel = session?.reasoning ?? 'none';
-    currentLiteralModel = session?.literalModel ?? null;
-    const theirLang = LANGUAGES.find(function(l) { return l.id === session?.theirLanguage; });
-    const myLang = LANGUAGES.find(function(l) { return l.id === session?.myLanguage; });
-    const myLangName = myLang?.name ?? session?.myLanguage ?? 'English';
-
-    const promptName = mode === 'input'
-        ? (session?.interlocutorName ?? theirLang?.name ?? 'Foreign')
-        : 'Me';
-
-    const translation: Translation = {
-        id: generateUuid(),
-        pill: mode,
-        entries: [{
-            source: sourceText,
-            intent: '',
-            model: effectiveModel ?? '',
-            modelName: getModelName(effectiveModel ?? ''),
-            prompt: promptName,
-            promptContent: '',
-            translation: '',
-            explanation: '',
-            nuances: '',
-            reasoning: '',
-            reasoningDetails: '',
-            literalRetranslation: undefined,
-            literalPending: false,
-            wordDefinitions: undefined,
-            wordData: undefined,
-            wordPending: false,
-            interpretation: undefined,
-            interpretationPending: false
-        }],
-        activeEntryIndex: 0,
-        timestamp: Date.now(),
-        status: 'streaming',
-        error: null
-    };
-
-    allTranslations.push(translation);
-    const container = document.getElementById('translations-container');
-    if (container) {
-        renderTranslationItem(container, translation);
-    }
-
-    const systemPrompt = mode === 'input' ? INPUT_SYSTEM_PROMPT : OUTPUT_SYSTEM_PROMPT;
-    console.log(`[translate] Starting streaming translation with model: ${effectiveModel}, mode: ${mode}`);
-
-    // Delegate to streaming handler which manages the entire lifecycle
-    await handleTranslateStreaming(
-        translation,
-        mode,
-        systemPrompt,
-        effectiveModel,
-        reasoningLevel
-    );
 }
 
 /**
@@ -1001,82 +1045,87 @@ async function buildQuestionMessage(questionText: string, myLanguage?: string): 
  * @returns {Promise<void>}
  */
 export async function askQuestion(): Promise<void> {
-    if (!config) {
-        ui.displayError("Please select a model first");
-        return;
+    if (isTranslatingOrAsking) return;
+    isTranslatingOrAsking = true;
+    try {
+        if (!config) {
+            ui.displayError("Please select a model first");
+            return;
+        }
+
+        if (!config.openRouterApiKey) {
+            ui.displayError("Please enter your API key first");
+            return;
+        }
+
+        const textarea = document.getElementById('source-textarea') as HTMLTextAreaElement | null;
+        if (!textarea) {
+            return;
+        }
+
+        const questionText = textarea.value.trim();
+        if (!questionText) {
+            ui.displayError("Please enter a question");
+            return;
+        }
+
+        textarea.value = '';
+
+        const session = await loadSession(currentSessionId);
+        const myLang = LANGUAGES.find(function(l) { return l.id === session?.myLanguage; });
+        const myLangName = myLang?.name ?? session?.myLanguage ?? 'English';
+        const userMessage = await buildQuestionMessage(questionText, myLangName);
+
+        const effectiveModel = getTranslationModelToUse(session);
+        if (!effectiveModel) {
+            ui.displayError("Please select a model first");
+            return;
+        }
+        const reasoningLevel = session?.reasoning ?? 'none';
+        console.log(`[askQuestion] Asking question with model: ${effectiveModel}, chars: ${questionText.length}`);
+
+        const translation: Translation = {
+            id: generateUuid(),
+            pill: 'question',
+            includeInContext: false,
+            entries: [{
+                source: questionText,
+                intent: '',
+                model: effectiveModel ?? '',
+                modelName: getModelName(effectiveModel ?? ''),
+                prompt: 'Question',
+                promptContent: QUESTION_SYSTEM_PROMPT,
+                translation: '',
+                explanation: '',
+                nuances: '',
+                reasoning: '',
+                reasoningDetails: '',
+                literalRetranslation: undefined,
+                literalPending: false,
+                wordDefinitions: undefined,
+                wordData: undefined,
+                wordPending: false,
+                interpretation: undefined,
+                interpretationPending: false
+            }],
+            activeEntryIndex: 0,
+            timestamp: Date.now(),
+            status: 'streaming',
+            error: null
+        };
+
+        allTranslations.push(translation);
+        renderAllTranslations();
+
+        await handleQuestionStreaming(
+            translation,
+            userMessage,
+            effectiveModel,
+            reasoningLevel
+        );
+    } finally {
+        isTranslatingOrAsking = false;
     }
-
-    if (!config!.openRouterApiKey!) {
-        ui.displayError("Please enter your API key first");
-        return;
-    }
-
-    const textarea = document.getElementById('source-textarea') as HTMLTextAreaElement | null;
-    if (!textarea) {
-        return;
-    }
-
-    const questionText = textarea.value.trim();
-    if (!questionText) {
-        ui.displayError("Please enter a question");
-        return;
-    }
-
-    textarea.value = '';
-
-    const session = await loadSession(currentSessionId);
-    const myLang = LANGUAGES.find(function(l) { return l.id === session?.myLanguage; });
-    const myLangName = myLang?.name ?? session?.myLanguage ?? 'English';
-    const userMessage = await buildQuestionMessage(questionText, myLangName);
-
-    const effectiveModel = getTranslationModelToUse(session);
-    if (!effectiveModel) {
-        ui.displayError("Please select a model first");
-        return;
-    }
-    const reasoningLevel = session?.reasoning ?? 'none';
-    console.log(`[askQuestion] Asking question with model: ${effectiveModel}, chars: ${questionText.length}`);
-
-    const translation: Translation = {
-        id: generateUuid(),
-        pill: 'question',
-        includeInContext: false,
-        entries: [{
-            source: questionText,
-            intent: '',
-            model: effectiveModel ?? '',
-            modelName: getModelName(effectiveModel ?? ''),
-            prompt: 'Question',
-            promptContent: QUESTION_SYSTEM_PROMPT,
-            translation: '',
-            explanation: '',
-            nuances: '',
-            reasoning: '',
-            reasoningDetails: '',
-            literalRetranslation: undefined,
-            literalPending: false,
-            wordDefinitions: undefined,
-            wordData: undefined,
-            wordPending: false,
-            interpretation: undefined,
-            interpretationPending: false
-        }],
-        activeEntryIndex: 0,
-        timestamp: Date.now(),
-        status: 'streaming',
-        error: null
-    };
-
-    allTranslations.push(translation);
-    renderAllTranslations();
-
-    // Delegate to streaming handler
-    await handleQuestionStreaming(
-        translation,
-        userMessage,
-        effectiveModel,
-        reasoningLevel
-    );
 }
 
 /**
@@ -1563,6 +1612,52 @@ function updateTranslationItemContent(translation: Translation, refs: Translatio
         if (refs.charCountEl) {
             refs.charCountEl.textContent = `(${entrySource.length}/—)`;
         }
+
+        // Update auxiliary sections during streaming so background task results appear
+        if (refs.literalEl) {
+            const literalStreamState = literalStreamingStateMap.get(translation);
+            if (literalStreamState) {
+                if (refs.regenerateLiteralBtn) refs.regenerateLiteralBtn.style.display = 'none';
+            } else if (entryLiteralPending) {
+                refs.literalEl.innerHTML = '<div class="spinner-border spinner-border-sm" role="status"></div><span style="margin-left: 0.5rem;">Retranslating...</span>';
+                if (refs.regenerateLiteralBtn) refs.regenerateLiteralBtn.style.display = 'none';
+            } else if (entryLiteralRetranslation) {
+                refs.literalEl.innerHTML = renderMarkdown(entryLiteralRetranslation);
+                if (refs.regenerateLiteralBtn) refs.regenerateLiteralBtn.style.display = currentLiteralModel ? 'inline-block' : 'none';
+            } else {
+                refs.literalEl.innerHTML = '';
+                if (refs.regenerateLiteralBtn) refs.regenerateLiteralBtn.style.display = currentLiteralModel ? 'inline-block' : 'none';
+            }
+        }
+        if (refs.explanationEl) {
+            refs.explanationEl.innerHTML = entryExplanation ? renderMarkdown(entryExplanation) : '';
+        }
+        if (refs.nuancesEl) {
+            refs.nuancesEl.innerHTML = entryNuances ? renderMarkdown(entryNuances) : '';
+        }
+        if (refs.interpretationEl) {
+            if (entryInterpretationPending) {
+                refs.interpretationEl.innerHTML = '<div class="spinner-border spinner-border-sm" role="status"></div><span style="margin-left: 0.5rem;">Interpreting...</span>';
+                if (refs.regenerateInterpretationBtn) refs.regenerateInterpretationBtn.style.display = 'none';
+            } else if (entryInterpretation) {
+                refs.interpretationEl.innerHTML = renderMarkdown(entryInterpretation);
+                if (refs.regenerateInterpretationBtn) refs.regenerateInterpretationBtn.style.display = currentInterpretationModel ? 'inline-block' : 'none';
+            } else {
+                refs.interpretationEl.innerHTML = '';
+                if (refs.regenerateInterpretationBtn) refs.regenerateInterpretationBtn.style.display = currentInterpretationModel ? 'inline-block' : 'none';
+            }
+        }
+        if (refs.regenerateLiteralBtn) refs.regenerateLiteralBtn.style.display = 'none';
+        if (refs.regenerateInterpretationBtn) refs.regenerateInterpretationBtn.style.display = 'none';
+        if (refs.sectionsArea && refs.toggleSectionsBtn) {
+            if (translation.sectionsCollapsed) {
+                refs.sectionsArea.classList.add('translation-sections-collapsed');
+                refs.toggleSectionsBtn.textContent = '▶';
+            } else {
+                refs.sectionsArea.classList.remove('translation-sections-collapsed');
+                refs.toggleSectionsBtn.textContent = '▼';
+            }
+        }
     } else if (translation.status === 'error') {
         if (refs.spinnerEl) refs.spinnerEl.style.display = 'none';
         if (refs.targetEl) refs.targetEl.innerHTML = '';
@@ -2037,10 +2132,6 @@ export async function regenerateIndependentSections(translationId: string): Prom
         return;
     }
 
-    if (translation.status !== 'complete') {
-        return;
-    }
-
     const session = await loadSession(currentSessionId);
     if (!session) {
         console.error('[regenerateLiteral] No session found');
@@ -2413,7 +2504,8 @@ function setupStreamingDisplay(refs: TranslationDomRefs, translation: Translatio
  * Updates the streaming display with new accumulated text and reasoning content.
  * Shows reasoning (thinking) content while main text hasn't arrived yet.
  * Renders completed paragraphs as markdown, shows current paragraph as raw text.
- * Strips XML tags from the display text during streaming for cleaner output.
+ * Only the text within <TRANSLATION> tags is displayed; explanation and nuances
+ * content is excluded from the target area during streaming.
  * @param {TranslationDomRefs} refs - Captured DOM references
  * @param {StreamingState} streamingState - Current streaming state for this translation
  * @param {string} text - Accumulated main content text
@@ -2446,13 +2538,23 @@ function updateStreamingContent(
 
     if (!hasText) return;
 
-    // Strip XML tags for cleaner display during streaming
-    const displayText = text.replace(/<\/?[^>]+>/g, '');
+    // Extract only the TRANSLATION portion for display — explanation and nuances
+    // are excluded from the target area during streaming
+    const { displayText, isComplete } = extractTranslationForDisplay(text);
+
+    // Mark translation complete once we've seen the closing tag
+    if (isComplete) {
+        streamingState.translationComplete = true;
+    }
 
     // Find the streaming structure inside target element
     const markdownEl = refs.targetEl?.querySelector('.streaming-markdown') as HTMLElement | null;
     const rawEl = refs.targetEl?.querySelector('.streaming-raw') as HTMLElement | null;
     if (!markdownEl || !rawEl) return;
+
+    if (isComplete) {
+        rawEl.textContent = '';
+    }
 
     // Check if new paragraphs were completed since last render
     const lastDoubleNewline = displayText.lastIndexOf('\n\n');
@@ -2465,7 +2567,9 @@ function updateStreamingContent(
 
     // Show current incomplete paragraph as raw text
     const remainingText = displayText.substring(streamingState.lastRenderedBreakIndex);
-    rawEl.textContent = remainingText;
+    if (!isComplete) {
+        rawEl.textContent = remainingText;
+    }
 }
 
 /**
@@ -3053,8 +3157,25 @@ async function handleTranslateStreaming(
                 streamState.accumulatedText = text;
                 streamState.accumulatedReasoning = reasoning;
                 updateStreamingContent(refs!, streamState, text, reasoning);
+
+                // Once </TRANSLATION> is seen, start dependent sections immediately
+                if (streamState.translationComplete && !streamState.backgroundTasksTriggered) {
+                    streamState.backgroundTasksTriggered = true;
+                    const result = extractStructuredResult(text);
+                    if (result.translation && /\S/.test(result.translation)) {
+                        const activeEntry = translation.entries[translation.activeEntryIndex ?? 0];
+                        if (activeEntry) {
+                            activeEntry.translation = result.translation;
+                        }
+                        if (!options?.skipBackgroundTasks) {
+                            regenerateIndependentSections(translation.id);
+                        }
+                    }
+                }
             },
             onDone: function(fullText: string, fullReasoning: string, generationId: string | null, usage?: StreamUsage): void {
+                const streamState = streamingStateMap.get(translation);
+                const backgroundTasksAlreadyTriggered = streamState?.backgroundTasksTriggered ?? false;
                 streamingStateMap.delete(translation);
 
                 const activeEntry = translation.entries[translation.activeEntryIndex ?? 0];
@@ -3144,7 +3265,8 @@ async function handleTranslateStreaming(
                 refreshBalance();
 
                 // Trigger dependent API calls (literal retranslation, word definitions, interpretation)
-                if (!options?.skipBackgroundTasks) {
+                // Skip if already triggered early from onChunk when </TRANSLATION> was detected
+                if (!options?.skipBackgroundTasks && !backgroundTasksAlreadyTriggered) {
                     regenerateIndependentSections(translation.id);
                 }
             },
@@ -3167,7 +3289,9 @@ async function handleTranslateStreaming(
         abort: abortHandle.abort,
         accumulatedText: '',
         accumulatedReasoning: '',
-        lastRenderedBreakIndex: 0
+        lastRenderedBreakIndex: 0,
+        translationComplete: false,
+        backgroundTasksTriggered: false
     });
 }
 
@@ -3252,6 +3376,8 @@ async function handleQuestionStreaming(
         abort: abortHandle.abort,
         accumulatedText: '',
         accumulatedReasoning: '',
-        lastRenderedBreakIndex: 0
+        lastRenderedBreakIndex: 0,
+        translationComplete: false,
+        backgroundTasksTriggered: false
     });
 }

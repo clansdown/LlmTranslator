@@ -1,26 +1,39 @@
 /**
  * OPFS Storage Module
  * 
+ * Part of the FindForge suite. This app's data is namespaced under /translate/
+ * in OPFS to prevent conflicts with other FindForge tools sharing the same
+ * browser origin. Shared settings (like cloud sync toggle) live under /cloud/.
+ * 
  * Directory Structure:
  * 
  * OPFS Root:
- * 
- * OPFS Root:
- * ├── preferences/
- * │   ├── apiKey
- * │   ├── selectedModel
- * │   ├── minPrice
- * │   ├── maxPrice
- * │   └── ... (other preference files)
- * └── conversations/
- *     └── {timestamp}/         (epoch seconds, e.g., 1737991234)
- *         ├── conversation.json
- *         ├── summary.json
- *         └── images/
- *             ├── 1.png
- *             ├── 2.png
- *             ├── 3.png
- *             └── ... (sequential numbering for all images in conversation)
+ * ├── cloud/                           ← Shared across FindForge tools
+ * │   └── preferences/
+ * │       ├── cloudSyncEnabled         ← Global sync toggle
+ * │       └── cloudSyncDeleteRemote    ← Global delete-remote preference
+ * │
+ * └── translate/                       ← This app's namespace (app root)
+ *     ├── preferences/
+ *     │   ├── apiKey
+ *     │   ├── cloudSync                ← Per-app state (lastSyncTime)
+ *     │   ├── syncManifest
+ *     │   ├── syncJournal
+ *     │   └── ... (other preference files)
+ *     ├── sessions/
+ *     │   └── {id}/
+ *     │       ├── session.json
+ *     │       └── translations/
+ *     │           └── {ts}.json
+ *     ├── translations/               ← Legacy flat translations
+ *     │   ├── input/
+ *     │   └── output/
+ *     └── conversations/               ← Image conversations
+ *         └── {timestamp}/
+ *             ├── conversation.json
+ *             ├── summary.json
+ *             └── images/
+ *                 └── {index}.png
  */
 
 import type { Conversation, ConversationSummary } from './types/state';
@@ -28,8 +41,10 @@ import type { Translation } from './types/translation';
 import type { TranslationSession } from './types/session';
 import { getDefaultTags } from './defaultTranslationTags';
 import { DEBUG_TRANSLATIONS, DEBUG_SESSIONS } from './debug';
-import { queueSync } from './cloudSync';
+import { queueSync, computeHash } from './cloudSync';
+import { recordWrite, recordDelete, recordDeleteRecursive } from './syncJournal';
 import { saveImageToExternal, saveConversationToExternal, saveSummaryToExternal, saveReferenceImageToExternal } from './externalSync';
+import { APP_PREFIX, CLOUD_PREFIX, getOPFSHandle, ensureDirectory } from './opfs';
 
 const STORAGE_PREFERENCES_DIR: string = "preferences";
 const STORAGE_CONVERSATIONS_DIR: string = "conversations";
@@ -41,28 +56,6 @@ const STORAGE_OUTPUT_DIR: string = "output";
 const STORAGE_SESSIONS_DIR: string = "sessions";
 const STORAGE_SESSION_TRANSLATIONS_DIR: string = "translations";
 const DEFAULT_SESSION_ID: string = "default";
-
-/**
- * Gets the OPFS root directory handle
- * @returns {Promise<FileSystemDirectoryHandle>} Root directory handle
- */
-export function getOPFSHandle(): Promise<FileSystemDirectoryHandle> {
-    return window.navigator.storage.getDirectory();
-}
-
-/**
- * Ensures a subdirectory exists within a parent directory
- * @param {FileSystemDirectoryHandle} parentDir - Parent directory handle
- * @param {string} dirName - Directory name to ensure exists
- * @returns {Promise<FileSystemDirectoryHandle>} Directory handle
- */
-export async function ensureDirectory(parentDir: FileSystemDirectoryHandle, dirName: string): Promise<FileSystemDirectoryHandle> {
-    try {
-        return await parentDir.getDirectoryHandle(dirName, { create: true });
-    } catch (e) {
-        return await parentDir.getDirectoryHandle(dirName);
-    }
-}
 
 /**
  * Saves a preference to OPFS
@@ -78,6 +71,7 @@ export async function savePreference(key: string, value: string): Promise<void> 
         const writable = await fileHandle.createWritable();
         await writable.write(value);
         await writable.close();
+        await recordWrite('preferences/' + key, computeHash(value));
         queueSync();
     } catch (e) {
         console.error("Error saving preference:", e);
@@ -136,6 +130,8 @@ export async function deletePreference(key: string): Promise<void> {
         const root = await getOPFSHandle();
         const prefsDir = await ensureDirectory(root, STORAGE_PREFERENCES_DIR);
         await prefsDir.removeEntry(key);
+        await recordDelete('preferences/' + key);
+        queueSync();
     } catch (e) {
         if (e instanceof DOMException && e.name === 'NotFoundError') return;
         console.error("Error deleting preference:", e);
@@ -244,10 +240,12 @@ export async function saveConversation(timestamp: number, conversationData: Conv
         const convDir = await ensureDirectory(convsDir, String(timestamp));
         const fileHandle = await convDir.getFileHandle("conversation.json", { create: true });
         const writable = await fileHandle.createWritable();
-        await writable.write(JSON.stringify(conversationData, null, 2));
+        const json = JSON.stringify(conversationData, null, 2);
+        await writable.write(json);
         await writable.close();
-
+        await recordWrite('conversations/' + timestamp + '/conversation.json', computeHash(json));
         saveConversationToExternal(timestamp, conversationData);
+        queueSync();
     } catch (e) {
         console.error("Error saving conversation:", e);
     }
@@ -263,6 +261,8 @@ export async function deleteConversation(timestamp: number): Promise<void> {
         const root = await getOPFSHandle();
         const convsDir = await ensureDirectory(root, STORAGE_CONVERSATIONS_DIR);
         await convsDir.removeEntry(String(timestamp), { recursive: true });
+        await recordDeleteRecursive('conversations/' + timestamp);
+        queueSync();
     } catch (e) {
         console.error("Error deleting conversation:", e);
     }
@@ -303,6 +303,7 @@ export async function saveImage(timestamp: number, imageData: string): Promise<n
         await writable.close();
 
         saveImageToExternal(timestamp, imageData, nextIndex);
+        await recordWrite('conversations/' + timestamp + '/images/' + nextIndex + '.png', computeHash(bytes.buffer));
 
         return nextIndex;
     } catch (e) {
@@ -387,6 +388,8 @@ export async function deleteImagesForConversation(timestamp: number): Promise<vo
         for await (const entry of (imagesDir as any).values()) {
             await imagesDir.removeEntry(entry.name);
         }
+        await recordDeleteRecursive('conversations/' + timestamp + '/images');
+        queueSync();
     } catch (e) {
         console.error("Error deleting images:", e);
     }
@@ -402,13 +405,14 @@ export async function saveSummary(timestamp: number, summaryData: ConversationSu
     try {
         const root = await getOPFSHandle();
         const convsDir = await ensureDirectory(root, STORAGE_CONVERSATIONS_DIR);
-        const convDir = await convsDir.getDirectoryHandle(String(timestamp), { create: true });
+        const convDir = await ensureDirectory(convsDir, String(timestamp));
         const fileHandle = await convDir.getFileHandle("summary.json", { create: true });
         const writable = await fileHandle.createWritable();
-        await writable.write(JSON.stringify(summaryData, null, 2));
+        const json = JSON.stringify(summaryData, null, 2);
+        await writable.write(json);
         await writable.close();
-
-        saveSummaryToExternal(timestamp, summaryData);
+        await recordWrite('conversations/' + timestamp + '/summary.json', computeHash(json));
+        queueSync();
     } catch (e) {
         console.error("Error saving summary:", e);
     }
@@ -465,6 +469,8 @@ export async function uploadReferenceImage(timestamp: number, file: File): Promi
         await writable.close();
 
         saveReferenceImageToExternal(timestamp, file, nextIndex);
+        await recordWrite('conversations/' + timestamp + '/reference/' + nextIndex + '.png', computeHash(arrayBuffer));
+        queueSync();
 
         return nextIndex;
     } catch (e) {
@@ -598,6 +604,8 @@ export async function deleteReferenceImage(timestamp: number, imageIndex: number
     try {
         const refDir = await getReferenceDirectory(timestamp);
         await refDir.removeEntry(String(imageIndex) + ".png");
+        await recordDelete('conversations/' + timestamp + '/reference/' + imageIndex + '.png');
+        queueSync();
     } catch (e) {
         console.error("Error deleting reference image:", e);
     }
@@ -753,8 +761,10 @@ export async function saveTranslation(pill: 'input' | 'output', translation: Tra
             : await ensureDirectory(translationsDir, STORAGE_OUTPUT_DIR);
         const fileHandle = await paneDir.getFileHandle(String(translation.timestamp) + ".json", { create: true });
         const writable = await fileHandle.createWritable();
-        await writable.write(JSON.stringify(translation, null, 2));
+        const json = JSON.stringify(translation, null, 2);
+        await writable.write(json);
         await writable.close();
+        await recordWrite('translations/' + pill + '/' + translation.timestamp + '.json', computeHash(json));
         if (DEBUG_TRANSLATIONS) {
             console.log(`[saveTranslation] Saved ${pill} translation ${translation.timestamp} successfully`);
         }
@@ -855,8 +865,10 @@ export async function saveSession(session: TranslationSession): Promise<void> {
         const sessionDir = await ensureDirectory(sessionsDir, session.id);
         const fileHandle = await sessionDir.getFileHandle("session.json", { create: true });
         const writable = await fileHandle.createWritable();
-        await writable.write(JSON.stringify(session, null, 2));
+        const json = JSON.stringify(session, null, 2);
+        await writable.write(json);
         await writable.close();
+        await recordWrite('sessions/' + session.id + '/session.json', computeHash(json));
         queueSync();
         if (DEBUG_SESSIONS) {
             console.log(`[saveSession] Saved session ${session.id} successfully`);
@@ -979,6 +991,8 @@ export async function deleteSession(sessionId: string): Promise<boolean> {
         const root = await getOPFSHandle();
         const sessionsDir = await ensureDirectory(root, STORAGE_SESSIONS_DIR);
         await sessionsDir.removeEntry(sessionId, { recursive: true });
+        await recordDeleteRecursive('sessions/' + sessionId);
+        queueSync();
         if (DEBUG_SESSIONS) {
             console.log(`[deleteSession] Deleted session ${sessionId} successfully`);
         }
@@ -1039,8 +1053,10 @@ export async function saveSessionTranslation(sessionId: string, translation: Tra
         const sessionDir = await getSessionDirectory(sessionId);
         const fileHandle = await sessionDir.getFileHandle(String(translation.timestamp) + ".json", { create: true });
         const writable = await fileHandle.createWritable();
-        await writable.write(JSON.stringify(translation, null, 2));
+        const json = JSON.stringify(translation, null, 2);
+        await writable.write(json);
         await writable.close();
+        await recordWrite('sessions/' + sessionId + '/translations/' + translation.timestamp + '.json', computeHash(json));
         queueSync();
         if (DEBUG_TRANSLATIONS) {
             console.log(`[saveSessionTranslation] Saved translation ${translation.timestamp} for session ${sessionId}`);
@@ -1127,6 +1143,8 @@ export async function clearSessionTranslations(sessionId: string): Promise<void>
                 await sessionDir.removeEntry(entry.name);
             }
         }
+        await recordDeleteRecursive('sessions/' + sessionId + '/translations');
+        queueSync();
     } catch (e) {
         if (DEBUG_TRANSLATIONS) {
             console.error("[clearSessionTranslations] Error:", e);
@@ -1138,6 +1156,8 @@ export async function deleteSessionTranslation(sessionId: string, timestamp: num
     try {
         const sessionDir = await getSessionDirectory(sessionId);
         await sessionDir.removeEntry(String(timestamp) + ".json");
+        await recordDelete('sessions/' + sessionId + '/translations/' + timestamp + '.json');
+        queueSync();
     } catch (e) {
         if (DEBUG_TRANSLATIONS) {
             console.error("[deleteSessionTranslation] Error:", e);

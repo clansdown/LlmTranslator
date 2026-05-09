@@ -96,6 +96,7 @@ interface SettingsReferences {
     cloudSyncEnabledInput: HTMLInputElement;
     cloudSyncDeleteRemoteInput: HTMLInputElement;
     cloudSyncNowButton: HTMLButtonElement;
+    cloudSyncResyncButton: HTMLButtonElement;
     cloudSyncLastSpan: HTMLSpanElement;
     cloudSyncStatusDiv: HTMLDivElement;
 }
@@ -182,6 +183,7 @@ function openSettingsModal(): void {
             cloudSyncEnabledInput: settingsModalElement.querySelector('#settings-cloud-sync-enabled') as HTMLInputElement,
             cloudSyncDeleteRemoteInput: settingsModalElement.querySelector('#settings-cloud-sync-delete-remote') as HTMLInputElement,
             cloudSyncNowButton: settingsModalElement.querySelector('#settings-cloud-sync-now') as HTMLButtonElement,
+            cloudSyncResyncButton: settingsModalElement.querySelector('#settings-cloud-sync-resync') as HTMLButtonElement,
             cloudSyncLastSpan: settingsModalElement.querySelector('#settings-cloud-sync-last') as HTMLSpanElement,
             cloudSyncStatusDiv: settingsModalElement.querySelector('#settings-cloud-sync-status') as HTMLDivElement
         };
@@ -278,11 +280,13 @@ function setupEventListeners(): void {
 
     refs.cloudSyncEnabledInput.addEventListener('change', function() {
         if (refs!.cloudSyncEnabledInput.checked) {
-            cloudSync.enableCloudSync();
+            cloudSync.enableCloudSync().then(function() {
+                populateCloudSyncSettings();
+            });
         } else {
             cloudSync.disableCloudSync();
+            populateCloudSyncSettings();
         }
-        populateCloudSyncSettings();
     });
 
     refs.cloudSyncDeleteRemoteInput.addEventListener('change', function() {
@@ -291,6 +295,11 @@ function setupEventListeners(): void {
 
     refs.cloudSyncNowButton.addEventListener('click', async function() {
         await cloudSync.triggerManualSync();
+        populateCloudSyncSettings();
+    });
+
+    refs.cloudSyncResyncButton.addEventListener('click', async function() {
+        await cloudSync.triggerCompleteResync();
         populateCloudSyncSettings();
     });
 

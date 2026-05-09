@@ -4,7 +4,8 @@
  */
 
 import { STATE } from './state';
-import { listConversations, getOPFSHandle, loadConversation, loadSummary, listImages, listReferenceImages, saveDirectoryHandle, loadDirectoryHandle, clearDirectoryHandle } from './storage';
+import { listConversations, loadConversation, loadSummary, listImages, listReferenceImages, saveDirectoryHandle, loadDirectoryHandle, clearDirectoryHandle } from './storage';
+import { getOPFSHandle } from './opfs';
 import * as ui from './ui';
 
 declare global {

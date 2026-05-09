@@ -397,3 +397,57 @@ After completing any code change, agents MUST run both verification commands bef
 
 - `npm run type-check` - Run TypeScript strict type check (tsc --noEmit); must pass with zero errors
 - `npm run build` - Production build; must complete without errors
+
+## 17. FindForge Suite — Path Independence & Namespacing
+
+This app is part of the **FindForge suite** of LLM tools, all deployed under the same server at different sub-paths.
+
+### Deployment Path
+
+In production this app lives at `/translate/`. All asset URLs must be **relative** (`./`) to remain path-independent.
+
+### OPFS Namespacing
+
+All browser origins share the same OPFS root. To prevent conflicts, every FindForge app prefixes its data:
+
+```
+OPFS Root:
+├── cloud/                           ← Shared across all FindForge tools
+│   └── preferences/
+│       ├── cloudSyncEnabled         ← Global cloud sync toggle
+│       └── cloudSyncDeleteRemote    ← Global delete-remote preference
+│
+└── translate/                       ← This app's namespace
+    ├── sessions/
+    ├── preferences/
+    │   ├── apiKey
+    │   ├── cloudSync                ← Per-app sync state (lastSyncTime)
+    │   ├── syncManifest
+    │   ├── syncJournal
+    │   └── ...
+    ├── conversations/
+    └── translations/
+```
+
+- **`/cloud/`**: Shared data across all FindForge tools. Not backed up to cloud storage.
+- **`/{app_prefix}/`**: App-specific data. Returned by `getOPFSHandle()`. Backed up to cloud storage with the same prefix.
+- **`migrateToNamespacedPaths()`**: One-time migration from old root-level paths to `/{app_prefix}/`. Runs on first storage access. Old data is preserved (copied, not moved).
+
+### Cloud Storage Namespacing
+
+All remote storage paths are prefixed with `translate/` to prevent cross-app conflicts:
+
+- `translate/sessions/{id}/session.json`
+- `translate/sessions/{id}/translations/{ts}.json`
+- `translate/preferences/apiKey`
+- `translate/cloud-state.json`
+
+The `/cloud/` directory is **never** synced to cloud storage.
+
+### Key Constants
+
+| Constant | File | Value | Purpose |
+|----------|------|-------|---------|
+| `APP_PREFIX` | `src/storage.ts` | `'translate'` | OPFS namespace for this app |
+| `CLOUD_PREFIX` | `src/storage.ts` | `'cloud'` | Shared cross-tool namespace |
+| `CLOUD_PREFIX` | `src/cloudSync.ts` | `'translate/'` | Cloud storage path prefix |

@@ -206,6 +206,10 @@ export async function init(): Promise<void> {
     translation.setConfig(config);
     setOpenRouterConfig(config);
 
+    // Initialize sync journal before any storage writes
+    const { init: initJournal } = await import('./syncJournal');
+    await initJournal();
+
     await loadSettings();
 
     await loadUrlApiKey();
