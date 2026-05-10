@@ -276,6 +276,9 @@
                     <select class="form-select form-select-sm" id="session-selector" aria-label="Conversation selection">
                     </select>
                 </div>
+                <div class="col-auto">
+                    <button type="button" class="btn btn-outline-secondary btn-sm" id="new-session-btn" title="New conversation">+</button>
+                </div>
                 <div class="col-auto text-end">
                     <button type="button" class="btn btn-outline-secondary btn-sm" id="auth-btn" style="display: none;">Auth</button>
                 </div>
@@ -728,7 +731,8 @@
                                                 </select>
                                             </div>
                                             <div class="col-auto">
-                                                <button type="button" class="btn btn-outline-danger" id="settings-delete-session-btn" disabled title="Delete this conversation">Delete</button>
+                                                <button type="button" class="btn btn-outline-primary btn-sm" id="settings-new-session-btn">New</button>
+                                                <button type="button" class="btn btn-outline-danger btn-sm ms-1" id="settings-delete-session-btn" disabled title="Delete this conversation">Delete</button>
                                             </div>
                                         </div>
                                     </div>

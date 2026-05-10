@@ -76,6 +76,7 @@ interface SettingsReferences {
     sessionTheirLanguageSelect: HTMLSelectElement;
     sessionMyLanguageSelect: HTMLSelectElement;
     deleteSessionButton: HTMLButtonElement;
+    newSessionButton: HTMLButtonElement;
     saveSessionButton: HTMLButtonElement;
     modelsTabSearchInput: HTMLInputElement;
     modelsTabListContainer: HTMLDivElement;
@@ -164,6 +165,7 @@ function openSettingsModal(): void {
             sessionTheirLanguageSelect: settingsModalElement.querySelector('#settings-session-their-language') as HTMLSelectElement,
             sessionMyLanguageSelect: settingsModalElement.querySelector('#settings-session-my-language') as HTMLSelectElement,
             deleteSessionButton: settingsModalElement.querySelector('#settings-delete-session-btn') as HTMLButtonElement,
+            newSessionButton: settingsModalElement.querySelector('#settings-new-session-btn') as HTMLButtonElement,
             saveSessionButton: settingsModalElement.querySelector('#settings-save-session-btn') as HTMLButtonElement,
             modelsTabSearchInput: settingsModalElement.querySelector('#settings-models-search') as HTMLInputElement,
             modelsTabListContainer: settingsModalElement.querySelector('#settings-models-list') as HTMLDivElement,
@@ -232,6 +234,17 @@ function setupEventListeners(): void {
 
     refs.deleteSessionButton.addEventListener('click', async function() {
         await deleteSelectedSession();
+    });
+
+    refs.newSessionButton.addEventListener('click', async function() {
+        const name = window.prompt("Enter a name for the new conversation:", "New Conversation");
+        if (name === null) return; // User cancelled
+        const newSessionId = await translation.createSession(name.trim() || undefined);
+        await renderSessionList();
+        refs!.sessionListSelect.value = newSessionId;
+        selectedSessionIdInModal = newSessionId;
+        loadSessionIntoEditor(newSessionId);
+        await refreshSessionSelector();
     });
 
     refs.saveSessionButton.addEventListener('click', async function() {

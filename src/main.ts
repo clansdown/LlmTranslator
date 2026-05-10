@@ -343,6 +343,7 @@ function setupNewSessionButtonHandler(): void {
 
     button.addEventListener("click", async function(): Promise<void> {
         const name = window.prompt("Enter a name for the new conversation:", "New Conversation");
+        if (name === null) return; // User cancelled
         await translation.saveCurrentSession();
         const newSessionId = await translation.createSession(name ?? undefined);
         await populateSessionSelector();
