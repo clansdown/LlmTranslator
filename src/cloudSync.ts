@@ -1512,10 +1512,15 @@ export async function triggerCompleteResync(): Promise<void> {
  * Exports the entire OPFS app data to a user-selected local directory.
  * Uses showDirectoryPicker() for folder selection.
  * Skips the internal sync/ directory.
- * @returns {Promise<{ fileCount: number; byteCount: number }>} Files exported and total bytes
- * @throws {Error} If directory picker fails or user cancels
+ * Skips individual files that fail to copy and reports the count.
+ * @returns {Promise<{ fileCount: number; byteCount: number; skippedCount: number }>} Files exported, total bytes, files skipped
+ * @throws {Error} If directory picker fails, API unsupported, or user cancels
  */
-export async function exportToDirectory(): Promise<{ fileCount: number; byteCount: number }> {
+export async function exportToDirectory(): Promise<{ fileCount: number; byteCount: number; skippedCount: number }> {
+    if (typeof (window as any).showDirectoryPicker !== 'function') {
+        throw new Error('Export requires a Chromium-based browser (Chrome, Edge, Brave, etc.)');
+    }
+
     let targetDir: FileSystemDirectoryHandle;
     try {
         targetDir = await (window as any).showDirectoryPicker();
@@ -1529,9 +1534,11 @@ export async function exportToDirectory(): Promise<{ fileCount: number; byteCoun
     const root = await getOPFSHandle();
     let fileCount = 0;
     let byteCount = 0;
+    let skippedCount = 0;
 
     /**
-     * Recursively copies files from source to dest, skipping the sync/ directory
+     * Recursively copies files from source to dest, skipping the sync/ directory.
+     * Failed files are skipped and counted, not aborted.
      * @param {FileSystemDirectoryHandle} source - Source directory handle
      * @param {FileSystemDirectoryHandle} dest - Destination directory handle
      * @returns {Promise<void>}
@@ -1540,24 +1547,35 @@ export async function exportToDirectory(): Promise<{ fileCount: number; byteCoun
         for await (const entry of (source as any).values()) {
             if (entry.name === 'sync') continue;
             if (entry.kind === 'file') {
-                const fileHandle = await source.getFileHandle(entry.name);
-                const file = await fileHandle.getFile();
-                const content = await file.arrayBuffer();
-                const newFile = await dest.getFileHandle(entry.name, { create: true });
-                const writable = await newFile.createWritable();
-                await writable.write(content);
-                await writable.close();
-                fileCount++;
-                byteCount += content.byteLength;
+                try {
+                    const fileHandle = await source.getFileHandle(entry.name);
+                    const file = await fileHandle.getFile();
+                    const content = await file.arrayBuffer();
+                    const newFile = await dest.getFileHandle(entry.name, { create: true });
+                    const writable = await newFile.createWritable();
+                    await writable.write(content);
+                    await writable.close();
+                    fileCount++;
+                    byteCount += content.byteLength;
+                } catch (e) {
+                    skippedCount++;
+                    console.warn('[cloudSync] Export skipped file:', entry.name, e);
+                }
             } else if (entry.kind === 'directory') {
-                const sourceSubDir = await source.getDirectoryHandle(entry.name);
-                const destSubDir = await dest.getDirectoryHandle(entry.name, { create: true });
-                await copyRecursively(sourceSubDir, destSubDir);
+                try {
+                    const sourceSubDir = await source.getDirectoryHandle(entry.name);
+                    const destSubDir = await dest.getDirectoryHandle(entry.name, { create: true });
+                    await copyRecursively(sourceSubDir, destSubDir);
+                } catch (e) {
+                    skippedCount++;
+                    console.warn('[cloudSync] Export skipped directory:', entry.name, e);
+                }
             }
         }
     }
 
     await copyRecursively(root, targetDir);
-    console.log('[cloudSync] Exported ' + fileCount + ' files (' + byteCount + ' bytes)');
-    return { fileCount, byteCount };
+    console.log('[cloudSync] Exported ' + fileCount + ' files (' + byteCount + ' bytes)' +
+        (skippedCount > 0 ? ', ' + skippedCount + ' skipped' : ''));
+    return { fileCount, byteCount, skippedCount };
 }

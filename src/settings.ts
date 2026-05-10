@@ -310,8 +310,11 @@ function setupEventListeners(): void {
         refs!.cloudSyncExportButton.disabled = true;
         try {
             const result = await cloudSync.exportToDirectory();
-            refs!.cloudSyncStatusDiv.textContent =
-                'Export complete (' + result.fileCount + ' files, ' + formatHumanReadableByteCount(result.byteCount) + ')';
+            let status = 'Export complete (' + result.fileCount + ' files, ' + formatHumanReadableByteCount(result.byteCount) + ')';
+            if (result.skippedCount > 0) {
+                status += ' \u2014 ' + result.skippedCount + ' skipped';
+            }
+            refs!.cloudSyncStatusDiv.textContent = status;
         } catch (e) {
             const msg = e instanceof Error ? e.message : 'Export failed';
             refs!.cloudSyncStatusDiv.textContent = msg;
