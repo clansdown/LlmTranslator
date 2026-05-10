@@ -84,6 +84,7 @@ export const LITERAL_RETRANSLATION_PROMPT: string =
 Your task is to produce an ultra-literal, word-by-word translation of the text into [LANGUAGE].
 Prioritize exact word correspondence over natural phrasing even if the result is grammatically awkward or outright wrong.
 You may output a phrase for a word if there is no direct equivalent in the target language, but separate the words with hyphens, for example, "there-being".
+Prioritize accuracy over brevity; if a single-word translation is misleading or lacking nuance, provide synonyms separated by slashes, for example "run/operate/manage" for "운영하다".
 Characters which have no meaning in [LANGUAGE] should be represented in square brackets with the meaning, for example, [subject marker].
 Output only the literal translation of the text into [LANGUAGE] with no explanations. Do not include any of the original text. There should be no text which is not [LANGUAGE]`;
 
