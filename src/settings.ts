@@ -293,6 +293,15 @@ function setupEventListeners(): void {
     });
     refs.resetTagsButton.addEventListener('click', resetTagsToDefaults);
 
+    refs.sessionTheirLanguageSelect.addEventListener('change', function() {
+        const theirLanguage = refs!.sessionTheirLanguageSelect.value;
+        const defaults = getDefaultTags(theirLanguage);
+        if (defaults.length > 0) {
+            currentEditorTags = mergeTags(currentEditorTags, defaults);
+            renderTagList();
+        }
+    });
+
     refs.cloudSyncEnabledInput.addEventListener('change', function() {
         if (refs!.cloudSyncEnabledInput.checked) {
             cloudSync.enableCloudSync().then(function() {
@@ -414,6 +423,23 @@ function formatHumanReadableByteCount(bytes: number): string {
     const i = Math.min(Math.floor(Math.log10(bytes) / 3), units.length - 1);
     const value = bytes / Math.pow(1024, i);
     return value.toFixed(i === 0 ? 0 : 1) + ' ' + units[i];
+}
+
+/**
+ * Merges default tags into existing tags, avoiding duplicates by name.
+ * Creates deep copies to avoid shared references.
+ * @param {TranslationTag[]} existing - Current tags
+ * @param {TranslationTag[]} defaults - Default tags to merge in
+ * @returns {TranslationTag[]} Merged tags with deep copies
+ */
+function mergeTags(existing: TranslationTag[], defaults: TranslationTag[]): TranslationTag[] {
+    const merged = existing.map(function(t) { return { ...t }; });
+    for (const def of defaults) {
+        if (!merged.some(function(t) { return t.name === def.name; })) {
+            merged.push({ ...def });
+        }
+    }
+    return merged;
 }
 
 /**
@@ -1113,8 +1139,12 @@ function resetTagsToDefaults(): void {
     if (!refs || !selectedSessionIdInModal) return;
 
     const theirLanguage = refs.sessionTheirLanguageSelect.value;
-    currentEditorTags = getDefaultTags(theirLanguage);
-    renderTagList();
+    const defaults = getDefaultTags(theirLanguage);
+    if (defaults.length > 0) {
+        currentEditorTags = defaults.map(function(t) { return { ...t }; });
+        renderTagList();
+    }
+    // If no defaults for this language, keep existing tags
 }
 
 /**

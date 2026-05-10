@@ -946,7 +946,13 @@ export async function translate(mode: 'input' | 'output'): Promise<void> {
             return;
         }
 
+        const intentTextarea = document.getElementById('intent-textarea') as HTMLTextAreaElement | null;
+        const intent = mode === 'output' ? (intentTextarea?.value.trim() ?? '') : '';
+
         textarea.value = '';
+        if (intentTextarea) {
+            intentTextarea.value = '';
+        }
 
         const session = await loadSession(currentSessionId);
         const effectiveModel = getTranslationModelToUse(session);
@@ -969,7 +975,7 @@ export async function translate(mode: 'input' | 'output'): Promise<void> {
             pill: mode,
             entries: [{
                 source: sourceText,
-                intent: '',
+                intent: intent,
                 model: effectiveModel ?? '',
                 modelName: getModelName(effectiveModel ?? ''),
                 prompt: promptName,
@@ -2553,21 +2559,21 @@ function updateStreamingContent(
     if (!markdownEl || !rawEl) return;
 
     if (isComplete) {
+        markdownEl.innerHTML = renderMarkdown(normalizeForMarkdown(displayText));
         rawEl.textContent = '';
-    }
+        streamingState.lastRenderedBreakIndex = displayText.length;
+    } else {
+        // Check if new paragraphs were completed since last render
+        const lastDoubleNewline = displayText.lastIndexOf('\n\n');
 
-    // Check if new paragraphs were completed since last render
-    const lastDoubleNewline = displayText.lastIndexOf('\n\n');
+        if (lastDoubleNewline !== -1 && lastDoubleNewline + 2 > streamingState.lastRenderedBreakIndex) {
+            const completedPart = displayText.substring(0, lastDoubleNewline + 2);
+            markdownEl.innerHTML = renderMarkdown(normalizeForMarkdown(completedPart));
+            streamingState.lastRenderedBreakIndex = lastDoubleNewline + 2;
+        }
 
-    if (lastDoubleNewline !== -1 && lastDoubleNewline + 2 > streamingState.lastRenderedBreakIndex) {
-        const completedPart = displayText.substring(0, lastDoubleNewline + 2);
-        markdownEl.innerHTML = renderMarkdown(normalizeForMarkdown(completedPart));
-        streamingState.lastRenderedBreakIndex = lastDoubleNewline + 2;
-    }
-
-    // Show current incomplete paragraph as raw text
-    const remainingText = displayText.substring(streamingState.lastRenderedBreakIndex);
-    if (!isComplete) {
+        // Show current incomplete paragraph as raw text
+        const remainingText = displayText.substring(streamingState.lastRenderedBreakIndex);
         rawEl.textContent = remainingText;
     }
 }
@@ -3120,8 +3126,7 @@ async function handleTranslateStreaming(
     if (mode === 'input') {
         instructions = INPUT_INSTRUCTIONS.replace('[LANGUAGE]', myLangName);
     } else {
-        const intentTextarea = document.getElementById('intent-textarea') as HTMLTextAreaElement | null;
-        const intent = intentTextarea?.value.trim() ?? '';
+        const intent = activeEntry?.intent ?? '';
         const translationInstructions = session?.translationInstructions ?? '';
         const translationInstructionsBlock = translationInstructions
             ? `The following are instructions on how the translation should be styled and presented:\n<TRANSLATIONINSTRUCTIONS>${translationInstructions}</TRANSLATIONINSTRUCTIONS>`
@@ -3134,9 +3139,6 @@ async function handleTranslateStreaming(
         instructions = instructions.replace('[LANGUAGE]', myLangName);
         instructions = instructions.replace('[TARGET_LANGUAGE]', theirLangName);
         instructions = instructions.replace('[TAG_INSTRUCTIONS_BLOCK]', buildTagInstructionsBlock(session?.translationTags, sourceText));
-        if (intentTextarea) {
-            intentTextarea.value = '';
-        }
     }
 
     const userMessage = await buildUserMessage(mode, sourceText, instructions);

@@ -7,11 +7,12 @@ import type { TranslationTag } from './types/translationTag';
 
 /**
  * Returns default translation tags for a given language
- * @param {string} languageId - Language identifier (e.g. 'ko', 'ja')
+ * @param {string} languageId - Language identifier (e.g. 'korean', 'japanese')
  * @returns {TranslationTag[]} Array of default tags for that language
  */
 export function getDefaultTags(languageId: string): TranslationTag[] {
     switch (languageId) {
+        case 'korean':
         case 'ko':
             return [
                 {
@@ -38,6 +39,7 @@ export function getDefaultTags(languageId: string): TranslationTag[] {
                     Omit honorific suffixes like -요 or -습니다, addressing the listener as an equal or someone younger.`
                 }
             ];
+        case 'japanese':
         case 'ja':
             return [
                 {
