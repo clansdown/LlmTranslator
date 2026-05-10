@@ -97,6 +97,7 @@ interface SettingsReferences {
     cloudSyncDeleteRemoteInput: HTMLInputElement;
     cloudSyncNowButton: HTMLButtonElement;
     cloudSyncResyncButton: HTMLButtonElement;
+    cloudSyncExportButton: HTMLButtonElement;
     cloudSyncLastSpan: HTMLSpanElement;
     cloudSyncStatusDiv: HTMLDivElement;
 }
@@ -184,6 +185,7 @@ function openSettingsModal(): void {
             cloudSyncDeleteRemoteInput: settingsModalElement.querySelector('#settings-cloud-sync-delete-remote') as HTMLInputElement,
             cloudSyncNowButton: settingsModalElement.querySelector('#settings-cloud-sync-now') as HTMLButtonElement,
             cloudSyncResyncButton: settingsModalElement.querySelector('#settings-cloud-sync-resync') as HTMLButtonElement,
+            cloudSyncExportButton: settingsModalElement.querySelector('#settings-cloud-sync-export') as HTMLButtonElement,
             cloudSyncLastSpan: settingsModalElement.querySelector('#settings-cloud-sync-last') as HTMLSpanElement,
             cloudSyncStatusDiv: settingsModalElement.querySelector('#settings-cloud-sync-status') as HTMLDivElement
         };
@@ -303,6 +305,22 @@ function setupEventListeners(): void {
         populateCloudSyncSettings();
     });
 
+    refs.cloudSyncExportButton.addEventListener('click', async function() {
+        refs!.cloudSyncStatusDiv.textContent = 'Exporting...';
+        refs!.cloudSyncExportButton.disabled = true;
+        try {
+            const result = await cloudSync.exportToDirectory();
+            refs!.cloudSyncStatusDiv.textContent =
+                'Export complete (' + result.fileCount + ' files, ' + formatHumanReadableByteCount(result.byteCount) + ')';
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : 'Export failed';
+            refs!.cloudSyncStatusDiv.textContent = msg;
+            console.error('[settings] Export failed:', e);
+        } finally {
+            refs!.cloudSyncExportButton.disabled = false;
+        }
+    });
+
     if (settingsModalElement) {
         settingsModalElement.querySelectorAll('[data-bs-toggle="tab"]').forEach(function(btn) {
             btn.addEventListener('shown.bs.tab', async function() {
@@ -367,6 +385,19 @@ function populateCloudSyncSettings(): void {
         refs.cloudSyncStatusDiv.textContent = 'Cloud sync is disabled';
         refs.cloudSyncNowButton.disabled = false;
     }
+}
+
+/**
+ * Formats a byte count into a human-readable string (e.g. "15.3 MB")
+ * @param {number} bytes - Byte count
+ * @returns {string} Formatted string with units
+ */
+function formatHumanReadableByteCount(bytes: number): string {
+    if (bytes === 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.min(Math.floor(Math.log10(bytes) / 3), units.length - 1);
+    const value = bytes / Math.pow(1024, i);
+    return value.toFixed(i === 0 ? 0 : 1) + ' ' + units[i];
 }
 
 /**

@@ -1507,3 +1507,57 @@ export async function triggerCompleteResync(): Promise<void> {
 
     await syncReset();
 }
+
+/**
+ * Exports the entire OPFS app data to a user-selected local directory.
+ * Uses showDirectoryPicker() for folder selection.
+ * Skips the internal sync/ directory.
+ * @returns {Promise<{ fileCount: number; byteCount: number }>} Files exported and total bytes
+ * @throws {Error} If directory picker fails or user cancels
+ */
+export async function exportToDirectory(): Promise<{ fileCount: number; byteCount: number }> {
+    let targetDir: FileSystemDirectoryHandle;
+    try {
+        targetDir = await (window as any).showDirectoryPicker();
+    } catch (e) {
+        if (e instanceof DOMException && e.name === 'AbortError') {
+            throw new Error('Export cancelled');
+        }
+        throw new Error('Could not open directory picker: ' + (e instanceof Error ? e.message : String(e)));
+    }
+
+    const root = await getOPFSHandle();
+    let fileCount = 0;
+    let byteCount = 0;
+
+    /**
+     * Recursively copies files from source to dest, skipping the sync/ directory
+     * @param {FileSystemDirectoryHandle} source - Source directory handle
+     * @param {FileSystemDirectoryHandle} dest - Destination directory handle
+     * @returns {Promise<void>}
+     */
+    async function copyRecursively(source: FileSystemDirectoryHandle, dest: FileSystemDirectoryHandle): Promise<void> {
+        for await (const entry of (source as any).values()) {
+            if (entry.name === 'sync') continue;
+            if (entry.kind === 'file') {
+                const fileHandle = await source.getFileHandle(entry.name);
+                const file = await fileHandle.getFile();
+                const content = await file.arrayBuffer();
+                const newFile = await dest.getFileHandle(entry.name, { create: true });
+                const writable = await newFile.createWritable();
+                await writable.write(content);
+                await writable.close();
+                fileCount++;
+                byteCount += content.byteLength;
+            } else if (entry.kind === 'directory') {
+                const sourceSubDir = await source.getDirectoryHandle(entry.name);
+                const destSubDir = await dest.getDirectoryHandle(entry.name, { create: true });
+                await copyRecursively(sourceSubDir, destSubDir);
+            }
+        }
+    }
+
+    await copyRecursively(root, targetDir);
+    console.log('[cloudSync] Exported ' + fileCount + ' files (' + byteCount + ' bytes)');
+    return { fileCount, byteCount };
+}
