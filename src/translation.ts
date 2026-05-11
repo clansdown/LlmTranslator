@@ -83,6 +83,8 @@ interface TranslationDomRefs {
     explanationEl: HTMLElement | null;
     nuancesEl: HTMLElement | null;
     interpretationEl: HTMLElement | null;
+    interpretationThinkingEl: HTMLElement | null;
+    interpretationThinkingContentEl: HTMLElement | null;
     spinnerEl: HTMLElement | null;
     errorEl: HTMLElement | null;
     errorMessageEl: HTMLElement | null;
@@ -1290,6 +1292,8 @@ function renderTranslationItem(container: HTMLElement, translation: Translation)
             explanationEl: element.querySelector('.translation-explanation') as HTMLElement | null,
             nuancesEl: element.querySelector('.translation-nuances') as HTMLElement | null,
             interpretationEl: element.querySelector('.translation-interpretation') as HTMLElement | null,
+            interpretationThinkingEl: interpretationPane?.querySelector('.translation-thinking') as HTMLElement | null,
+            interpretationThinkingContentEl: interpretationPane?.querySelector('.thinking-content') as HTMLElement | null,
             spinnerEl: element.querySelector('.translation-spinner') as HTMLElement | null,
             errorEl: element.querySelector('.translation-error') as HTMLElement | null,
             errorMessageEl: element.querySelector('.error-message') as HTMLElement | null,
@@ -1642,7 +1646,7 @@ function updateTranslationItemContent(translation: Translation, refs: Translatio
             refs.nuancesEl.innerHTML = entryNuances ? renderMarkdown(entryNuances) : '';
         }
         if (refs.interpretationEl) {
-            if (entryInterpretationPending) {
+            if (entryInterpretationPending && !entryInterpretation) {
                 refs.interpretationEl.innerHTML = '<div class="spinner-border spinner-border-sm" role="status"></div><span style="margin-left: 0.5rem;">Interpreting...</span>';
                 if (refs.regenerateInterpretationBtn) refs.regenerateInterpretationBtn.style.display = 'none';
             } else if (entryInterpretation) {
@@ -2096,31 +2100,51 @@ export async function regenerateInterpretation(translationId: string): Promise<v
     entry.interpretation = undefined;
     updateTranslationItem(translation);
 
-    try {
-        const message = await buildInterpretationMessage(translation);
-        console.log('[regenerateInterpretation] Starting interpretation with model:', session.interpretationModel);
-        const { content: interpretationResult, generationId } = await sendChatMessage(
-            config!.openRouterApiKey!,
-            message,
-            INTERPRETATION_PROMPT,
-            session.interpretationModel,
-            session?.interpretationReasoning ?? 'none',
-            config!.temperature
-        );
-        entry.interpretation = interpretationResult;
-
-        // Fetch generation info after 1s delay
-        storeGenerationInfo(generationId, config!.openRouterApiKey!, entry);
-
-        entry.interpretationPending = false;
-        syncTopLevelFromActive(translation);
-        saveSessionTranslation(currentSessionId, translation);
-        updateTranslationItem(translation);
-    } catch (interpretationError) {
-        console.error('[regenerateInterpretation] Failed:', interpretationError);
-        entry.interpretationPending = false;
-        updateTranslationItem(translation);
-    }
+    const message = await buildInterpretationMessage(translation);
+    console.log('[regenerateInterpretation] Starting interpretation with model:', session.interpretationModel);
+    streamSendChatMessage(
+        config!.openRouterApiKey!,
+        message,
+        INTERPRETATION_PROMPT,
+        session.interpretationModel,
+        {
+            onChunk: function(text: string, reasoning: string): void {
+                entry.interpretation = text;
+                const iRefs = domRefsMap.get(translation);
+                if (reasoning && iRefs?.interpretationThinkingEl && iRefs?.interpretationThinkingContentEl) {
+                    iRefs.interpretationThinkingEl.style.display = '';
+                    iRefs.interpretationThinkingContentEl.textContent = reasoning;
+                }
+                updateTranslationItem(translation);
+            },
+            onDone: function(fullText: string, fullReasoning: string, generationId: string | null): void {
+                entry.interpretation = fullText;
+                entry.interpretationPending = false;
+                const iRefs = domRefsMap.get(translation);
+                if (iRefs?.interpretationThinkingEl) {
+                    iRefs.interpretationThinkingEl.style.display = 'none';
+                }
+                if (generationId) {
+                    storeGenerationInfo(generationId, config!.openRouterApiKey!, entry);
+                }
+                syncTopLevelFromActive(translation);
+                saveSessionTranslation(currentSessionId, translation);
+                updateTranslationItem(translation);
+            },
+            onError: function(error: Error): void {
+                console.error('[regenerateInterpretation] Error:', error);
+                entry.interpretationPending = false;
+                entry.interpretation = undefined;
+                const iRefs = domRefsMap.get(translation);
+                if (iRefs?.interpretationThinkingEl) {
+                    iRefs.interpretationThinkingEl.style.display = 'none';
+                }
+                updateTranslationItem(translation);
+            }
+        },
+        session?.interpretationReasoning ?? 'none',
+        config!.temperature
+    );
 }
 
 /**
@@ -2225,36 +2249,56 @@ export async function regenerateIndependentSections(translationId: string): Prom
     if (session?.interpretationModel && entry.translation) {
         entry.interpretationPending = true;
         entry.interpretation = undefined;
-        tasks.push((async () => {
-            try {
-                const message = await buildInterpretationMessage(translation);
-                console.log('[interpretation] Starting interpretation with model:', session.interpretationModel);
-                const { content: interpretationResult, generationId } = await sendChatMessage(
-                    config!.openRouterApiKey!,
-                    message,
-                    INTERPRETATION_PROMPT,
-                    session.interpretationModel!,
-                    session?.interpretationReasoning ?? 'none',
-                    config!.temperature
-                );
-                entry.interpretation = interpretationResult;
+        updateTranslationItem(translation);
 
-                // Fetch generation info after 1s delay
-                storeGenerationInfo(generationId, config!.openRouterApiKey!, entry);
-
-                entry.interpretationPending = false;
-                syncTopLevelFromActive(translation);
-                saveSessionTranslation(currentSessionId, translation);
-                updateTranslationItem(translation);
-            } catch (interpretationError) {
-                console.error('[interpretation] Failed:', interpretationError);
-                entry.interpretationPending = false;
-                updateTranslationItem(translation);
-            }
-        })());
+        const message = await buildInterpretationMessage(translation);
+        console.log('[interpretation] Starting interpretation with model:', session.interpretationModel);
+        streamSendChatMessage(
+            config!.openRouterApiKey!,
+            message,
+            INTERPRETATION_PROMPT,
+            session.interpretationModel,
+            {
+                onChunk: function(text: string, reasoning: string): void {
+                    entry.interpretation = text;
+                    const iRefs = domRefsMap.get(translation);
+                    if (reasoning && iRefs?.interpretationThinkingEl && iRefs?.interpretationThinkingContentEl) {
+                        iRefs.interpretationThinkingEl.style.display = '';
+                        iRefs.interpretationThinkingContentEl.textContent = reasoning;
+                    }
+                    updateTranslationItem(translation);
+                },
+                onDone: function(fullText: string, fullReasoning: string, generationId: string | null): void {
+                    entry.interpretation = fullText;
+                    entry.interpretationPending = false;
+                    const iRefs = domRefsMap.get(translation);
+                    if (iRefs?.interpretationThinkingEl) {
+                        iRefs.interpretationThinkingEl.style.display = 'none';
+                    }
+                    if (generationId) {
+                        storeGenerationInfo(generationId, config!.openRouterApiKey!, entry);
+                    }
+                    syncTopLevelFromActive(translation);
+                    saveSessionTranslation(currentSessionId, translation);
+                    updateTranslationItem(translation);
+                },
+                onError: function(error: Error): void {
+                    console.error('[interpretation] Error:', error);
+                    entry.interpretationPending = false;
+                    entry.interpretation = undefined;
+                    const iRefs = domRefsMap.get(translation);
+                    if (iRefs?.interpretationThinkingEl) {
+                        iRefs.interpretationThinkingEl.style.display = 'none';
+                    }
+                    updateTranslationItem(translation);
+                }
+            },
+            session?.interpretationReasoning ?? 'none',
+            config!.temperature
+        );
     }
 
-        if (tasks.length > 0) {
+    if (tasks.length > 0) {
             Promise.all(tasks)
                 .then(() => updateTranslationItem(translation))
                 .catch(() => updateTranslationItem(translation));
@@ -3160,7 +3204,17 @@ async function handleTranslateStreaming(
                 streamState.accumulatedReasoning = reasoning;
                 updateStreamingContent(refs!, streamState, text, reasoning);
 
-                // Once </TRANSLATION> is seen, start dependent sections immediately
+                // Fallback: if </TRANSLATION> is missing but next section has started
+                if (!streamState.translationComplete) {
+                    const openIdx = text.indexOf('<TRANSLATION>');
+                    const explanationIdx = text.indexOf('<EXPLANATION>');
+                    const nuancesIdx = text.indexOf('<NUANCES>');
+                    if (openIdx !== -1 && ((explanationIdx > openIdx) || (nuancesIdx > openIdx))) {
+                        streamState.translationComplete = true;
+                    }
+                }
+
+                // Once translation is complete (either way), start dependent sections immediately
                 if (streamState.translationComplete && !streamState.backgroundTasksTriggered) {
                     streamState.backgroundTasksTriggered = true;
                     const result = extractStructuredResult(text);
