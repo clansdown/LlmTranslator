@@ -109,7 +109,7 @@ Output only the literal translation of the text into [LANGUAGE] with no explanat
  * [TEXT] is replaced with the translation text to analyze
  */
 export const WORD_DEFINITIONS_PROMPT: string =
-`You will be given a text. For each word and punctuation in the text, output an XML entry describing it.
+`You will be given a text in an original language. For each word and punctuation in the text, output an XML entry describing it in [LANGUAGE].
 
 Use these tags:
 - <ITEM><WORD>word</WORD><DEF>concise dictionary definition in [LANGUAGE]</DEF><EXP>explanation of how the word is used in this specific context in [LANGUAGE]</EXP></ITEM> for each word
@@ -120,8 +120,8 @@ Important rules:
 1. Preserve the exact order of words and punctuation from the input text
 2. Include ALL words and ALL punctuation marks - nothing should be skipped
 3. The <WORD> tag should contain the exact word from the text
-4. The <DEF> tag should contain a brief dictionary definition
-5. The <EXP> tag should explain how this word is used in context
+4. The <DEF> tag should contain a concise dictionary definition in [LANGUAGE]
+5. The <EXP> tag should explain in [LANGUAGE] how this word is used in context
 6. Do not output anything except the XML structure
 
 Input text:

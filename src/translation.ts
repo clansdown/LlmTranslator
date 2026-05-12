@@ -10,6 +10,7 @@ import * as ui from './ui';
 import { LANGUAGES } from './languages';
 import { INPUT_SYSTEM_PROMPT, OUTPUT_SYSTEM_PROMPT, INPUT_INSTRUCTIONS, OUTPUT_INSTRUCTIONS, LITERAL_RETRANSLATION_PROMPT, OUTPUT_LITERAL_RETRANSLATION_PROMPT, QUESTION_SYSTEM_PROMPT, WORD_DEFINITIONS_PROMPT, INTERPRETATION_PROMPT } from './prompts';
 import { renderMarkdown, normalizeForMarkdown } from './markdown';
+import { readLocalFile, writeLocalFile, deleteLocalFile } from './opfs';
 import type { Translation, TranslationEntry, TranslationWordItem, WordItem, PunctItem, NewlineItem } from './types/translation';
 import type { StreamingAbortHandle, StreamCallbacks, StreamUsage } from './types/api';
 import type { Config } from './types/config';
@@ -49,6 +50,16 @@ let currentLiteralModel: string | null = null;
  * @type {string | null}
  */
 let currentInterpretationModel: string | null = null;
+
+/** OPFS path for source textarea draft */
+const DRAFT_SOURCE_PATH = 'drafts/source';
+/** OPFS path for intent textarea draft */
+const DRAFT_INTENT_PATH = 'drafts/intent';
+/** Debounce delay for auto-saving drafts (ms) */
+const DRAFT_SAVE_DEBOUNCE_MS = 2000;
+
+/** Timeout handle for draft auto-save debounce */
+let draftSaveTimeout: ReturnType<typeof setTimeout> | null = null;
 
 /**
  * In-memory translation array - source of truth for translations
@@ -186,6 +197,14 @@ interface LiteralStreamingState {
  * @type {WeakMap<Translation, LiteralStreamingState>}
  */
 const literalStreamingStateMap: WeakMap<Translation, LiteralStreamingState> = new WeakMap();
+
+/**
+ * Map from Translation objects to their interpretation streaming abort handles.
+ * Interpretation runs as a background task after the main translation completes,
+ * so it needs separate tracking from the main stream.
+ * @type {WeakMap<Translation, () => void>}
+ */
+const interpretationAbortMap: WeakMap<Translation, () => void> = new WeakMap();
 
 /**
  * Sets the model override dropdown with available models
@@ -811,7 +830,92 @@ export function setupTranslateButtons(): void {
 }
 
 /**
- * Sets up keyboard handlers for the source textarea: Enter sends as output, Alt+Enter asks a question, Shift+Enter inserts a newline.
+ * Saves the current source textarea and intent textarea contents to OPFS drafts.
+ * Called by the debounced auto-save handler.
+ * @returns {Promise<void>}
+ */
+async function saveDrafts(): Promise<void> {
+    const sourceEl = document.getElementById('source-textarea') as HTMLTextAreaElement | null;
+    const intentEl = document.getElementById('intent-textarea') as HTMLTextAreaElement | null;
+    const sourceValue = sourceEl?.value ?? '';
+    const intentValue = intentEl?.value ?? '';
+    try {
+        await writeLocalFile(DRAFT_SOURCE_PATH, sourceValue);
+        if (intentEl) {
+            await writeLocalFile(DRAFT_INTENT_PATH, intentValue);
+        }
+    } catch (e) {
+        console.error('[saveDrafts] Error saving draft:', e);
+    }
+}
+
+/**
+ * Loads draft text from OPFS and populates the textareas.
+ * Should be called once on app startup.
+ * @returns {Promise<void>}
+ */
+export async function loadDrafts(): Promise<void> {
+    try {
+        const sourceDraft = await readLocalFile(DRAFT_SOURCE_PATH);
+        const intentDraft = await readLocalFile(DRAFT_INTENT_PATH);
+        const sourceEl = document.getElementById('source-textarea') as HTMLTextAreaElement | null;
+        const intentEl = document.getElementById('intent-textarea') as HTMLTextAreaElement | null;
+        if (sourceEl && sourceDraft !== null && sourceDraft.length > 0) {
+            sourceEl.value = sourceDraft;
+        }
+        if (intentEl && intentDraft !== null && intentDraft.length > 0) {
+            intentEl.value = intentDraft;
+        }
+    } catch (e) {
+        console.error('[loadDrafts] Error loading drafts:', e);
+    }
+}
+
+/**
+ * Deletes both draft files from OPFS.
+ * Called when a translation is successfully persisted to OPFS.
+ * @returns {Promise<void>}
+ */
+export async function clearDrafts(): Promise<void> {
+    try {
+        await deleteLocalFile(DRAFT_SOURCE_PATH);
+        await deleteLocalFile(DRAFT_INTENT_PATH).catch(function() {});
+    } catch (e) {
+        console.error('[clearDrafts] Error clearing drafts:', e);
+    }
+}
+
+/**
+ * Attaches input event listeners to the source and intent textareas
+ * that auto-save their contents to OPFS with a debounce.
+ * Should be called once on app startup after the textareas exist.
+ * @returns {void}
+ */
+export function setupDraftAutoSave(): void {
+    const sourceEl = document.getElementById('source-textarea') as HTMLTextAreaElement | null;
+    const intentEl = document.getElementById('intent-textarea') as HTMLTextAreaElement | null;
+
+    function scheduleSave(): void {
+        if (draftSaveTimeout !== null) {
+            clearTimeout(draftSaveTimeout);
+        }
+        draftSaveTimeout = setTimeout(function() {
+            draftSaveTimeout = null;
+            saveDrafts();
+        }, DRAFT_SAVE_DEBOUNCE_MS);
+    }
+
+    if (sourceEl) {
+        sourceEl.addEventListener('input', scheduleSave);
+    }
+    if (intentEl) {
+        intentEl.addEventListener('input', scheduleSave);
+    }
+}
+
+/**
+ * Sets up keyboard handlers for the source textarea: Alt+Enter asks a question,
+ * Enter and Shift+Enter insert a newline (default textarea behavior).
  * @returns {void}
  */
 export function setupTextareaKeyHandlers(): void {
@@ -819,16 +923,9 @@ export function setupTextareaKeyHandlers(): void {
 
     if (sourceTextarea) {
         sourceTextarea.addEventListener('keydown', function(event: KeyboardEvent): void {
-            if (event.key === 'Enter') {
-                if (event.shiftKey) {
-                    // Shift+Enter: insert newline (default behavior), do not preventDefault
-                } else if (event.altKey) {
-                    event.preventDefault();
-                    askQuestion();
-                } else {
-                    event.preventDefault();
-                    translate('output');
-                }
+            if (event.key === 'Enter' && event.altKey) {
+                event.preventDefault();
+                askQuestion();
             }
         });
 
@@ -1015,7 +1112,8 @@ export async function translate(mode: 'input' | 'output'): Promise<void> {
             mode,
             systemPrompt,
             effectiveModel,
-            reasoningLevel
+            reasoningLevel,
+            { clearDraftsOnDone: true }
         );
     } finally {
         isTranslatingOrAsking = false;
@@ -1129,7 +1227,8 @@ export async function askQuestion(): Promise<void> {
             translation,
             userMessage,
             effectiveModel,
-            reasoningLevel
+            reasoningLevel,
+            true
         );
     } finally {
         isTranslatingOrAsking = false;
@@ -1746,7 +1845,7 @@ function updateTranslationItemContent(translation: Translation, refs: Translatio
         }
 
         if (refs.interpretationEl) {
-            if (entryInterpretationPending) {
+            if (entryInterpretationPending && !entryInterpretation) {
                 refs.interpretationEl.innerHTML = '<div class="spinner-border spinner-border-sm" role="status"></div><span style="margin-left: 0.5rem;">Interpreting...</span>';
                 if (refs.regenerateInterpretationBtn) refs.regenerateInterpretationBtn.style.display = 'none';
             } else if (entryInterpretation) {
@@ -1759,7 +1858,7 @@ function updateTranslationItemContent(translation: Translation, refs: Translatio
         }
 
         if (refs.regenerateLiteralBtn) refs.regenerateLiteralBtn.style.display = currentLiteralModel ? 'inline-block' : 'none';
-        if (refs.regenerateInterpretationBtn) refs.regenerateInterpretationBtn.style.display = currentInterpretationModel ? 'inline-block' : 'none';
+        if (refs.regenerateInterpretationBtn && !entryInterpretationPending) refs.regenerateInterpretationBtn.style.display = currentInterpretationModel ? 'inline-block' : 'none';
 
         if (refs.sectionsArea && refs.toggleSectionsBtn) {
             if (translation.sectionsCollapsed) {
@@ -2096,13 +2195,14 @@ export async function regenerateInterpretation(translationId: string): Promise<v
     const entry = translation.entries[activeIdx];
     if (!entry) return;
 
+    abortExistingInterpretation(translation);
     entry.interpretationPending = true;
     entry.interpretation = undefined;
     updateTranslationItem(translation);
 
     const message = await buildInterpretationMessage(translation);
     console.log('[regenerateInterpretation] Starting interpretation with model:', session.interpretationModel);
-    streamSendChatMessage(
+    const abortHandle = streamSendChatMessage(
         config!.openRouterApiKey!,
         message,
         INTERPRETATION_PROMPT,
@@ -2111,13 +2211,20 @@ export async function regenerateInterpretation(translationId: string): Promise<v
             onChunk: function(text: string, reasoning: string): void {
                 entry.interpretation = text;
                 const iRefs = domRefsMap.get(translation);
-                if (reasoning && iRefs?.interpretationThinkingEl && iRefs?.interpretationThinkingContentEl) {
+                if (!iRefs) return;
+                if (reasoning && iRefs.interpretationThinkingEl && iRefs.interpretationThinkingContentEl) {
                     iRefs.interpretationThinkingEl.style.display = '';
                     iRefs.interpretationThinkingContentEl.textContent = reasoning;
                 }
-                updateTranslationItem(translation);
+                if (iRefs.interpretationEl) {
+                    iRefs.interpretationEl.innerHTML = renderMarkdown(entry.interpretation);
+                }
+                if (iRefs.regenerateInterpretationBtn) {
+                    iRefs.regenerateInterpretationBtn.style.display = 'none';
+                }
             },
             onDone: function(fullText: string, fullReasoning: string, generationId: string | null): void {
+                interpretationAbortMap.delete(translation);
                 entry.interpretation = fullText;
                 entry.interpretationPending = false;
                 const iRefs = domRefsMap.get(translation);
@@ -2132,6 +2239,7 @@ export async function regenerateInterpretation(translationId: string): Promise<v
                 updateTranslationItem(translation);
             },
             onError: function(error: Error): void {
+                interpretationAbortMap.delete(translation);
                 console.error('[regenerateInterpretation] Error:', error);
                 entry.interpretationPending = false;
                 entry.interpretation = undefined;
@@ -2145,6 +2253,7 @@ export async function regenerateInterpretation(translationId: string): Promise<v
         session?.interpretationReasoning ?? 'none',
         config!.temperature
     );
+    interpretationAbortMap.set(translation, abortHandle.abort);
 }
 
 /**
@@ -2247,13 +2356,14 @@ export async function regenerateIndependentSections(translationId: string): Prom
     }
 
     if (session?.interpretationModel && entry.translation) {
+        abortExistingInterpretation(translation);
         entry.interpretationPending = true;
         entry.interpretation = undefined;
         updateTranslationItem(translation);
 
         const message = await buildInterpretationMessage(translation);
         console.log('[interpretation] Starting interpretation with model:', session.interpretationModel);
-        streamSendChatMessage(
+        const abortHandle = streamSendChatMessage(
             config!.openRouterApiKey!,
             message,
             INTERPRETATION_PROMPT,
@@ -2262,13 +2372,20 @@ export async function regenerateIndependentSections(translationId: string): Prom
                 onChunk: function(text: string, reasoning: string): void {
                     entry.interpretation = text;
                     const iRefs = domRefsMap.get(translation);
-                    if (reasoning && iRefs?.interpretationThinkingEl && iRefs?.interpretationThinkingContentEl) {
+                    if (!iRefs) return;
+                    if (reasoning && iRefs.interpretationThinkingEl && iRefs.interpretationThinkingContentEl) {
                         iRefs.interpretationThinkingEl.style.display = '';
                         iRefs.interpretationThinkingContentEl.textContent = reasoning;
                     }
-                    updateTranslationItem(translation);
+                    if (iRefs.interpretationEl) {
+                        iRefs.interpretationEl.innerHTML = renderMarkdown(entry.interpretation);
+                    }
+                    if (iRefs.regenerateInterpretationBtn) {
+                        iRefs.regenerateInterpretationBtn.style.display = 'none';
+                    }
                 },
                 onDone: function(fullText: string, fullReasoning: string, generationId: string | null): void {
+                    interpretationAbortMap.delete(translation);
                     entry.interpretation = fullText;
                     entry.interpretationPending = false;
                     const iRefs = domRefsMap.get(translation);
@@ -2283,6 +2400,7 @@ export async function regenerateIndependentSections(translationId: string): Prom
                     updateTranslationItem(translation);
                 },
                 onError: function(error: Error): void {
+                    interpretationAbortMap.delete(translation);
                     console.error('[interpretation] Error:', error);
                     entry.interpretationPending = false;
                     entry.interpretation = undefined;
@@ -2296,6 +2414,7 @@ export async function regenerateIndependentSections(translationId: string): Prom
             session?.interpretationReasoning ?? 'none',
             config!.temperature
         );
+        interpretationAbortMap.set(translation, abortHandle.abort);
     }
 
     if (tasks.length > 0) {
@@ -2986,7 +3105,31 @@ function handleLiteralRetranslationStreaming(
 }
 
 /**
+ * Aborts any running interpretation stream for a translation.
+ * Cleans up pending state and hides the thinking element.
+ * @param {Translation} translation - Translation whose interpretation to abort
+ * @returns {void}
+ */
+function abortExistingInterpretation(translation: Translation): void {
+    const abortFn = interpretationAbortMap.get(translation);
+    if (abortFn) {
+        abortFn();
+        interpretationAbortMap.delete(translation);
+    }
+    ensureEntries(translation);
+    const entry = translation.entries[translation.activeEntryIndex ?? 0];
+    if (entry) {
+        entry.interpretationPending = false;
+    }
+    const iRefs = domRefsMap.get(translation);
+    if (iRefs?.interpretationThinkingEl) {
+        iRefs.interpretationThinkingEl.style.display = 'none';
+    }
+}
+
+/**
  * Aborts an active streaming generation for a translation.
+ * Also aborts any concurrent interpretation stream via abortExistingInterpretation.
  * Sets status to 'error' and cleans up DOM.
  * @param {Translation} translation - Translation whose stream to abort
  * @returns {void}
@@ -2997,6 +3140,7 @@ function abortExistingStream(translation: Translation): void {
         streamState.abort();
         streamingStateMap.delete(translation);
     }
+    abortExistingInterpretation(translation);
     translation.status = 'error';
     translation.error = 'Generation stopped';
     const refs = domRefsMap.get(translation);
@@ -3127,6 +3271,7 @@ async function startBackgroundTasksAfterStreaming(
 interface TranslateStreamingOptions {
     oldTimestampToDelete?: number;
     skipBackgroundTasks?: boolean;
+    clearDraftsOnDone?: boolean;
 }
 
 /**
@@ -3302,6 +3447,10 @@ async function handleTranslateStreaming(
                 // Save to OPFS
                 saveSessionTranslation(currentSessionId, translation);
 
+                if (options?.clearDraftsOnDone) {
+                    clearDrafts();
+                }
+
                 // Delete old timestamp if renaming
                 if (oldTs) {
                     (async () => {
@@ -3364,7 +3513,8 @@ async function handleQuestionStreaming(
     translation: Translation,
     userMessage: string,
     effectiveModel: string,
-    reasoningLevel: string
+    reasoningLevel: string,
+    clearDraftsOnDone?: boolean
 ): Promise<void> {
     const refs = domRefsMap.get(translation);
     if (!refs) {
@@ -3410,6 +3560,9 @@ async function handleQuestionStreaming(
                 teardownStreamingDisplay(refs!);
                 syncTopLevelFromActive(translation);
                 saveSessionTranslation(currentSessionId, translation);
+                if (clearDraftsOnDone) {
+                    clearDrafts();
+                }
                 updateTranslationItemContent(translation, refs!);
                 refreshBalance();
             },

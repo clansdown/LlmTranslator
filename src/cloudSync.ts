@@ -1160,10 +1160,11 @@ async function syncToCloudInternal(): Promise<void> {
     await saveSyncManifest(manifest);
 
     // Update lastCloudCheckTime so future write syncs can detect interleaved changes
-    await syncJournal.setLastCloudCheckTime(new Date().toISOString());
+    const syncTime = new Date().toISOString();
+    await syncJournal.setLastCloudCheckTime(syncTime);
 
     // Signal cloud state changed
-    await uploadCloudState(new Date().toISOString());
+    await uploadCloudState(syncTime);
 
     // Reset 1-hour timer since we just synced
     if (syncTimerId !== null) {
@@ -1186,6 +1187,17 @@ async function syncToCloudInternal(): Promise<void> {
  */
 async function syncFromCloudInternal(): Promise<void> {
     console.log('[cloudSync] Read sync...');
+
+    const syncJournal = await import('./syncJournal');
+    const checkpoint = syncJournal.getCheckpoint();
+
+    // Fast-path: check cloud-state before expensive listing
+    const cloudState = await downloadCloudState();
+    if (cloudState?.lastUpdateTime && checkpoint.lastCloudCheckTime &&
+        cloudState.lastUpdateTime <= checkpoint.lastCloudCheckTime) {
+        console.log('[cloudSync] No remote changes since last check, skipping read sync');
+        return;
+    }
 
     const manifest: SyncManifest = await loadSyncManifest() ?? {};
     const localManifest = await buildLocalManifestWithHashes(manifest);
@@ -1230,12 +1242,12 @@ async function syncFromCloudInternal(): Promise<void> {
     }
 
     // Execute downloads
+    let allDownloadsSucceeded = true;
     for (const path of actions.downloads) {
         try {
             const content = await downloadFile(path);
             await writeLocalFile(path, content);
             // Remove from dirty paths so write sync won't re-upload
-            const syncJournal = await import('./syncJournal');
             syncJournal.removeFromDirtyPaths(path);
             const remoteInfo = remoteMap.get(path);
             if (remoteInfo) {
@@ -1253,6 +1265,7 @@ async function syncFromCloudInternal(): Promise<void> {
             }
         } catch (e) {
             console.error('[cloudSync] Download failed:', path, e);
+            allDownloadsSucceeded = false;
         }
     }
 
@@ -1271,6 +1284,9 @@ async function syncFromCloudInternal(): Promise<void> {
     }
 
     await saveSyncManifest(manifest);
+    if (allDownloadsSucceeded && cloudState?.lastUpdateTime) {
+        await syncJournal.setLastCloudCheckTime(cloudState.lastUpdateTime);
+    }
     STATE.cloudSync.lastError = null;
 }
 
@@ -1464,7 +1480,7 @@ export async function setDeleteRemoteOnLocalDelete(enabled: boolean): Promise<vo
  * @returns {Promise<void>}
  */
 export async function triggerManualSync(): Promise<void> {
-    await syncBothWays();
+    await syncFromCloud();
 }
 
 /**

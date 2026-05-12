@@ -228,6 +228,8 @@ export async function init(): Promise<void> {
 
     translation.setupTranslateButtons();
     translation.setupTextareaKeyHandlers();
+    await translation.loadDrafts();
+    translation.setupDraftAutoSave();
     setupSessionSelectorHandler();
     setupNewSessionButtonHandler();
     settings.setConfig(config);
