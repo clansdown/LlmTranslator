@@ -3601,18 +3601,21 @@ async function handleQuestionStreaming(
 
 /**
  * Builds the user message for a quick question about the current draft.
- * Includes full conversation context and the current source text and intent.
+ * Includes full conversation context, the current source text and intent,
+ * and any previous Q&A from the current quick question dialog session.
  * @param {string} questionText - The user's question
  * @param {string} sourceText - Current source textarea content
  * @param {string} intentText - Current intent textarea content
  * @param {string} myLanguage - User's native language
+ * @param {Array<{question: string, answer: string}>} previousQA - Previous Q&A pairs from within the same dialog
  * @returns {Promise<string>} Complete user message
  */
 async function buildQuickQuestionMessage(
     questionText: string,
     sourceText: string,
     intentText: string,
-    myLanguage: string
+    myLanguage: string,
+    previousQA: Array<{question: string; answer: string}> = []
 ): Promise<string> {
     const background = await getBackground();
 
@@ -3631,7 +3634,16 @@ async function buildQuickQuestionMessage(
     if (intentText) {
         message += `<INTENT>${intentText}</INTENT>\n`;
     }
-    message += `\n<QUESTION>${questionText}</QUESTION>\n\n`;
+
+    if (previousQA.length > 0) {
+        message += "<PREVIOUS_QA>\n";
+        for (const qa of previousQA) {
+            message += `Q: ${qa.question}\nA: ${qa.answer}\n\n`;
+        }
+        message += "</PREVIOUS_QA>\n\n";
+    }
+
+    message += `<QUESTION>${questionText}</QUESTION>\n\n`;
     message += `<INSTRUCTIONS>Answer in ${myLanguage}.</INSTRUCTIONS>`;
 
     return message;
@@ -3639,7 +3651,8 @@ async function buildQuickQuestionMessage(
 
 /**
  * Opens the quick question modal, wires up the streaming logic, and manages
- * the ephemeral Q&A lifecycle. The answer is not persisted anywhere.
+ * the ephemeral Q&A lifecycle. Supports follow-up questions within the same
+ * dialog session. Nothing is persisted when the modal is closed.
  * @returns {void}
  */
 function showQuickQuestionModal(): void {
@@ -3651,15 +3664,18 @@ function showQuickQuestionModal(): void {
     document.body.appendChild(clone);
 
     const questionInput = modalEl.querySelector('#quick-question-input') as HTMLTextAreaElement | null;
-    const answerArea = modalEl.querySelector('#quick-question-answer') as HTMLElement | null;
     const submitBtn = modalEl.querySelector('#quick-question-submit-btn') as HTMLButtonElement | null;
     const cancelBtn = modalEl.querySelector('#quick-question-cancel-btn') as HTMLButtonElement | null;
     const thinkingEl = modalEl.querySelector('.translation-thinking') as HTMLElement | null;
     const thinkingContentEl = modalEl.querySelector('.thinking-content') as HTMLElement | null;
+    const historyEl = modalEl.querySelector('.quick-question-history') as HTMLElement | null;
+    const historyItemTemplate = document.getElementById('quick-question-history-item-template') as HTMLTemplateElement | null;
 
     const modal = new Modal(modalEl);
 
     let abortQuickQuestion: (() => void) | null = null;
+    let dialogHistory: Array<{question: string; answer: string}> = [];
+    let currentAnswerEl: HTMLElement | null = null;
 
     function cleanup(): void {
         if (abortQuickQuestion) {
@@ -3670,16 +3686,52 @@ function showQuickQuestionModal(): void {
         modalEl.remove();
     }
 
+    /**
+     * Adds a Q&A pair to the history area. When isStreaming is true, the
+     * answer slot shows a spinner and the returned element is used for
+     * streaming updates.
+     * @param {string} question - The user's question text
+     * @param {boolean} isStreaming - Whether the answer is still loading
+     * @returns {HTMLElement | null} The answer element for streaming, or null
+     */
+    function addHistoryItem(question: string, isStreaming: boolean): HTMLElement | null {
+        if (!historyItemTemplate || !historyEl) return null;
+        const itemClone = historyItemTemplate.content.cloneNode(true) as DocumentFragment;
+        const item = itemClone.firstElementChild as HTMLElement;
+        const qEl = item.querySelector('.quick-question-q') as HTMLElement | null;
+        const aEl = item.querySelector('.quick-question-a') as HTMLElement | null;
+        if (qEl) qEl.textContent = question;
+        if (aEl) {
+            if (isStreaming) {
+                aEl.innerHTML = '<div class="spinner-border spinner-border-sm" role="status"></div><span class="ms-2">Thinking...</span>';
+            } else {
+                aEl.innerHTML = '';
+            }
+        }
+        historyEl.appendChild(itemClone);
+        return aEl;
+    }
+
+    /**
+     * Shows an error in the currently streaming answer element.
+     * @param {string} message - The error message to display
+     * @returns {void}
+     */
+    function showErrorInCurrentAnswer(message: string): void {
+        if (currentAnswerEl) {
+            currentAnswerEl.innerHTML = '<span class="text-danger">' + message + '</span>';
+        }
+        currentAnswerEl = null;
+    }
+
     if (submitBtn) {
         submitBtn.addEventListener('click', async function() {
             const question = questionInput?.value.trim() || "How's this?";
             if (submitBtn) submitBtn.disabled = true;
             if (questionInput) questionInput.disabled = true;
-
-            if (answerArea) {
-                answerArea.innerHTML = '<div class="spinner-border spinner-border-sm" role="status"></div><span class="ms-2">Thinking...</span>';
-            }
             if (thinkingEl) thinkingEl.style.display = 'none';
+
+            currentAnswerEl = addHistoryItem(question, true);
 
             const sourceTextarea = document.getElementById('source-textarea') as HTMLTextAreaElement | null;
             const sourceText = sourceTextarea?.value ?? '';
@@ -3687,7 +3739,7 @@ function showQuickQuestionModal(): void {
             const intentText = intentTextarea?.value ?? '';
 
             if (!config || !config.openRouterApiKey) {
-                if (answerArea) answerArea.textContent = 'No API key configured.';
+                showErrorInCurrentAnswer('No API key configured.');
                 if (submitBtn) submitBtn.disabled = false;
                 if (questionInput) questionInput.disabled = false;
                 return;
@@ -3696,18 +3748,22 @@ function showQuickQuestionModal(): void {
             const session = await loadSession(currentSessionId);
             const myLang = LANGUAGES.find(function(l) { return l.id === session?.myLanguage; });
             const myLangName = myLang?.name ?? session?.myLanguage ?? 'English';
+            const theirLang = LANGUAGES.find(function(l) { return l.id === session?.theirLanguage; });
+            const theirLangName = theirLang?.name ?? session?.theirLanguage ?? 'Foreign';
 
             const effectiveModel = session?.quickQuestionModel ?? config?.quickQuestionModel ?? session?.model ?? config?.selectedModel;
             if (!effectiveModel) {
-                if (answerArea) answerArea.textContent = 'No model configured for quick questions.';
+                showErrorInCurrentAnswer('No model configured for quick questions.');
                 if (submitBtn) submitBtn.disabled = false;
                 if (questionInput) questionInput.disabled = false;
                 return;
             }
 
             const reasoningLevel = session?.quickQuestionReasoning ?? 'none';
-            const systemPrompt = QUICK_QUESTION_SYSTEM_PROMPT.replace(/\[LANGUAGE\]/g, myLangName);
-            const userMessage = await buildQuickQuestionMessage(question, sourceText, intentText, myLangName);
+            const systemPrompt = QUICK_QUESTION_SYSTEM_PROMPT
+                .replace(/\[LANGUAGE\]/g, myLangName)
+                .replace(/\[TARGET_LANGUAGE\]/g, theirLangName);
+            const userMessage = await buildQuickQuestionMessage(question, sourceText, intentText, myLangName, dialogHistory);
 
             const abortHandle = streamSendChatMessage(
                 config.openRouterApiKey,
@@ -3723,20 +3779,22 @@ function showQuickQuestionModal(): void {
                                 thinkingContentEl.textContent = reasoning;
                                 thinkingEl.style.display = '';
                             }
-                            if (answerArea) answerArea.innerHTML = '';
+                            if (currentAnswerEl) currentAnswerEl.innerHTML = '';
                         } else if (hasText) {
                             if (thinkingEl) thinkingEl.style.display = 'none';
-                            if (answerArea) {
-                                answerArea.innerHTML = renderMarkdown(text);
+                            if (currentAnswerEl) {
+                                currentAnswerEl.innerHTML = renderMarkdown(text);
                             }
                         }
                     },
                     onDone: function(fullText: string, fullReasoning: string, generationId: string | null, usage?: StreamUsage): void {
                         abortQuickQuestion = null;
                         if (thinkingEl) thinkingEl.style.display = 'none';
-                        if (answerArea) {
-                            answerArea.innerHTML = renderMarkdown(fullText);
+                        if (currentAnswerEl) {
+                            currentAnswerEl.innerHTML = renderMarkdown(fullText);
                         }
+                        dialogHistory.push({question, answer: fullText});
+                        currentAnswerEl = null;
                         if (submitBtn) {
                             submitBtn.textContent = 'Ask another';
                             submitBtn.disabled = false;
@@ -3751,9 +3809,10 @@ function showQuickQuestionModal(): void {
                         abortQuickQuestion = null;
                         if (thinkingEl) thinkingEl.style.display = 'none';
                         console.error('[quickQuestion] Error:', error);
-                        if (answerArea) {
-                            answerArea.innerHTML = '<span class="text-danger">Error: ' + error.message + '</span>';
+                        if (currentAnswerEl) {
+                            currentAnswerEl.innerHTML = '<span class="text-danger">Error: ' + error.message + '</span>';
                         }
+                        currentAnswerEl = null;
                         if (submitBtn) {
                             submitBtn.textContent = 'Ask';
                             submitBtn.disabled = false;

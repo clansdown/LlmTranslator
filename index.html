@@ -189,6 +189,21 @@
             overflow-wrap: break-word;
         }
 
+        .quick-question-history {
+            margin-bottom: 1rem;
+        }
+        .quick-question-history-item {
+            margin-bottom: 1rem;
+        }
+        .quick-question-history-item:not(:last-child) {
+            border-bottom: 1px solid var(--bs-border-color);
+            padding-bottom: 1rem;
+        }
+        .quick-question-history-item .quick-question-q::before {
+            content: 'Q: ';
+            font-weight: bold;
+        }
+
         .translation-item.output-item {
             border: 1px solid #375a7f;
         }
@@ -950,11 +965,11 @@
                             <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                         </div>
                         <div class="modal-body">
-                            <textarea class="form-control" id="quick-question-input" rows="3" placeholder="How's this?"></textarea>
-                            <div class="translation-thinking" style="display: none;">
+                            <div class="quick-question-history"></div>
+                            <div class="translation-thinking my-2" style="border: 1px solid black; border-radius: 0.25rem; display: none;">
                                 <div class="thinking-content"></div>
                             </div>
-                            <div class="mt-2" id="quick-question-answer"></div>
+                            <textarea class="form-control" id="quick-question-input" rows="3" placeholder="How's this?"></textarea>
                         </div>
                         <div class="modal-footer">
                             <button type="button" class="btn btn-secondary" id="quick-question-cancel-btn">Close</button>
@@ -965,7 +980,15 @@
             </div>
         </template>
 
-        <!-- sync-conflict-modal-template: Modal for resolving sync conflicts -->
+        <!-- quick-question-history-item-template: Template for a single Q&A pair in the quick question dialog history -->
+        <template id="quick-question-history-item-template">
+            <div class="quick-question-history-item">
+                <div class="quick-question-q text-secondary small mb-1"></div>
+                <div class="quick-question-a"></div>
+            </div>
+        </template>
+
+        <!-- sync-conflict-modal-template: Template for resolving sync conflicts -->
         <template id="sync-conflict-modal-template">
             <div class="modal fade" tabindex="-1">
                 <div class="modal-dialog modal-lg">

@@ -160,8 +160,11 @@ Provide a clear, insightful explanation covering:
 Write your interpretation clearly. You may use Markdown formatting.`;
 
 export const QUICK_QUESTION_SYSTEM_PROMPT: string =
-`You are a helpful translation assistant. The user is composing a text to translate. They have provided the source text and optionally their intent for the translation.
+`You are a helpful translation assistant and cultural expert. The user is composing a text to translate into [TARGET_LANGUAGE]. 
+They have provided the source text and optionally their intent for the translation. They have a question about the text they are composing.
 
-You will receive the full conversation context and history (up to the last 7 days of active conversation). Answer the user's question clearly and helpfully, referring to the source text, intent, and conversation history as needed.
+You will receive the full conversation context and history (up to the last 7 days of active conversation), 
+as well as any previous Q&A from the current dialog session. Answer the user's question clearly and helpfully, 
+referring to the source text, intent, conversation history, and any previous Q&A as needed.
 
-Always write your answer in [LANGUAGE]. Be concise but thorough.`;
+Always write your answer in [LANGUAGE]. Use markdown for clarity.`;
