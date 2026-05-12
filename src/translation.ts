@@ -8,7 +8,7 @@ import { getPreference, savePreference, listSessions, saveSession, loadSession, 
 import { DEBUG_TRANSLATIONS, DEBUG_SESSIONS } from './debug';
 import * as ui from './ui';
 import { LANGUAGES } from './languages';
-import { INPUT_SYSTEM_PROMPT, OUTPUT_SYSTEM_PROMPT, INPUT_INSTRUCTIONS, OUTPUT_INSTRUCTIONS, LITERAL_RETRANSLATION_PROMPT, OUTPUT_LITERAL_RETRANSLATION_PROMPT, QUESTION_SYSTEM_PROMPT, WORD_DEFINITIONS_PROMPT, INTERPRETATION_PROMPT } from './prompts';
+import { INPUT_SYSTEM_PROMPT, OUTPUT_SYSTEM_PROMPT, INPUT_INSTRUCTIONS, OUTPUT_INSTRUCTIONS, LITERAL_RETRANSLATION_PROMPT, OUTPUT_LITERAL_RETRANSLATION_PROMPT, QUESTION_SYSTEM_PROMPT, WORD_DEFINITIONS_PROMPT, INTERPRETATION_PROMPT, QUICK_QUESTION_SYSTEM_PROMPT } from './prompts';
 import { renderMarkdown, normalizeForMarkdown } from './markdown';
 import { readLocalFile, writeLocalFile, deleteLocalFile } from './opfs';
 import type { Translation, TranslationEntry, TranslationWordItem, WordItem, PunctItem, NewlineItem } from './types/translation';
@@ -16,6 +16,7 @@ import type { StreamingAbortHandle, StreamCallbacks, StreamUsage } from './types
 import type { Config } from './types/config';
 import type { TranslationTag } from './types/translationTag';
 import type { TranslationSession, ReasoningLevel } from './types/session';
+import { Modal } from 'bootstrap';
 
 /**
  * Generates a UUID for translation IDs
@@ -815,6 +816,13 @@ export function setupTranslateButtons(): void {
     if (inputBtn) {
         inputBtn.addEventListener('click', function() {
             translate('input');
+        });
+    }
+
+    const quickQuestionBtn = document.getElementById('quick-question-btn');
+    if (quickQuestionBtn) {
+        quickQuestionBtn.addEventListener('click', function() {
+            showQuickQuestionModal();
         });
     }
 
@@ -3589,4 +3597,187 @@ async function handleQuestionStreaming(
         translationComplete: false,
         backgroundTasksTriggered: false
     });
+}
+
+/**
+ * Builds the user message for a quick question about the current draft.
+ * Includes full conversation context and the current source text and intent.
+ * @param {string} questionText - The user's question
+ * @param {string} sourceText - Current source textarea content
+ * @param {string} intentText - Current intent textarea content
+ * @param {string} myLanguage - User's native language
+ * @returns {Promise<string>} Complete user message
+ */
+async function buildQuickQuestionMessage(
+    questionText: string,
+    sourceText: string,
+    intentText: string,
+    myLanguage: string
+): Promise<string> {
+    const background = await getBackground();
+
+    let message = "";
+
+    if (background.trim()) {
+        message += `<BACKGROUND>${background}</BACKGROUND>\n\n`;
+    }
+
+    const history = buildHistorySection(true, true, false);
+    if (history) {
+        message += history + "\n\n";
+    }
+
+    message += `<SOURCE_TEXT>${sourceText}</SOURCE_TEXT>\n`;
+    if (intentText) {
+        message += `<INTENT>${intentText}</INTENT>\n`;
+    }
+    message += `\n<QUESTION>${questionText}</QUESTION>\n\n`;
+    message += `<INSTRUCTIONS>Answer in ${myLanguage}.</INSTRUCTIONS>`;
+
+    return message;
+}
+
+/**
+ * Opens the quick question modal, wires up the streaming logic, and manages
+ * the ephemeral Q&A lifecycle. The answer is not persisted anywhere.
+ * @returns {void}
+ */
+function showQuickQuestionModal(): void {
+    const template = document.getElementById('quick-question-modal-template') as HTMLTemplateElement | null;
+    if (!template) return;
+
+    const clone = template.content.cloneNode(true) as DocumentFragment;
+    const modalEl = clone.firstElementChild as HTMLElement;
+    document.body.appendChild(clone);
+
+    const questionInput = modalEl.querySelector('#quick-question-input') as HTMLTextAreaElement | null;
+    const answerArea = modalEl.querySelector('#quick-question-answer') as HTMLElement | null;
+    const submitBtn = modalEl.querySelector('#quick-question-submit-btn') as HTMLButtonElement | null;
+    const cancelBtn = modalEl.querySelector('#quick-question-cancel-btn') as HTMLButtonElement | null;
+    const thinkingEl = modalEl.querySelector('.translation-thinking') as HTMLElement | null;
+    const thinkingContentEl = modalEl.querySelector('.thinking-content') as HTMLElement | null;
+
+    const modal = new Modal(modalEl);
+
+    let abortQuickQuestion: (() => void) | null = null;
+
+    function cleanup(): void {
+        if (abortQuickQuestion) {
+            abortQuickQuestion();
+            abortQuickQuestion = null;
+        }
+        modalEl.removeEventListener('hidden.bs.modal', cleanup);
+        modalEl.remove();
+    }
+
+    if (submitBtn) {
+        submitBtn.addEventListener('click', async function() {
+            const question = questionInput?.value.trim() || "How's this?";
+            if (submitBtn) submitBtn.disabled = true;
+            if (questionInput) questionInput.disabled = true;
+
+            if (answerArea) {
+                answerArea.innerHTML = '<div class="spinner-border spinner-border-sm" role="status"></div><span class="ms-2">Thinking...</span>';
+            }
+            if (thinkingEl) thinkingEl.style.display = 'none';
+
+            const sourceTextarea = document.getElementById('source-textarea') as HTMLTextAreaElement | null;
+            const sourceText = sourceTextarea?.value ?? '';
+            const intentTextarea = document.getElementById('intent-textarea') as HTMLTextAreaElement | null;
+            const intentText = intentTextarea?.value ?? '';
+
+            if (!config || !config.openRouterApiKey) {
+                if (answerArea) answerArea.textContent = 'No API key configured.';
+                if (submitBtn) submitBtn.disabled = false;
+                if (questionInput) questionInput.disabled = false;
+                return;
+            }
+
+            const session = await loadSession(currentSessionId);
+            const myLang = LANGUAGES.find(function(l) { return l.id === session?.myLanguage; });
+            const myLangName = myLang?.name ?? session?.myLanguage ?? 'English';
+
+            const effectiveModel = session?.quickQuestionModel ?? config?.quickQuestionModel ?? session?.model ?? config?.selectedModel;
+            if (!effectiveModel) {
+                if (answerArea) answerArea.textContent = 'No model configured for quick questions.';
+                if (submitBtn) submitBtn.disabled = false;
+                if (questionInput) questionInput.disabled = false;
+                return;
+            }
+
+            const reasoningLevel = session?.quickQuestionReasoning ?? 'none';
+            const systemPrompt = QUICK_QUESTION_SYSTEM_PROMPT.replace(/\[LANGUAGE\]/g, myLangName);
+            const userMessage = await buildQuickQuestionMessage(question, sourceText, intentText, myLangName);
+
+            const abortHandle = streamSendChatMessage(
+                config.openRouterApiKey,
+                userMessage,
+                systemPrompt,
+                effectiveModel,
+                {
+                    onChunk: function(text: string, reasoning: string): void {
+                        const hasReasoning = reasoning.length > 0;
+                        const hasText = text.length > 0;
+                        if (hasReasoning && !hasText) {
+                            if (thinkingEl && thinkingContentEl) {
+                                thinkingContentEl.textContent = reasoning;
+                                thinkingEl.style.display = '';
+                            }
+                            if (answerArea) answerArea.innerHTML = '';
+                        } else if (hasText) {
+                            if (thinkingEl) thinkingEl.style.display = 'none';
+                            if (answerArea) {
+                                answerArea.innerHTML = renderMarkdown(text);
+                            }
+                        }
+                    },
+                    onDone: function(fullText: string, fullReasoning: string, generationId: string | null, usage?: StreamUsage): void {
+                        abortQuickQuestion = null;
+                        if (thinkingEl) thinkingEl.style.display = 'none';
+                        if (answerArea) {
+                            answerArea.innerHTML = renderMarkdown(fullText);
+                        }
+                        if (submitBtn) {
+                            submitBtn.textContent = 'Ask another';
+                            submitBtn.disabled = false;
+                        }
+                        if (questionInput) {
+                            questionInput.disabled = false;
+                            questionInput.value = '';
+                            questionInput.placeholder = "How's this?";
+                        }
+                    },
+                    onError: function(error: Error): void {
+                        abortQuickQuestion = null;
+                        if (thinkingEl) thinkingEl.style.display = 'none';
+                        console.error('[quickQuestion] Error:', error);
+                        if (answerArea) {
+                            answerArea.innerHTML = '<span class="text-danger">Error: ' + error.message + '</span>';
+                        }
+                        if (submitBtn) {
+                            submitBtn.textContent = 'Ask';
+                            submitBtn.disabled = false;
+                        }
+                        if (questionInput) {
+                            questionInput.disabled = false;
+                        }
+                    }
+                },
+                reasoningLevel,
+                config.questionTemperature
+            );
+
+            abortQuickQuestion = abortHandle.abort;
+        });
+    }
+
+    if (cancelBtn) {
+        cancelBtn.addEventListener('click', function() {
+            modal.hide();
+        });
+    }
+
+    modalEl.addEventListener('hidden.bs.modal', cleanup);
+
+    modal.show();
 }

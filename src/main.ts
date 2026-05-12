@@ -25,6 +25,7 @@ const config: Config = {
     approvedModelIds: null,
     temperature: 0.2,
     questionTemperature: 0.35,
+    quickQuestionModel: null,
     maxTokens: 32768
 };
 
@@ -75,6 +76,11 @@ async function loadModels(): Promise<void> {
             config.selectedModel = approvedModels[0].id;
             savePreference("selectedModel", approvedModels[0].id).catch(function() {});
             translation.updateButtonStates();
+        }
+
+        const savedQQModelId = await getPreference("defaultQuickQuestionModel");
+        if (savedQQModelId && approvedModels.some(function(m) { return m.id === savedQQModelId; })) {
+            config.quickQuestionModel = savedQQModelId;
         }
     } catch (error) {
         console.error("[loadModels] Error:", error);

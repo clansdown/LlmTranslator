@@ -15,4 +15,5 @@ export interface Config {
     temperature: number;
     questionTemperature: number;
     maxTokens: number;
+    quickQuestionModel: string | null;
 }

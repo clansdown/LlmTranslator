@@ -70,6 +70,8 @@ interface SettingsReferences {
     sessionLiteralModelSelect: HTMLSelectElement;
     sessionInterpretationModelSelect: HTMLSelectElement;
     sessionInterpretationReasoningSelect: HTMLSelectElement;
+    sessionQuickQuestionModelSelect: HTMLSelectElement;
+    sessionQuickQuestionReasoningSelect: HTMLSelectElement;
     sessionBackgroundInput: HTMLTextAreaElement;
     sessionReasoningSelect: HTMLSelectElement;
     sessionTranslationInstructionsInput: HTMLTextAreaElement;
@@ -89,6 +91,8 @@ interface SettingsReferences {
     defaultLiteralModelSelect: HTMLSelectElement;
     defaultInterpretationModelSelect: HTMLSelectElement;
     defaultInterpretationReasoningSelect: HTMLSelectElement;
+    defaultQuickQuestionModelSelect: HTMLSelectElement;
+    defaultQuickQuestionReasoningSelect: HTMLSelectElement;
     tagsListContainer: HTMLDivElement;
     tagNameInput: HTMLInputElement;
     tagGuidanceInput: HTMLInputElement;
@@ -159,6 +163,8 @@ function openSettingsModal(): void {
             sessionLiteralModelSelect: settingsModalElement.querySelector('#settings-session-literal-model') as HTMLSelectElement,
             sessionInterpretationModelSelect: settingsModalElement.querySelector('#settings-session-interpretation-model') as HTMLSelectElement,
             sessionInterpretationReasoningSelect: settingsModalElement.querySelector('#settings-session-interpretation-reasoning') as HTMLSelectElement,
+            sessionQuickQuestionModelSelect: settingsModalElement.querySelector('#settings-session-quick-question-model') as HTMLSelectElement,
+            sessionQuickQuestionReasoningSelect: settingsModalElement.querySelector('#settings-session-quick-question-reasoning') as HTMLSelectElement,
             sessionBackgroundInput: settingsModalElement.querySelector('#settings-session-background') as HTMLTextAreaElement,
             sessionReasoningSelect: settingsModalElement.querySelector('#settings-session-reasoning') as HTMLSelectElement,
             sessionTranslationInstructionsInput: settingsModalElement.querySelector('#settings-session-translation-instructions') as HTMLTextAreaElement,
@@ -178,6 +184,8 @@ function openSettingsModal(): void {
             defaultLiteralModelSelect: settingsModalElement.querySelector('#settings-default-literal-model') as HTMLSelectElement,
             defaultInterpretationModelSelect: settingsModalElement.querySelector('#settings-default-interpretation-model') as HTMLSelectElement,
             defaultInterpretationReasoningSelect: settingsModalElement.querySelector('#settings-default-interpretation-reasoning') as HTMLSelectElement,
+            defaultQuickQuestionModelSelect: settingsModalElement.querySelector('#settings-default-quick-question-model') as HTMLSelectElement,
+            defaultQuickQuestionReasoningSelect: settingsModalElement.querySelector('#settings-default-quick-question-reasoning') as HTMLSelectElement,
             tagsListContainer: settingsModalElement.querySelector('#settings-tags-list') as HTMLDivElement,
             tagNameInput: settingsModalElement.querySelector('#settings-tag-name') as HTMLInputElement,
             tagGuidanceInput: settingsModalElement.querySelector('#settings-tag-guidance') as HTMLInputElement,
@@ -667,6 +675,27 @@ function populateModelDropdown(): void {
         }
         refs.sessionInterpretationModelSelect.appendChild(option);
     }
+
+    refs.sessionQuickQuestionModelSelect.innerHTML = '';
+
+    const qqDisabledPlaceholder = document.createElement('option');
+    qqDisabledPlaceholder.value = '';
+    qqDisabledPlaceholder.textContent = 'Disabled';
+    refs.sessionQuickQuestionModelSelect.appendChild(qqDisabledPlaceholder);
+
+    for (const model of models) {
+        const option = document.createElement('option');
+        option.value = model.id;
+        if (model.pricing) {
+            const promptCost = (parseFloat(model.pricing.prompt) * 1_000_000).toFixed(2);
+            const completionCost = (parseFloat(model.pricing.completion) * 1_000_000).toFixed(2);
+            const providerPart = model.providerName ? ' by ' + model.providerName : '';
+            option.textContent = `${model.name}${providerPart} ($${promptCost}/$${completionCost})`;
+        } else {
+            option.textContent = model.name;
+        }
+        refs.sessionQuickQuestionModelSelect.appendChild(option);
+    }
 }
 
 /**
@@ -736,12 +765,34 @@ async function populateDefaultModelDropdowns(): Promise<void> {
         refs.defaultInterpretationModelSelect.appendChild(option);
     }
 
-    const [defaultModelPref, defaultReasoningPref, defaultLiteralModelPref, defaultInterpretationModelPref, defaultInterpretationReasoningPref] = await Promise.all([
+    refs.defaultQuickQuestionModelSelect.innerHTML = '';
+    const qqDisabledPlaceholder = document.createElement('option');
+    qqDisabledPlaceholder.value = '';
+    qqDisabledPlaceholder.textContent = 'Disabled';
+    refs.defaultQuickQuestionModelSelect.appendChild(qqDisabledPlaceholder);
+
+    for (const model of models) {
+        const option = document.createElement('option');
+        option.value = model.id;
+        if (model.pricing) {
+            const promptCost = (parseFloat(model.pricing.prompt) * 1_000_000).toFixed(2);
+            const completionCost = (parseFloat(model.pricing.completion) * 1_000_000).toFixed(2);
+            const providerPart = model.providerName ? ' by ' + model.providerName : '';
+            option.textContent = `${model.name}${providerPart} ($${promptCost}/$${completionCost})`;
+        } else {
+            option.textContent = model.name;
+        }
+        refs.defaultQuickQuestionModelSelect.appendChild(option);
+    }
+
+    const [defaultModelPref, defaultReasoningPref, defaultLiteralModelPref, defaultInterpretationModelPref, defaultInterpretationReasoningPref, defaultQuickQuestionModelPref, defaultQuickQuestionReasoningPref] = await Promise.all([
         storage.getPreference("defaultModel"),
         storage.getPreference("defaultReasoning"),
         storage.getPreference("defaultLiteralModel"),
         storage.getPreference("defaultInterpretationModel"),
-        storage.getPreference("defaultInterpretationReasoning")
+        storage.getPreference("defaultInterpretationReasoning"),
+        storage.getPreference("defaultQuickQuestionModel"),
+        storage.getPreference("defaultQuickQuestionReasoning")
     ]);
 
     console.log('[defaults] Loaded from OPFS - model:', defaultModelPref, 'reasoning:', defaultReasoningPref, 'literalModel:', defaultLiteralModelPref, 'interpretationModel:', defaultInterpretationModelPref, 'interpretationReasoning:', defaultInterpretationReasoningPref);
@@ -751,6 +802,8 @@ async function populateDefaultModelDropdowns(): Promise<void> {
     refs.defaultLiteralModelSelect.value = defaultLiteralModelPref ?? '';
     refs.defaultInterpretationModelSelect.value = defaultInterpretationModelPref ?? '';
     refs.defaultInterpretationReasoningSelect.value = defaultInterpretationReasoningPref ?? 'none';
+    refs.defaultQuickQuestionModelSelect.value = defaultQuickQuestionModelPref ?? '';
+    refs.defaultQuickQuestionReasoningSelect.value = defaultQuickQuestionReasoningPref ?? 'none';
 }
 
 /**
@@ -765,9 +818,11 @@ async function refreshModelDropdowns(): Promise<void> {
         refs.sessionModelSelect,
         refs.sessionLiteralModelSelect,
         refs.sessionInterpretationModelSelect,
+        refs.sessionQuickQuestionModelSelect,
         refs.defaultModelSelect,
         refs.defaultLiteralModelSelect,
-        refs.defaultInterpretationModelSelect
+        refs.defaultInterpretationModelSelect,
+        refs.defaultQuickQuestionModelSelect
     ];
 
     let needsRefresh = false;
@@ -888,6 +943,8 @@ async function saveSettings(): Promise<void> {
     const defaultLiteralModel = refs.defaultLiteralModelSelect.value || null;
     const defaultInterpretationModel = refs.defaultInterpretationModelSelect.value || null;
     const defaultInterpretationReasoning = refs.defaultInterpretationReasoningSelect.value;
+    const defaultQuickQuestionModel = refs.defaultQuickQuestionModelSelect.value || null;
+    const defaultQuickQuestionReasoning = refs.defaultQuickQuestionReasoningSelect.value;
 
     await saveApprovedModels();
 
@@ -919,7 +976,15 @@ async function saveSettings(): Promise<void> {
 
     await storage.savePreference('defaultInterpretationReasoning', defaultInterpretationReasoning);
 
-    console.log('[defaults] Saved - model:', defaultModel, 'reasoning:', defaultReasoning, 'literalModel:', defaultLiteralModel, 'interpretationModel:', defaultInterpretationModel, 'interpretationReasoning:', defaultInterpretationReasoning);
+    if (defaultQuickQuestionModel) {
+        await storage.savePreference('defaultQuickQuestionModel', defaultQuickQuestionModel);
+    } else {
+        await storage.deletePreference('defaultQuickQuestionModel');
+    }
+
+    await storage.savePreference('defaultQuickQuestionReasoning', defaultQuickQuestionReasoning);
+
+    console.log('[defaults] Saved - model:', defaultModel, 'reasoning:', defaultReasoning, 'literalModel:', defaultLiteralModel, 'interpretationModel:', defaultInterpretationModel, 'interpretationReasoning:', defaultInterpretationReasoning, 'quickQuestionModel:', defaultQuickQuestionModel, 'quickQuestionReasoning:', defaultQuickQuestionReasoning);
 
     settingsModalInstance.hide();
 }
@@ -993,6 +1058,8 @@ function loadSessionIntoEditor(sessionId: string): void {
             refs.sessionLiteralModelSelect.value = session.literalModel ?? '';
             refs.sessionInterpretationModelSelect.value = session.interpretationModel ?? '';
             refs.sessionInterpretationReasoningSelect.value = session.interpretationReasoning ?? 'none';
+            refs.sessionQuickQuestionModelSelect.value = session.quickQuestionModel ?? '';
+            refs.sessionQuickQuestionReasoningSelect.value = session.quickQuestionReasoning ?? 'none';
             refs.sessionBackgroundInput.value = session.background ?? '';
             refs.sessionReasoningSelect.value = session.reasoning ?? 'none';
             refs.sessionTranslationInstructionsInput.value = session.translationInstructions ?? '';
@@ -1007,6 +1074,8 @@ function loadSessionIntoEditor(sessionId: string): void {
             refs.sessionLiteralModelSelect.value = '';
             refs.sessionInterpretationModelSelect.value = '';
             refs.sessionInterpretationReasoningSelect.value = 'none';
+            refs.sessionQuickQuestionModelSelect.value = '';
+            refs.sessionQuickQuestionReasoningSelect.value = 'none';
             refs.sessionBackgroundInput.value = '';
             refs.sessionReasoningSelect.value = 'none';
             refs.sessionTranslationInstructionsInput.value = '';
@@ -1174,6 +1243,8 @@ async function saveSession(): Promise<void> {
     session.literalModel = refs.sessionLiteralModelSelect.value || null;
     session.interpretationModel = refs.sessionInterpretationModelSelect.value || null;
     session.interpretationReasoning = refs.sessionInterpretationReasoningSelect.value as ReasoningLevel;
+    session.quickQuestionModel = refs.sessionQuickQuestionModelSelect.value || null;
+    session.quickQuestionReasoning = refs.sessionQuickQuestionReasoningSelect.value as ReasoningLevel;
     session.background = refs.sessionBackgroundInput.value;
     session.reasoning = refs.sessionReasoningSelect.value as ReasoningLevel;
     session.translationInstructions = refs.sessionTranslationInstructionsInput.value || null;

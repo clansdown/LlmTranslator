@@ -330,7 +330,14 @@
                     <div class="col-12 mt-0" id="translation-pane">
                         <div class="translation-pane">
                             <div class="pane-content">
-                                <textarea class="form-control form-control-sm mb-2" id="intent-textarea" rows="1" placeholder="Intent (e.g., be friendly, stern tone)..."></textarea>
+                                <div class="row g-2 mb-2">
+                                    <div class="col-11">
+                                        <textarea class="form-control form-control-sm" id="intent-textarea" rows="1" placeholder="Intent (e.g., be friendly, stern tone)..."></textarea>
+                                    </div>
+                                    <div class="col-1 d-flex align-items-center justify-content-end">
+                                        <button type="button" class="btn btn-sm btn-outline-secondary" id="quick-question-btn" title="Quick question">?</button>
+                                    </div>
+                                </div>
                                 <textarea class="pane-textarea" id="source-textarea" placeholder="Type text to translate..."></textarea>
                                 <div class="pane-toolbar mt-2">
                                     <div class="row g-2 align-items-center">
@@ -723,6 +730,23 @@
                                         </select>
                                     </div>
                                 </div>
+                                <div class="row g-2 mb-2">
+                                    <div class="col">
+                                        <label for="settings-default-quick-question-model" class="form-label">Quick Question Model</label>
+                                        <select id="settings-default-quick-question-model" class="form-select"></select>
+                                    </div>
+                                    <div class="col-lg-2">
+                                        <label for="settings-default-quick-question-reasoning" class="form-label">Reasoning</label>
+                                        <select id="settings-default-quick-question-reasoning" class="form-select">
+                                            <option value="none">None</option>
+                                            <option value="minimal">Minimal</option>
+                                            <option value="low">Low</option>
+                                            <option value="medium">Medium</option>
+                                            <option value="high">High</option>
+                                            <option value="xhigh">Max</option>
+                                        </select>
+                                    </div>
+                                </div>
                             </div>
                             <div class="tab-pane fade" id="conversations-content" role="tabpanel" aria-labelledby="conversations-tab-btn">
                                 <div class="row g-2 mt-3">
@@ -787,6 +811,25 @@
                                             <div class="col-lg-2">
                                                 <label for="settings-session-interpretation-reasoning" class="form-label">Reasoning</label>
                                                 <select id="settings-session-interpretation-reasoning" class="form-select">
+                                                    <option value="none">None</option>
+                                                    <option value="minimal">Minimal</option>
+                                                    <option value="low">Low</option>
+                                                    <option value="medium">Medium</option>
+                                                    <option value="high">High</option>
+                                                    <option value="xhigh">Max</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-12">
+                                        <div class="row g-2">
+                                            <div class="col">
+                                                <label for="settings-session-quick-question-model" class="form-label">Quick Question Model</label>
+                                                <select id="settings-session-quick-question-model" class="form-select"></select>
+                                            </div>
+                                            <div class="col-lg-2">
+                                                <label for="settings-session-quick-question-reasoning" class="form-label">Reasoning</label>
+                                                <select id="settings-session-quick-question-reasoning" class="form-select">
                                                     <option value="none">None</option>
                                                     <option value="minimal">Minimal</option>
                                                     <option value="low">Low</option>
@@ -892,6 +935,31 @@
                 <div class="modal-dialog modal-sm modal-dialog-centered">
                     <div class="modal-content">
                         <div class="modal-body" id="auth-modal-body"></div>
+                    </div>
+                </div>
+            </div>
+        </template>
+
+        <!-- quick-question-modal-template: Modal for asking a quick question about the current draft -->
+        <template id="quick-question-modal-template">
+            <div class="modal fade" tabindex="-1" role="dialog" aria-labelledby="quick-question-modal-title" aria-hidden="true">
+                <div class="modal-dialog modal-lg">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title" id="quick-question-modal-title">Quick Question</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                        <div class="modal-body">
+                            <textarea class="form-control" id="quick-question-input" rows="3" placeholder="How's this?"></textarea>
+                            <div class="translation-thinking" style="display: none;">
+                                <div class="thinking-content"></div>
+                            </div>
+                            <div class="mt-2" id="quick-question-answer"></div>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" id="quick-question-cancel-btn">Close</button>
+                            <button type="button" class="btn btn-primary" id="quick-question-submit-btn">Ask</button>
+                        </div>
                     </div>
                 </div>
             </div>
