@@ -48,13 +48,36 @@ export function updateSyncButton(enabled: boolean, syncing: boolean, needsReauth
 }
 
 /**
- * Shows the sync progress indicator
+ * Shows the sync progress indicator in the cloud sync tab and navbar button.
  * @param {number} current - Current progress count
  * @param {number} total - Total items to sync
  * @returns {void}
  */
 export function showSyncProgress(current: number, total: number): void {
-    // TODO: Implement sync progress display
+    const progressContainer = document.getElementById('settings-cloud-sync-progress') as HTMLElement | null;
+    const progressBar = progressContainer?.querySelector('.progress-bar') as HTMLElement | null;
+    const progressText = document.getElementById('settings-cloud-sync-progress-text') as HTMLElement | null;
+
+    if (progressContainer) {
+        progressContainer.style.display = '';
+    }
+    if (progressBar) {
+        const percent = Math.round((current / total) * 100);
+        progressBar.style.width = percent + '%';
+        progressBar.textContent = current + ' / ' + total;
+        progressBar.setAttribute('aria-valuenow', String(current));
+        progressBar.setAttribute('aria-valuemax', String(total));
+    }
+    if (progressText) {
+        progressText.textContent = 'Syncing ' + current + ' of ' + total + ' files...';
+        progressText.style.display = '';
+    }
+
+    // Also update the navbar button title
+    const btn = document.getElementById('cloud-sync-btn') as HTMLButtonElement | null;
+    if (btn) {
+        btn.title = 'Syncing ' + current + ' / ' + total;
+    }
 }
 
 /**
@@ -63,7 +86,25 @@ export function showSyncProgress(current: number, total: number): void {
  * @returns {void}
  */
 export function hideSyncProgress(complete?: boolean): void {
-    // TODO: Implement hiding sync progress
+    const progressContainer = document.getElementById('settings-cloud-sync-progress') as HTMLElement | null;
+    const progressText = document.getElementById('settings-cloud-sync-progress-text') as HTMLElement | null;
+
+    if (progressContainer) {
+        progressContainer.style.display = 'none';
+        const progressBar = progressContainer.querySelector('.progress-bar') as HTMLElement | null;
+        if (progressBar) {
+            progressBar.style.width = '0%';
+            progressBar.textContent = '';
+        }
+    }
+    if (progressText) {
+        if (complete) {
+            progressText.textContent = 'Sync complete';
+            progressText.style.display = '';
+        } else {
+            progressText.style.display = 'none';
+        }
+    }
 }
 
 /**

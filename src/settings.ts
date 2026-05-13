@@ -204,6 +204,8 @@ function openSettingsModal(): void {
         settingsModalInstance = new (window as any).bootstrap.Modal(settingsModalElement);
     }
 
+    selectedSessionIdInModal = translation.getCurrentSessionId();
+
     populateSettingsForm().then(function() {
         settingsModalInstance.show();
     });

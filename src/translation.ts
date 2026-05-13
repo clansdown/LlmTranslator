@@ -8,7 +8,7 @@ import { getPreference, savePreference, listSessions, saveSession, loadSession, 
 import { DEBUG_TRANSLATIONS, DEBUG_SESSIONS } from './debug';
 import * as ui from './ui';
 import { LANGUAGES } from './languages';
-import { INPUT_SYSTEM_PROMPT, OUTPUT_SYSTEM_PROMPT, INPUT_INSTRUCTIONS, OUTPUT_INSTRUCTIONS, LITERAL_RETRANSLATION_PROMPT, OUTPUT_LITERAL_RETRANSLATION_PROMPT, QUESTION_SYSTEM_PROMPT, WORD_DEFINITIONS_PROMPT, INTERPRETATION_PROMPT, QUICK_QUESTION_SYSTEM_PROMPT } from './prompts';
+import { INPUT_SYSTEM_PROMPT, OUTPUT_SYSTEM_PROMPT, INPUT_INSTRUCTIONS, OUTPUT_INSTRUCTIONS, LITERAL_RETRANSLATION_PROMPT, OUTPUT_LITERAL_RETRANSLATION_PROMPT, QUESTION_SYSTEM_PROMPT, WORD_DEFINITIONS_PROMPT, INTERPRETATION_PROMPT, QUICK_QUESTION_DRAFT_PROMPT, QUICK_QUESTION_MESSAGE_PROMPT } from './prompts';
 import { renderMarkdown, normalizeForMarkdown } from './markdown';
 import { readLocalFile, writeLocalFile, deleteLocalFile } from './opfs';
 import type { Translation, TranslationEntry, TranslationWordItem, WordItem, PunctItem, NewlineItem } from './types/translation';
@@ -52,12 +52,11 @@ let currentLiteralModel: string | null = null;
  */
 let currentInterpretationModel: string | null = null;
 
-/** OPFS path for source textarea draft */
-const DRAFT_SOURCE_PATH = 'drafts/source';
-/** OPFS path for intent textarea draft */
-const DRAFT_INTENT_PATH = 'drafts/intent';
 /** Debounce delay for auto-saving drafts (ms) */
 const DRAFT_SAVE_DEBOUNCE_MS = 2000;
+
+/** Prevents multiple quick question modals from stacking */
+let quickQuestionModalOpen = false;
 
 /** Timeout handle for draft auto-save debounce */
 let draftSaveTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -124,6 +123,7 @@ interface TranslationDomRefs {
     editIntent: HTMLTextAreaElement | null;
     retranslateBtn: HTMLButtonElement | null;
     editToggleBtn: HTMLButtonElement | null;
+    quickQuestionBtn: HTMLButtonElement | null;
     includeInContextToggle: HTMLInputElement | null;
 }
 
@@ -372,6 +372,7 @@ export async function setCurrentSession(sessionId: string): Promise<void> {
     }
 
     updateSessionSelector(sessionId);
+    await loadDrafts(sessionId);
 
     if (DEBUG_SESSIONS) {
         console.log(`[setCurrentSession] Switched to session ${sessionId}: ${session.name}`);
@@ -822,6 +823,7 @@ export function setupTranslateButtons(): void {
     const quickQuestionBtn = document.getElementById('quick-question-btn');
     if (quickQuestionBtn) {
         quickQuestionBtn.addEventListener('click', function() {
+            if (quickQuestionModalOpen) return;
             showQuickQuestionModal();
         });
     }
@@ -838,7 +840,8 @@ export function setupTranslateButtons(): void {
 }
 
 /**
- * Saves the current source textarea and intent textarea contents to OPFS drafts.
+ * Saves the current source textarea and intent textarea contents to OPFS drafts
+ * under the current session's path.
  * Called by the debounced auto-save handler.
  * @returns {Promise<void>}
  */
@@ -848,9 +851,9 @@ async function saveDrafts(): Promise<void> {
     const sourceValue = sourceEl?.value ?? '';
     const intentValue = intentEl?.value ?? '';
     try {
-        await writeLocalFile(DRAFT_SOURCE_PATH, sourceValue);
+        await writeLocalFile('drafts/' + currentSessionId + '/source', sourceValue);
         if (intentEl) {
-            await writeLocalFile(DRAFT_INTENT_PATH, intentValue);
+            await writeLocalFile('drafts/' + currentSessionId + '/intent', intentValue);
         }
     } catch (e) {
         console.error('[saveDrafts] Error saving draft:', e);
@@ -858,16 +861,26 @@ async function saveDrafts(): Promise<void> {
 }
 
 /**
- * Loads draft text from OPFS and populates the textareas.
- * Should be called once on app startup.
+ * Loads draft text from OPFS for the given session (or current session) and
+ * populates the textareas. Clears textareas first to ensure no stale content.
+ * @param {string} [sessionId] - Session ID to load drafts for (defaults to current)
  * @returns {Promise<void>}
  */
-export async function loadDrafts(): Promise<void> {
+export async function loadDrafts(sessionId?: string): Promise<void> {
+    const targetSessionId = sessionId ?? currentSessionId;
+    const sourcePath = 'drafts/' + targetSessionId + '/source';
+    const intentPath = 'drafts/' + targetSessionId + '/intent';
+
+    const sourceEl = document.getElementById('source-textarea') as HTMLTextAreaElement | null;
+    const intentEl = document.getElementById('intent-textarea') as HTMLTextAreaElement | null;
+
+    // Clear textareas first
+    if (sourceEl) sourceEl.value = '';
+    if (intentEl) intentEl.value = '';
+
     try {
-        const sourceDraft = await readLocalFile(DRAFT_SOURCE_PATH);
-        const intentDraft = await readLocalFile(DRAFT_INTENT_PATH);
-        const sourceEl = document.getElementById('source-textarea') as HTMLTextAreaElement | null;
-        const intentEl = document.getElementById('intent-textarea') as HTMLTextAreaElement | null;
+        const sourceDraft = await readLocalFile(sourcePath);
+        const intentDraft = await readLocalFile(intentPath);
         if (sourceEl && sourceDraft !== null && sourceDraft.length > 0) {
             sourceEl.value = sourceDraft;
         }
@@ -880,14 +893,16 @@ export async function loadDrafts(): Promise<void> {
 }
 
 /**
- * Deletes both draft files from OPFS.
+ * Deletes draft files for the given session (or current session) from OPFS.
  * Called when a translation is successfully persisted to OPFS.
+ * @param {string} [sessionId] - Session ID to clear drafts for (defaults to current)
  * @returns {Promise<void>}
  */
-export async function clearDrafts(): Promise<void> {
+export async function clearDrafts(sessionId?: string): Promise<void> {
+    const targetSessionId = sessionId ?? currentSessionId;
     try {
-        await deleteLocalFile(DRAFT_SOURCE_PATH);
-        await deleteLocalFile(DRAFT_INTENT_PATH).catch(function() {});
+        await deleteLocalFile('drafts/' + targetSessionId + '/source');
+        await deleteLocalFile('drafts/' + targetSessionId + '/intent').catch(function() {});
     } catch (e) {
         console.error('[clearDrafts] Error clearing drafts:', e);
     }
@@ -1428,6 +1443,7 @@ function renderTranslationItem(container: HTMLElement, translation: Translation)
             editIntent: element.querySelector('.translation-edit-intent') as HTMLTextAreaElement | null,
             retranslateBtn: element.querySelector('.retranslate-btn') as HTMLButtonElement | null,
             editToggleBtn: element.querySelector('.edit-toggle-btn') as HTMLButtonElement | null,
+            quickQuestionBtn: element.querySelector('.quick-question-btn') as HTMLButtonElement | null,
             includeInContextToggle: element.querySelector('.include-in-context-toggle') as HTMLInputElement | null
         };
         domRefsMap.set(translation, refs);
@@ -1543,6 +1559,24 @@ function renderTranslationItem(container: HTMLElement, translation: Translation)
                 } else {
                     refs.editArea!.style.display = 'none';
                 }
+            });
+        }
+
+        // Wire quick question button on input items
+        if (refs.quickQuestionBtn && translation.pill === 'input') {
+            const translationId = translation.id;
+            refs.quickQuestionBtn.addEventListener('click', function() {
+                if (quickQuestionModalOpen) return;
+                const t = allTranslations.find(function(x) { return x.id === translationId; });
+                if (!t) return;
+                ensureEntries(t);
+                const entry = t.entries[t.activeEntryIndex ?? 0];
+                const sourceText = entry?.source ?? (t as any).source ?? '';
+                showQuickQuestionModal({
+                    sourceText: sourceText,
+                    systemPrompt: QUICK_QUESTION_MESSAGE_PROMPT,
+                    defaultQuestion: 'What does this mean?'
+                });
             });
         }
 
@@ -3603,11 +3637,14 @@ async function handleQuestionStreaming(
  * Builds the user message for a quick question about the current draft.
  * Includes full conversation context, the current source text and intent,
  * and any previous Q&A from the current quick question dialog session.
+ * When messageText is provided, it is used instead of sourceText/intent
+ * (for input message quick questions).
  * @param {string} questionText - The user's question
  * @param {string} sourceText - Current source textarea content
  * @param {string} intentText - Current intent textarea content
  * @param {string} myLanguage - User's native language
  * @param {Array<{question: string, answer: string}>} previousQA - Previous Q&A pairs from within the same dialog
+ * @param {string} [messageText] - Input message text (for message quick questions)
  * @returns {Promise<string>} Complete user message
  */
 async function buildQuickQuestionMessage(
@@ -3615,7 +3652,8 @@ async function buildQuickQuestionMessage(
     sourceText: string,
     intentText: string,
     myLanguage: string,
-    previousQA: Array<{question: string; answer: string}> = []
+    previousQA: Array<{question: string; answer: string}> = [],
+    messageText?: string
 ): Promise<string> {
     const background = await getBackground();
 
@@ -3630,9 +3668,13 @@ async function buildQuickQuestionMessage(
         message += history + "\n\n";
     }
 
-    message += `<SOURCE_TEXT>${sourceText}</SOURCE_TEXT>\n`;
-    if (intentText) {
-        message += `<INTENT>${intentText}</INTENT>\n`;
+    if (messageText) {
+        message += `<CURRENT_MESSAGE>${messageText}</CURRENT_MESSAGE>\n`;
+    } else {
+        message += `<SOURCE_TEXT>${sourceText}</SOURCE_TEXT>\n`;
+        if (intentText) {
+            message += `<INTENT>${intentText}</INTENT>\n`;
+        }
     }
 
     if (previousQA.length > 0) {
@@ -3643,7 +3685,7 @@ async function buildQuickQuestionMessage(
         message += "</PREVIOUS_QA>\n\n";
     }
 
-    message += `<QUESTION>${questionText}</QUESTION>\n\n`;
+    message += `<CURRENT_QUESTION>${questionText}</CURRENT_QUESTION>\n\n`;
     message += `<INSTRUCTIONS>Answer in ${myLanguage}.</INSTRUCTIONS>`;
 
     return message;
@@ -3653,11 +3695,21 @@ async function buildQuickQuestionMessage(
  * Opens the quick question modal, wires up the streaming logic, and manages
  * the ephemeral Q&A lifecycle. Supports follow-up questions within the same
  * dialog session. Nothing is persisted when the modal is closed.
+ * Accepts optional options for context (sourceText, intentText) and a
+ * systemPrompt override (for input message quick questions).
+ * @param {{ sourceText?: string; intentText?: string; systemPrompt?: string; defaultQuestion?: string }} [options] - Context and prompt overrides
  * @returns {void}
  */
-function showQuickQuestionModal(): void {
+function showQuickQuestionModal(options?: {
+    sourceText?: string;
+    intentText?: string;
+    systemPrompt?: string;
+    defaultQuestion?: string;
+}): void {
+    if (quickQuestionModalOpen) return;
     const template = document.getElementById('quick-question-modal-template') as HTMLTemplateElement | null;
     if (!template) return;
+    quickQuestionModalOpen = true;
 
     const clone = template.content.cloneNode(true) as DocumentFragment;
     const modalEl = clone.firstElementChild as HTMLElement;
@@ -3677,13 +3729,20 @@ function showQuickQuestionModal(): void {
     let dialogHistory: Array<{question: string; answer: string}> = [];
     let currentAnswerEl: HTMLElement | null = null;
 
+    let cleanedUp = false;
+
     function cleanup(): void {
+        if (cleanedUp) return;
+        cleanedUp = true;
         if (abortQuickQuestion) {
             abortQuickQuestion();
             abortQuickQuestion = null;
         }
         modalEl.removeEventListener('hidden.bs.modal', cleanup);
-        modalEl.remove();
+        if (modalEl.isConnected) {
+            modalEl.remove();
+        }
+        quickQuestionModalOpen = false;
     }
 
     /**
@@ -3724,19 +3783,24 @@ function showQuickQuestionModal(): void {
         currentAnswerEl = null;
     }
 
+    let hasAutoScrolledThisAnswer = false;
+
     if (submitBtn) {
         submitBtn.addEventListener('click', async function() {
-            const question = questionInput?.value.trim() || "How's this?";
+            hasAutoScrolledThisAnswer = false;
+            const defaultQuestion = options?.defaultQuestion ?? "How's this?";
+            const question = questionInput?.value.trim() || defaultQuestion;
             if (submitBtn) submitBtn.disabled = true;
             if (questionInput) questionInput.disabled = true;
             if (thinkingEl) thinkingEl.style.display = 'none';
 
             currentAnswerEl = addHistoryItem(question, true);
 
-            const sourceTextarea = document.getElementById('source-textarea') as HTMLTextAreaElement | null;
-            const sourceText = sourceTextarea?.value ?? '';
-            const intentTextarea = document.getElementById('intent-textarea') as HTMLTextAreaElement | null;
-            const intentText = intentTextarea?.value ?? '';
+            // When options.sourceText is provided, use it directly as the source
+            // (for input message quick questions). Otherwise read from the global textareas.
+            const isMessageQuestion = options?.sourceText !== undefined;
+            const sourceText = isMessageQuestion ? options!.sourceText! : (document.getElementById('source-textarea') as HTMLTextAreaElement | null)?.value ?? '';
+            const intentText = isMessageQuestion ? '' : (document.getElementById('intent-textarea') as HTMLTextAreaElement | null)?.value ?? '';
 
             if (!config || !config.openRouterApiKey) {
                 showErrorInCurrentAnswer('No API key configured.');
@@ -3760,10 +3824,14 @@ function showQuickQuestionModal(): void {
             }
 
             const reasoningLevel = session?.quickQuestionReasoning ?? 'none';
-            const systemPrompt = QUICK_QUESTION_SYSTEM_PROMPT
+            const effectivePrompt = options?.systemPrompt ?? QUICK_QUESTION_DRAFT_PROMPT;
+            const systemPrompt = effectivePrompt
                 .replace(/\[LANGUAGE\]/g, myLangName)
                 .replace(/\[TARGET_LANGUAGE\]/g, theirLangName);
-            const userMessage = await buildQuickQuestionMessage(question, sourceText, intentText, myLangName, dialogHistory);
+            const userMessage = await buildQuickQuestionMessage(
+                question, sourceText, intentText, myLangName, dialogHistory,
+                isMessageQuestion ? sourceText : undefined
+            );
 
             const abortHandle = streamSendChatMessage(
                 config.openRouterApiKey,
@@ -3780,6 +3848,10 @@ function showQuickQuestionModal(): void {
                                 thinkingEl.style.display = '';
                             }
                             if (currentAnswerEl) currentAnswerEl.innerHTML = '';
+                            if (!hasAutoScrolledThisAnswer && dialogHistory.length > 0) {
+                                hasAutoScrolledThisAnswer = true;
+                                submitBtn?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+                            }
                         } else if (hasText) {
                             if (thinkingEl) thinkingEl.style.display = 'none';
                             if (currentAnswerEl) {
@@ -3802,7 +3874,7 @@ function showQuickQuestionModal(): void {
                         if (questionInput) {
                             questionInput.disabled = false;
                             questionInput.value = '';
-                            questionInput.placeholder = "How's this?";
+                            questionInput.placeholder = "Elaborate?";
                         }
                     },
                     onError: function(error: Error): void {
@@ -3832,6 +3904,7 @@ function showQuickQuestionModal(): void {
 
     if (cancelBtn) {
         cancelBtn.addEventListener('click', function() {
+            if (!modalEl.isConnected) return;
             modal.hide();
         });
     }

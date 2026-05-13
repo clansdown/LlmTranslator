@@ -13,7 +13,7 @@ import type { SyncFileInfo, SyncConflict, SyncDeletion, SyncActions, SyncManifes
 import type { CloudSyncState } from './types/state';
 
 // Toggle to target the local dev worker instead of production
-const USE_DEV_WORKER = true;
+const USE_DEV_WORKER = false;
 
 const WORKER_BASE_URL = USE_DEV_WORKER
     ? 'http://localhost:8787'
@@ -39,6 +39,21 @@ let tokenExpiryTime: number | null = null;
 
 /** @type {Promise<void>} */
 let syncLock: Promise<void> = Promise.resolve();
+
+/** @type {string[]} */
+let changedPaths: string[] = [];
+
+/** @type {((changedPaths: string[]) => Promise<void>) | null} */
+let onSyncReload: ((changedPaths: string[]) => Promise<void>) | null = null;
+
+/**
+ * Registers a callback that fires after sync completes with paths that changed.
+ * @param {(changedPaths: string[]) => Promise<void>} callback
+ * @returns {void}
+ */
+export function setSyncReloadCallback(callback: (changedPaths: string[]) => Promise<void>): void {
+    onSyncReload = callback;
+}
 
 /**
  * Acquires the sync mutex lock. Returns a release callback.
@@ -72,8 +87,16 @@ async function withSyncLock(fn: () => Promise<void>): Promise<void> {
         console.error('[cloudSync] Sync failed:', e);
     } finally {
         STATE.cloudSync.isSyncing = false;
+        ui.hideSyncProgress();
         ui.updateCloudSyncUI();
         release();
+        const changed = changedPaths;
+        changedPaths = [];
+        if (changed.length > 0 && onSyncReload) {
+            onSyncReload(changed).catch(function(e) {
+                console.error('[cloudSync] Reload callback failed:', e);
+            });
+        }
     }
 }
 
@@ -1041,6 +1064,50 @@ async function showInitialSyncModal(): Promise<'download' | 'upload'> {
 }
 
 /**
+ * Shows a modal asking the user which side should take priority during a complete re-sync.
+ * @returns {Promise<'local' | 'cloud'>} User's choice
+ */
+async function showResyncChoiceModal(): Promise<'local' | 'cloud'> {
+    const template = document.getElementById('resync-choice-modal-template') as HTMLTemplateElement | null;
+    if (!template) {
+        const choice = confirm(
+            'Complete re-sync.\n\n' +
+            'Click OK for Local takes priority.\n' +
+            'Click Cancel for Cloud takes priority.'
+        );
+        return choice ? 'local' : 'cloud';
+    }
+
+    return new Promise(function(resolve) {
+        const clone = template.content.cloneNode(true) as DocumentFragment;
+        const modalEl = clone.querySelector('.modal') as HTMLElement;
+        const localBtn = clone.querySelector('.resync-local-btn') as HTMLButtonElement;
+        const cloudBtn = clone.querySelector('.resync-cloud-btn') as HTMLButtonElement;
+
+        document.body.appendChild(clone);
+
+        const modal = new Modal(modalEl);
+
+        localBtn.addEventListener('click', function() {
+            modal.hide();
+            resolve('local');
+        });
+
+        cloudBtn.addEventListener('click', function() {
+            modal.hide();
+            resolve('cloud');
+        });
+
+        modalEl.addEventListener('hidden.bs.modal', function() {
+            modalEl.remove();
+            resolve('local');
+        });
+
+        modal.show();
+    });
+}
+
+/**
  * Pushes local dirty files to the cloud.
  * Checks cloud-state before writing to detect interleaved writes.
  * If the cloud was modified since last check, pulls first.
@@ -1085,7 +1152,12 @@ async function syncToCloudInternal(): Promise<void> {
     }
 
     // Process each dirty path
+    const totalDirty = dirtyPaths.size;
+    let processedDirty = 0;
+    ui.showSyncProgress(0, totalDirty);
     for (const [path, entry] of dirtyPaths) {
+        processedDirty++;
+        ui.showSyncProgress(processedDirty, totalDirty);
         if (entry.op === 'delete') {
             if (ALLOW_CLOUD_DELETIONS) {
                 try {
@@ -1166,6 +1238,9 @@ async function syncToCloudInternal(): Promise<void> {
     // Signal cloud state changed
     await uploadCloudState(syncTime);
 
+    STATE.cloudSync.lastSyncTime = syncTime;
+    await saveCloudSyncState();
+
     // Reset 1-hour timer since we just synced
     if (syncTimerId !== null) {
         clearInterval(syncTimerId);
@@ -1185,7 +1260,7 @@ async function syncToCloudInternal(): Promise<void> {
  * Internal function — callers should use syncFromCloud or syncBothWays.
  * @returns {Promise<void>}
  */
-async function syncFromCloudInternal(): Promise<void> {
+async function syncFromCloudInternal(options?: { forceRemoteWins?: boolean }): Promise<void> {
     console.log('[cloudSync] Read sync...');
 
     const syncJournal = await import('./syncJournal');
@@ -1196,6 +1271,8 @@ async function syncFromCloudInternal(): Promise<void> {
     if (cloudState?.lastUpdateTime && checkpoint.lastCloudCheckTime &&
         cloudState.lastUpdateTime <= checkpoint.lastCloudCheckTime) {
         console.log('[cloudSync] No remote changes since last check, skipping read sync');
+        STATE.cloudSync.lastSyncTime = new Date().toISOString();
+        await saveCloudSyncState();
         return;
     }
 
@@ -1217,16 +1294,22 @@ async function syncFromCloudInternal(): Promise<void> {
 
     // Handle conflicts
     if (actions.conflicts.length > 0) {
-        const resolutions = await showConflictModal(actions.conflicts, localManifest, remoteMap);
-        for (const conflict of actions.conflicts) {
-            const choice = resolutions.get(conflict.path) ?? 'local';
-            if (choice === 'local') {
-                const entry = localManifest.get(conflict.path);
-                if (entry && entry.content !== null) {
-                    actions.uploads.push(conflict.path);
-                }
-            } else {
+        if (options?.forceRemoteWins) {
+            for (const conflict of actions.conflicts) {
                 actions.downloads.push(conflict.path);
+            }
+        } else {
+            const resolutions = await showConflictModal(actions.conflicts, localManifest, remoteMap);
+            for (const conflict of actions.conflicts) {
+                const choice = resolutions.get(conflict.path) ?? 'local';
+                if (choice === 'local') {
+                    const entry = localManifest.get(conflict.path);
+                    if (entry && entry.content !== null) {
+                        actions.uploads.push(conflict.path);
+                    }
+                } else {
+                    actions.downloads.push(conflict.path);
+                }
             }
         }
     }
@@ -1243,10 +1326,18 @@ async function syncFromCloudInternal(): Promise<void> {
 
     // Execute downloads
     let allDownloadsSucceeded = true;
-    for (const path of actions.downloads) {
+    const downloadCount = actions.downloads.length;
+    if (downloadCount > 0) {
+        ui.showSyncProgress(0, downloadCount);
+    }
+    for (let i = 0; i < downloadCount; i++) {
+        const path = actions.downloads[i];
+        ui.showSyncProgress(i + 1, downloadCount);
         try {
             const content = await downloadFile(path);
             await writeLocalFile(path, content);
+            // Track changed paths
+            changedPaths.push(path);
             // Remove from dirty paths so write sync won't re-upload
             syncJournal.removeFromDirtyPaths(path);
             const remoteInfo = remoteMap.get(path);
@@ -1268,6 +1359,7 @@ async function syncFromCloudInternal(): Promise<void> {
             allDownloadsSucceeded = false;
         }
     }
+    ui.hideSyncProgress();
 
     // Add identical files
     for (const path of actions.identical) {
@@ -1287,6 +1379,8 @@ async function syncFromCloudInternal(): Promise<void> {
     if (allDownloadsSucceeded && cloudState?.lastUpdateTime) {
         await syncJournal.setLastCloudCheckTime(cloudState.lastUpdateTime);
     }
+    STATE.cloudSync.lastSyncTime = new Date().toISOString();
+    await saveCloudSyncState();
     STATE.cloudSync.lastError = null;
 }
 
@@ -1340,8 +1434,31 @@ async function syncReset(): Promise<void> {
         const { resetCheckpoint } = await import('./syncJournal');
         await resetCheckpoint();
 
-        console.log('[cloudSync] Complete re-sync triggered');
+        console.log('[cloudSync] Complete re-sync (local priority) triggered');
         await syncToCloudInternal();
+    });
+}
+
+/**
+ * Performs a complete reset and pulls all remote files down, overwriting local.
+ * Used when the user chooses "Cloud takes priority" during re-sync.
+ * Acquires the sync lock and manages UI state.
+ * @returns {Promise<void>}
+ */
+async function syncResetThenPull(): Promise<void> {
+    await withSyncLock(async function() {
+        await deleteLocalFile(MANIFEST_PATH);
+
+        STATE.cloudSync.lastSyncTime = null;
+        STATE.cloudSync.lastError = null;
+        await saveCloudSyncState();
+
+        // Reset journal checkpoint so all files are re-synced
+        const { resetCheckpoint } = await import('./syncJournal');
+        await resetCheckpoint();
+
+        console.log('[cloudSync] Complete re-sync (cloud priority) triggered');
+        await syncFromCloudInternal({ forceRemoteWins: true });
     });
 }
 
@@ -1514,14 +1631,13 @@ export async function triggerCompleteResync(): Promise<void> {
         return;
     }
 
-    const confirmed = confirm(
-        'This will delete the sync manifest and re-sync everything from scratch.\n' +
-        'Local files will take priority for any files that exist on both sides.\n\n' +
-        'Continue?'
-    );
-    if (!confirmed) return;
+    const choice = await showResyncChoiceModal();
 
-    await syncReset();
+    if (choice === 'local') {
+        await syncReset();
+    } else {
+        await syncResetThenPull();
+    }
 }
 
 /**

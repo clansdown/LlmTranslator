@@ -9,7 +9,7 @@ import * as ui from './ui';
 import * as settings from './settings';
 import * as translation from './translation';
 import { initAuth, getClerk, mountAuthComponent, isSignedIn } from './auth';
-import { initCloudSync } from './cloudSync';
+import { initCloudSync, setSyncReloadCallback } from './cloudSync';
 import type { Config } from './types/config';
 
 /**
@@ -234,7 +234,6 @@ export async function init(): Promise<void> {
 
     translation.setupTranslateButtons();
     translation.setupTextareaKeyHandlers();
-    await translation.loadDrafts();
     translation.setupDraftAutoSave();
     setupSessionSelectorHandler();
     setupNewSessionButtonHandler();
@@ -253,6 +252,36 @@ export async function init(): Promise<void> {
     await loadApiKey();
     await setupAuthButton();
     await initCloudSync();
+
+    setSyncReloadCallback(async function(changedPaths: string[]): Promise<void> {
+        const needsSessionList = changedPaths.some(function(p) { return p.startsWith('sessions/'); });
+        const needsCurrentSession = changedPaths.some(function(p) {
+            return p.startsWith('conversations/') || p.startsWith('translations/') || p.startsWith('drafts/');
+        });
+
+        if (needsSessionList) {
+            await populateSessionSelector();
+        }
+
+        if (needsCurrentSession || needsSessionList) {
+            const sessions = await translation.loadSessionsList();
+            const currentId = translation.getCurrentSessionId();
+            const stillExists = sessions.some(function(s) { return s.id === currentId; });
+            if (stillExists) {
+                await translation.setCurrentSession(currentId);
+            } else if (sessions.length > 0) {
+                await translation.setCurrentSession(sessions[0].id);
+                const selector = document.getElementById('session-selector') as HTMLSelectElement | null;
+                if (selector) selector.value = sessions[0].id;
+            } else {
+                await translation.initializeDefaultSession();
+                const defaultId = translation.getCurrentSessionId();
+                const selector = document.getElementById('session-selector') as HTMLSelectElement | null;
+                if (selector) selector.value = defaultId;
+            }
+        }
+    });
+
     console.log("LLM Translator initialized");
 }
 
