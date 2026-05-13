@@ -467,7 +467,7 @@ export async function renameSession(sessionId: string, newName: string): Promise
 }
 
 /**
- * Saves the current session state (model)
+ * Saves the current session state
  * @returns {Promise<void>}
  */
 export async function saveCurrentSession(): Promise<void> {
@@ -478,10 +478,6 @@ export async function saveCurrentSession(): Promise<void> {
     const session = await loadSession(currentSessionId);
     if (!session) {
         return;
-    }
-
-    if (config) {
-        session.model = config.selectedModel;
     }
 
     await saveSession(session);
