@@ -4,7 +4,7 @@
  */
 
 import { translateStructured, sendChatMessage, streamSendChatMessage, streamTranslateStructured, parseTag } from './openrouter';
-import { getPreference, savePreference, listSessions, saveSession, loadSession, deleteSession as storageDeleteSession, getOrCreateDefaultSession, saveSessionTranslation, listSessionTranslations, deleteSessionTranslation } from './storage';
+import { getPreference, savePreference, listSessions, saveSession, loadSession, deleteSession as storageDeleteSession, getOrCreateDefaultSession, saveSessionTranslation, listSessionTranslations, deleteSessionTranslation, loadSessionTranslation } from './storage';
 import { DEBUG_TRANSLATIONS, DEBUG_SESSIONS } from './debug';
 import * as ui from './ui';
 import { LANGUAGES } from './languages';
@@ -3689,6 +3689,29 @@ async function buildQuickQuestionMessage(
     message += `<INSTRUCTIONS>Answer in ${myLanguage}.</INSTRUCTIONS>`;
 
     return message;
+}
+
+/**
+ * Appends a synced translation to the current session's UI by timestamp.
+ * Loads the translation from OPFS, validates it's not already present,
+ * and renders it into the translations container via the standard template flow.
+ * Does nothing if the translation is already displayed or fails to load.
+ * @param {number} timestamp - Translation timestamp (milliseconds)
+ * @returns {Promise<void>}
+ */
+export async function appendTranslationFromSync(timestamp: number): Promise<void> {
+    const translation = await loadSessionTranslation(currentSessionId, timestamp);
+    if (!translation) return;
+
+    if (allTranslations.some(function(t) { return t.id === translation.id; })) return;
+
+    ensureEntries(translation);
+    allTranslations.push(translation);
+
+    const container = document.getElementById('translations-container');
+    if (container) {
+        renderTranslationItem(container, translation);
+    }
 }
 
 /**

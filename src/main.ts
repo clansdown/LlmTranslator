@@ -254,31 +254,30 @@ export async function init(): Promise<void> {
     await initCloudSync();
 
     setSyncReloadCallback(async function(changedPaths: string[]): Promise<void> {
-        const needsSessionList = changedPaths.some(function(p) { return p.startsWith('sessions/'); });
-        const needsCurrentSession = changedPaths.some(function(p) {
-            return p.startsWith('conversations/') || p.startsWith('translations/') || p.startsWith('drafts/');
-        });
+        const currentId = translation.getCurrentSessionId();
+        const currentSessionTimestamps: number[] = [];
+        let needsSessionList = false;
+
+        for (const path of changedPaths) {
+            if (path.startsWith('sessions/')) {
+                const match = path.match(/^sessions\/([^/]+)\/translations\/(\d+)\.json$/);
+                if (match) {
+                    const sessionId = match[1];
+                    const timestamp = parseInt(match[2], 10);
+                    if (sessionId === currentId) {
+                        currentSessionTimestamps.push(timestamp);
+                    }
+                }
+                needsSessionList = true;
+            }
+        }
 
         if (needsSessionList) {
             await populateSessionSelector();
         }
 
-        if (needsCurrentSession || needsSessionList) {
-            const sessions = await translation.loadSessionsList();
-            const currentId = translation.getCurrentSessionId();
-            const stillExists = sessions.some(function(s) { return s.id === currentId; });
-            if (stillExists) {
-                await translation.setCurrentSession(currentId);
-            } else if (sessions.length > 0) {
-                await translation.setCurrentSession(sessions[0].id);
-                const selector = document.getElementById('session-selector') as HTMLSelectElement | null;
-                if (selector) selector.value = sessions[0].id;
-            } else {
-                await translation.initializeDefaultSession();
-                const defaultId = translation.getCurrentSessionId();
-                const selector = document.getElementById('session-selector') as HTMLSelectElement | null;
-                if (selector) selector.value = defaultId;
-            }
+        for (const timestamp of currentSessionTimestamps) {
+            await translation.appendTranslationFromSync(timestamp);
         }
     });
 

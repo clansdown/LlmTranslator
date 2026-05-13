@@ -1133,6 +1133,24 @@ export async function listSessionTranslations(sessionId: string, pill: 'input' |
 }
 
 /**
+ * Loads a single translation by session ID and timestamp.
+ * @param {string} sessionId - Session ID
+ * @param {number} timestamp - Translation timestamp (milliseconds)
+ * @returns {Promise<Translation | null>} The translation object, or null if not found
+ */
+export async function loadSessionTranslation(sessionId: string, timestamp: number): Promise<Translation | null> {
+    try {
+        const sessionDir = await getSessionDirectory(sessionId);
+        const fileHandle = await sessionDir.getFileHandle(String(timestamp) + '.json');
+        const file = await fileHandle.getFile();
+        const content = await file.text();
+        return JSON.parse(content) as Translation;
+    } catch {
+        return null;
+    }
+}
+
+/**
  * Clears all translations for a session (used when switching sessions)
  * @param {string} sessionId - Session ID
  * @returns {Promise<void>}
