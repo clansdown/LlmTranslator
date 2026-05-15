@@ -18,6 +18,7 @@
 
 export const APP_PREFIX: string = 'translate';
 export const CLOUD_PREFIX: string = 'cloud';
+export const CREDENTIALS_PREFIX: string = 'credentials';
 
 /** @type {boolean} */
 let migrationComplete = false;
@@ -139,6 +140,16 @@ export async function getCloudDirectory(): Promise<FileSystemDirectoryHandle> {
 }
 
 /**
+ * Gets the shared /credentials/ directory handle for cross-FindForge-tool API keys.
+ * Creates the directory if it doesn't exist.
+ * @returns {Promise<FileSystemDirectoryHandle>} Credentials directory handle
+ */
+export async function getCredentialsHandle(): Promise<FileSystemDirectoryHandle> {
+    const root = await navigator.storage.getDirectory();
+    return await root.getDirectoryHandle(CREDENTIALS_PREFIX, { create: true });
+}
+
+/**
  * Reads a shared preference from /cloud/preferences/.
  * @param {string} key - Preference key (filename)
  * @returns {Promise<string | null>} Preference value or null
@@ -168,6 +179,51 @@ export async function writeCloudPreference(key: string, value: string): Promise<
     const writable = await fileHandle.createWritable();
     await writable.write(value);
     await writable.close();
+}
+
+/**
+ * Reads a shared credential from /credentials/.
+ * @param {string} provider - Credential provider name (filename)
+ * @returns {Promise<string | null>} Credential value or null
+ */
+export async function readCredential(provider: string): Promise<string | null> {
+    try {
+        const credDir = await getCredentialsHandle();
+        const fileHandle = await credDir.getFileHandle(provider);
+        const file = await fileHandle.getFile();
+        return await file.text();
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Writes a shared credential to /credentials/.
+ * @param {string} provider - Credential provider name (filename)
+ * @param {string} value - Credential value to store
+ * @returns {Promise<void>}
+ */
+export async function writeCredential(provider: string, value: string): Promise<void> {
+    const credDir = await getCredentialsHandle();
+    const fileHandle = await credDir.getFileHandle(provider, { create: true });
+    const writable = await fileHandle.createWritable();
+    await writable.write(value);
+    await writable.close();
+}
+
+/**
+ * Deletes a shared credential from /credentials/.
+ * @param {string} provider - Credential provider name (filename)
+ * @returns {Promise<void>}
+ */
+export async function deleteCredential(provider: string): Promise<void> {
+    const credDir = await getCredentialsHandle();
+    try {
+        await credDir.removeEntry(provider);
+    } catch (e) {
+        if (e instanceof Error && e.name === 'NotFoundError') return;
+        throw e;
+    }
 }
 
 /**

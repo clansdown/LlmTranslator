@@ -89,12 +89,19 @@ async function loadModels(): Promise<void> {
 }
 
 /**
- * Saves the API key to config and storage
+ * Saves the API key to config and storage.
+ * Writes to the shared /credentials/ directory so all FindForge apps can use it,
+ * then syncs to the cloud immediately. Also writes to legacy preferences/apiKey
+ * as a permanent fallback.
  * @param {string} key - API key to save
  * @returns {Promise<void>}
  */
 export async function saveApiKey(key: string): Promise<void> {
     config.openRouterApiKey = key;
+    const { writeCredential } = await import('./opfs');
+    await writeCredential('openrouter', key);
+    const { syncCredentialToCloud } = await import('./cloudSync');
+    await syncCredentialToCloud('openrouter');
     await savePreference("apiKey", key);
     await refreshBalance();
     await loadModels();
@@ -129,11 +136,20 @@ async function loadUrlApiKey(): Promise<void> {
 }
 
 /**
- * Loads the API key from OPFS storage if it exists
+ * Loads the API key from /credentials/ first (shared across FindForge apps),
+ * then falls back to the legacy per-app preferences/apiKey.
  * @returns {Promise<void>}
  */
 async function loadApiKey(): Promise<void> {
     try {
+        const { readCredential } = await import('./opfs');
+        const credKey = await readCredential('openrouter');
+        if (credKey && !config.openRouterApiKey) {
+            config.openRouterApiKey = credKey;
+            await refreshBalance();
+            await loadModels();
+            return;
+        }
         const key = await getPreference("apiKey");
         if (key && !config.openRouterApiKey) {
             await saveApiKey(key);
@@ -257,6 +273,8 @@ export async function init(): Promise<void> {
         const currentId = translation.getCurrentSessionId();
         const currentSessionTimestamps: number[] = [];
         let needsSessionList = false;
+        let needsConfigReload = false;
+        let needsApiKeyReload = false;
 
         for (const path of changedPaths) {
             if (path.startsWith('sessions/')) {
@@ -270,6 +288,12 @@ export async function init(): Promise<void> {
                 }
                 needsSessionList = true;
             }
+            if (path.startsWith('preferences/')) {
+                needsConfigReload = true;
+            }
+            if (path === 'credentials/openrouter') {
+                needsApiKeyReload = true;
+            }
         }
 
         if (needsSessionList) {
@@ -278,6 +302,15 @@ export async function init(): Promise<void> {
 
         for (const timestamp of currentSessionTimestamps) {
             await translation.appendTranslationFromSync(timestamp);
+        }
+
+        if (needsConfigReload) {
+            await loadSettings();
+            await loadApiKey();
+        }
+
+        if (needsApiKeyReload) {
+            await loadApiKey();
         }
     });
 
@@ -297,7 +330,7 @@ async function setupAuthButton(): Promise<void> {
     const hasLoggedIn = (await getPreference('clerkHasLoggedIn')) === 'true';
 
     if (isSignedIn()) {
-        authBtn.textContent = 'Log out';
+        authBtn.innerHTML = '<i class="bi bi-box-arrow-right" title="Sign out"></i>';
         await savePreference('clerkHasLoggedIn', 'true');
     } else {
         authBtn.textContent = hasLoggedIn ? 'Log in' : 'Create account';

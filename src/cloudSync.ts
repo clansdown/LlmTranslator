@@ -6,7 +6,7 @@
 
 import { Modal } from 'bootstrap';
 import { getClerkToken, isSignedIn, isClerkEnabled } from './auth';
-import { getOPFSHandle, ensureDirectory, readCloudPreference, writeCloudPreference, readLocalFile, writeLocalFile, deleteLocalFile, walkOpfsDirectory } from './opfs';
+import { getOPFSHandle, ensureDirectory, readCloudPreference, writeCloudPreference, readLocalFile, writeLocalFile, deleteLocalFile, walkOpfsDirectory, getCredentialsHandle } from './opfs';
 import { STATE } from './state';
 import * as ui from './ui';
 import type { SyncFileInfo, SyncConflict, SyncDeletion, SyncActions, SyncManifest, WorkerErrorResponse, SyncJournalEntry } from './types/cloudSync';
@@ -24,6 +24,14 @@ export const CLOUD_PREFIX = 'translate/';
 const MANIFEST_PATH = 'preferences/syncManifest';
 const CLOUD_STATE_PATH = 'cloud-state.json';
 const SYNC_SAFETY_WINDOW_MS = 10000;
+
+// Credential-sync constants
+export const CREDENTIALS_CLOUD_PREFIX = 'credentials/';
+const CREDENTIALS_MANIFEST_PATH = 'credentials/syncManifest';
+const CREDENTIALS_CLOUD_STATE_PATH = 'credentials/cloud-state.json';
+
+/** @type {string | null} */
+let lastCredentialCheckTime: string | null = null;
 
 /** @type {number | null} */
 let syncTimerId: number | null = null;
@@ -256,7 +264,9 @@ export async function listRemoteFiles(prefix?: string): Promise<SyncFileInfo[]> 
  * @returns {Promise<string>} The ETag returned by the worker
  */
 export async function uploadFile(path: string, content: string | Blob): Promise<string> {
-    const url = WORKER_BASE_URL + '/' + CLOUD_PREFIX + encodeURIComponent(path);
+    const cloudPrefix = path.startsWith('credentials/') ? CREDENTIALS_CLOUD_PREFIX : CLOUD_PREFIX;
+    const requestPath = path.startsWith('credentials/') ? path.slice('credentials/'.length) : path;
+    const url = WORKER_BASE_URL + '/' + cloudPrefix + encodeURIComponent(requestPath);
 
     let body: BodyInit;
     let contentType: string;
@@ -284,7 +294,9 @@ export async function uploadFile(path: string, content: string | Blob): Promise<
  * @returns {Promise<string | ArrayBuffer>} File content as text or raw bytes
  */
 export async function downloadFile(path: string): Promise<string | ArrayBuffer> {
-    const url = WORKER_BASE_URL + '/' + CLOUD_PREFIX + encodeURIComponent(path);
+    const cloudPrefix = path.startsWith('credentials/') ? CREDENTIALS_CLOUD_PREFIX : CLOUD_PREFIX;
+    const requestPath = path.startsWith('credentials/') ? path.slice('credentials/'.length) : path;
+    const url = WORKER_BASE_URL + '/' + cloudPrefix + encodeURIComponent(requestPath);
     const response = await fetchWithAuth(url);
 
     if (path.endsWith('.png')) {
@@ -299,7 +311,9 @@ export async function downloadFile(path: string): Promise<string | ArrayBuffer> 
  * @returns {Promise<void>}
  */
 export async function deleteRemoteFile(path: string): Promise<void> {
-    const url = WORKER_BASE_URL + '/' + CLOUD_PREFIX + encodeURIComponent(path);
+    const cloudPrefix = path.startsWith('credentials/') ? CREDENTIALS_CLOUD_PREFIX : CLOUD_PREFIX;
+    const requestPath = path.startsWith('credentials/') ? path.slice('credentials/'.length) : path;
+    const url = WORKER_BASE_URL + '/' + cloudPrefix + encodeURIComponent(requestPath);
     await fetchWithAuth(url, { method: 'DELETE' });
 }
 
@@ -1517,6 +1531,9 @@ export async function initCloudSync(): Promise<void> {
         await syncJournal.setLastCloudCheckTime(new Date().toISOString());
     }
 
+    // Sync shared credentials on startup (always full sync, across all FindForge apps)
+    await syncCredentialsFromCloud(true);
+
     // Start periodic timer for checking remote changes
     if (syncTimerId !== null) {
         clearInterval(syncTimerId);
@@ -1638,6 +1655,243 @@ export async function triggerCompleteResync(): Promise<void> {
     } else {
         await syncResetThenPull();
     }
+}
+
+/**
+ * Builds a local manifest for the credentials directory.
+ * Walks /credentials/, computes MD5 hashes, and returns a map keyed by full path.
+ * The syncManifest file itself is excluded from the listing.
+ * @returns {Promise<Map<string, { content: string | null; hash: string; mtime: number }>>} Credential local manifest
+ */
+async function buildCredentialLocalManifest(): Promise<Map<string, { content: string | null; hash: string; mtime: number }>> {
+    const manifest = new Map<string, { content: string | null; hash: string; mtime: number }>();
+    const credRoot = await getCredentialsHandle();
+    const files = await walkOpfsDirectory(credRoot, '');
+
+    for (const fileName of files) {
+        if (fileName === 'syncManifest') continue;
+
+        const fileEntry = await readCredentialFile(fileName);
+        if (fileEntry === null) continue;
+
+        const hash = computeHash(fileEntry.content);
+        const path = 'credentials/' + fileName;
+        manifest.set(path, { content: fileEntry.content, hash, mtime: fileEntry.mtime });
+    }
+
+    return manifest;
+}
+
+/**
+ * Reads a credential file from /credentials/ and returns its content and mtime.
+ * @param {string} provider - Credential provider name
+ * @returns {Promise<{ content: string; mtime: number } | null>} Content and mtime, or null
+ */
+async function readCredentialFile(provider: string): Promise<{ content: string; mtime: number } | null> {
+    try {
+        const credDir = await getCredentialsHandle();
+        const fileHandle = await credDir.getFileHandle(provider);
+        const file = await fileHandle.getFile();
+        const content = await file.text();
+        return { content, mtime: file.lastModified };
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Loads the credential sync manifest from /credentials/syncManifest.
+ * @returns {Promise<SyncManifest | null>} The manifest, or null
+ */
+async function loadCredentialSyncManifest(): Promise<SyncManifest | null> {
+    try {
+        const credDir = await getCredentialsHandle();
+        const fileHandle = await credDir.getFileHandle('syncManifest');
+        const file = await fileHandle.getFile();
+        const content = await file.text();
+        return JSON.parse(content) as SyncManifest;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Saves the credential sync manifest to /credentials/syncManifest.
+ * @param {SyncManifest} manifest - Manifest to save
+ * @returns {Promise<void>}
+ */
+async function saveCredentialSyncManifest(manifest: SyncManifest): Promise<void> {
+    const credDir = await getCredentialsHandle();
+    const fileHandle = await credDir.getFileHandle('syncManifest', { create: true });
+    const writable = await fileHandle.createWritable();
+    await writable.write(JSON.stringify(manifest));
+    await writable.close();
+}
+
+/**
+ * Uploads the credential cloud-state.json file to signal that credentials changed.
+ * @param {string} lastUpdateTime - ISO timestamp
+ * @returns {Promise<void>}
+ */
+async function uploadCredentialCloudState(lastUpdateTime: string): Promise<void> {
+    const content = JSON.stringify({ lastUpdateTime: lastUpdateTime });
+    await uploadFile(CREDENTIALS_CLOUD_STATE_PATH, content);
+}
+
+/**
+ * Downloads and parses the credential cloud-state.json file.
+ * @returns {Promise<{ lastUpdateTime: string } | null>} Cloud state or null
+ */
+async function downloadCredentialCloudState(): Promise<{ lastUpdateTime: string } | null> {
+    try {
+        const content = await downloadFile(CREDENTIALS_CLOUD_STATE_PATH) as string;
+        return JSON.parse(content) as { lastUpdateTime: string };
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Immediately uploads a single credential to the cloud after a local write.
+ * Acquires the sync lock, reads the file from OPFS, uploads to B2,
+ * updates the credential manifest, and writes the credential cloud-state.
+ * No journal, no debounce — writes go directly to cloud.
+ * @param {string} provider - Credential provider name (e.g. "openrouter")
+ * @returns {Promise<void>}
+ */
+export async function syncCredentialToCloud(provider: string): Promise<void> {
+    await withSyncLock(async function() {
+        const path = 'credentials/' + provider;
+        const fileEntry = await readCredentialFile(provider);
+
+        const manifest = await loadCredentialSyncManifest() ?? {};
+
+        if (fileEntry === null) {
+            // File was deleted locally
+            try {
+                await deleteRemoteFile(path);
+                console.log('[cloudSync] Deleted credential:', path);
+            } catch (e) {
+                console.warn('[cloudSync] Failed to delete credential:', path, e);
+            }
+            delete manifest[path];
+        } else {
+            const hash = computeHash(fileEntry.content);
+            const etag = await uploadFile(path, fileEntry.content);
+            manifest[path] = {
+                localHash: hash,
+                remoteEtag: etag,
+                localMtime: fileEntry.mtime,
+                remoteMtime: new Date().toUTCString()
+            };
+            console.log('[cloudSync] Uploaded credential:', path);
+        }
+
+        await saveCredentialSyncManifest(manifest);
+        await uploadCredentialCloudState(new Date().toISOString());
+    });
+}
+
+/**
+ * Pulls credential files from the cloud.
+ * Called on startup (force=true, always full sync) and on manual request
+ * (force=false, uses fast-path via credential cloud-state).
+ * Resolves conflicts with last-write-wins (no conflict modal).
+ * @param {boolean} [force=false] - If true, skips the fast-path and always syncs
+ * @returns {Promise<void>}
+ */
+export async function syncCredentialsFromCloud(force: boolean = false): Promise<void> {
+    await withSyncLock(async function() {
+        if (!force) {
+            const credCloudState = await downloadCredentialCloudState();
+            if (credCloudState?.lastUpdateTime && lastCredentialCheckTime &&
+                credCloudState.lastUpdateTime <= lastCredentialCheckTime) {
+                console.log('[cloudSync] Credentials: no remote changes since last check');
+                return;
+            }
+        }
+
+        console.log('[cloudSync] Credential read sync...');
+
+        const manifest: SyncManifest = await loadCredentialSyncManifest() ?? {};
+        const localManifest = await buildCredentialLocalManifest();
+
+        // List remote credential files (always cheap: ~1-10 files)
+        const remoteFiles = await listRemoteFiles(CREDENTIALS_CLOUD_PREFIX);
+        const remoteMap = new Map<string, SyncFileInfo>();
+        for (const f of remoteFiles) {
+            remoteMap.set('credentials/' + f.path, f);
+        }
+
+        const actions = resolveSyncActions(localManifest, remoteMap, manifest);
+
+        // Downloads — last-write-wins, no conflict modal
+        for (const path of actions.downloads) {
+            try {
+                const content = await downloadFile(path) as string;
+                const provider = path.slice('credentials/'.length);
+                const credDir = await getCredentialsHandle();
+                const fileHandle = await credDir.getFileHandle(provider, { create: true });
+                const writable = await fileHandle.createWritable();
+                await writable.write(content);
+                await writable.close();
+
+                const hash = computeHash(content);
+                const remoteInfo = remoteMap.get(path);
+                if (remoteInfo) {
+                    manifest[path] = {
+                        localHash: hash,
+                        remoteEtag: remoteInfo.etag,
+                        localMtime: Date.now(),
+                        remoteMtime: remoteInfo.lastModified
+                    };
+                }
+
+                changedPaths.push(path);
+                console.log('[cloudSync] Downloaded credential:', path);
+            } catch (e) {
+                console.error('[cloudSync] Failed to download credential:', path, e);
+            }
+        }
+
+        // Uploads — local files not yet on remote
+        for (const path of actions.uploads) {
+            const localEntry = localManifest.get(path);
+            if (!localEntry || localEntry.content === null) continue;
+            try {
+                const etag = await uploadFile(path, localEntry.content);
+                manifest[path] = {
+                    localHash: localEntry.hash,
+                    remoteEtag: etag,
+                    localMtime: localEntry.mtime,
+                    remoteMtime: new Date().toUTCString()
+                };
+                console.log('[cloudSync] Uploaded credential:', path);
+            } catch (e) {
+                console.error('[cloudSync] Failed to upload credential:', path, e);
+            }
+        }
+
+        // Add identical files
+        for (const path of actions.identical) {
+            const localEntry = localManifest.get(path);
+            const remoteInfo = remoteMap.get(path);
+            if (localEntry && remoteInfo) {
+                manifest[path] = {
+                    localHash: localEntry.hash,
+                    remoteEtag: remoteInfo.etag,
+                    localMtime: localEntry.mtime,
+                    remoteMtime: remoteInfo.lastModified
+                };
+            }
+        }
+
+        lastCredentialCheckTime = new Date().toISOString();
+
+        await saveCredentialSyncManifest(manifest);
+        await uploadCredentialCloudState(lastCredentialCheckTime);
+        console.log('[cloudSync] Credential sync complete');
+    });
 }
 
 /**

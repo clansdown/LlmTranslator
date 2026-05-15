@@ -8,7 +8,7 @@ import { getPreference, savePreference, listSessions, saveSession, loadSession, 
 import { DEBUG_TRANSLATIONS, DEBUG_SESSIONS } from './debug';
 import * as ui from './ui';
 import { LANGUAGES } from './languages';
-import { INPUT_SYSTEM_PROMPT, OUTPUT_SYSTEM_PROMPT, INPUT_INSTRUCTIONS, OUTPUT_INSTRUCTIONS, LITERAL_RETRANSLATION_PROMPT, OUTPUT_LITERAL_RETRANSLATION_PROMPT, QUESTION_SYSTEM_PROMPT, WORD_DEFINITIONS_PROMPT, INTERPRETATION_PROMPT, QUICK_QUESTION_DRAFT_PROMPT, QUICK_QUESTION_MESSAGE_PROMPT } from './prompts';
+import { INPUT_SYSTEM_PROMPT, OUTPUT_SYSTEM_PROMPT, INPUT_INSTRUCTIONS, OUTPUT_INSTRUCTIONS, LITERAL_RETRANSLATION_PROMPT, OUTPUT_LITERAL_RETRANSLATION_PROMPT, QUESTION_SYSTEM_PROMPT, WORD_DEFINITIONS_PROMPT, INTERPRETATION_PROMPT, QUICK_QUESTION_DRAFT_PROMPT, QUICK_QUESTION_MESSAGE_PROMPT, QUICK_QUESTION_TRANSLATION_PROMPT } from './prompts';
 import { renderMarkdown, normalizeForMarkdown } from './markdown';
 import { readLocalFile, writeLocalFile, deleteLocalFile } from './opfs';
 import type { Translation, TranslationEntry, TranslationWordItem, WordItem, PunctItem, NewlineItem } from './types/translation';
@@ -1576,6 +1576,26 @@ function renderTranslationItem(container: HTMLElement, translation: Translation)
             });
         }
 
+        // Wire quick question button on output (translation) items
+        if (refs.quickQuestionBtn && translation.pill !== 'input') {
+            const translationId = translation.id;
+            refs.quickQuestionBtn.addEventListener('click', function() {
+                if (quickQuestionModalOpen) return;
+                const t = allTranslations.find(function(x) { return x.id === translationId; });
+                if (!t) return;
+                ensureEntries(t);
+                const entry = t.entries[t.activeEntryIndex ?? 0];
+                const sourceText = entry?.source ?? (t as any).source ?? '';
+                const targetText = entry?.translation ?? (t as any).translation ?? '';
+                showQuickQuestionModal({
+                    sourceText: sourceText,
+                    translationText: targetText,
+                    systemPrompt: QUICK_QUESTION_TRANSLATION_PROMPT,
+                    defaultQuestion: 'What does this mean?'
+                });
+            });
+        }
+
         // Wire regenerate translation button
         if (refs.regenerateTranslationBtn) {
             const translationId = translation.id;
@@ -2472,7 +2492,7 @@ export async function regenerateIndependentSections(translationId: string): Prom
  * @throws {Error} If API request fails
  */
 async function fetchWordDefinitions(model: string, text: string, outputLanguage: string): Promise<{ xml: string; generationId: string }> {
-    const prompt = WORD_DEFINITIONS_PROMPT.replace('[TEXT]', text).replace('[LANGUAGE]', outputLanguage);
+    const prompt = WORD_DEFINITIONS_PROMPT.replace(/\[TEXT\]/g, text).replace(/\[LANGUAGE\]/g, outputLanguage);
     console.log('[wordDefinitions] Sending API request, text length:', text.length);
     const { content, generationId } = await sendChatMessage(
         config!.openRouterApiKey!,
@@ -3351,7 +3371,7 @@ async function handleTranslateStreaming(
 
     let instructions: string;
     if (mode === 'input') {
-        instructions = INPUT_INSTRUCTIONS.replace('[LANGUAGE]', myLangName);
+        instructions = INPUT_INSTRUCTIONS.replace(/\[LANGUAGE\]/g, myLangName);
     } else {
         const intent = activeEntry?.intent ?? '';
         const translationInstructions = session?.translationInstructions ?? '';
@@ -3361,11 +3381,11 @@ async function handleTranslateStreaming(
         const intentBlock = intent
             ? `The following is guidance on the intent of the text to be translated:\n<INTENT>${intent}</INTENT>`
             : '';
-        instructions = OUTPUT_INSTRUCTIONS.replace('[TRANSLATION_INSTRUCTIONS_BLOCK]', translationInstructionsBlock);
-        instructions = instructions.replace('[INTENT_BLOCK]', intentBlock);
-        instructions = instructions.replace('[LANGUAGE]', myLangName);
-        instructions = instructions.replace('[TARGET_LANGUAGE]', theirLangName);
-        instructions = instructions.replace('[TAG_INSTRUCTIONS_BLOCK]', buildTagInstructionsBlock(session?.translationTags, sourceText));
+        instructions = OUTPUT_INSTRUCTIONS.replace(/\[TRANSLATION_INSTRUCTIONS_BLOCK\]/g, translationInstructionsBlock);
+        instructions = instructions.replace(/\[INTENT_BLOCK\]/g, intentBlock);
+        instructions = instructions.replace(/\[LANGUAGE\]/g, myLangName);
+        instructions = instructions.replace(/\[TARGET_LANGUAGE\]/g, theirLangName);
+        instructions = instructions.replace(/\[TAG_INSTRUCTIONS_BLOCK\]/g, buildTagInstructionsBlock(session?.translationTags, sourceText));
     }
 
     const userMessage = await buildUserMessage(mode, sourceText, instructions);
@@ -3649,7 +3669,8 @@ async function buildQuickQuestionMessage(
     intentText: string,
     myLanguage: string,
     previousQA: Array<{question: string; answer: string}> = [],
-    messageText?: string
+    messageText?: string,
+    translationText?: string
 ): Promise<string> {
     const background = await getBackground();
 
@@ -3664,7 +3685,10 @@ async function buildQuickQuestionMessage(
         message += history + "\n\n";
     }
 
-    if (messageText) {
+    if (translationText) {
+        message += `<SOURCE_TEXT>${sourceText}</SOURCE_TEXT>\n`;
+        message += `<TRANSLATION>${translationText}</TRANSLATION>\n`;
+    } else if (messageText) {
         message += `<CURRENT_MESSAGE>${messageText}</CURRENT_MESSAGE>\n`;
     } else {
         message += `<SOURCE_TEXT>${sourceText}</SOURCE_TEXT>\n`;
@@ -3716,7 +3740,7 @@ export async function appendTranslationFromSync(timestamp: number): Promise<void
  * dialog session. Nothing is persisted when the modal is closed.
  * Accepts optional options for context (sourceText, intentText) and a
  * systemPrompt override (for input message quick questions).
- * @param {{ sourceText?: string; intentText?: string; systemPrompt?: string; defaultQuestion?: string }} [options] - Context and prompt overrides
+ * @param {{ sourceText?: string; intentText?: string; systemPrompt?: string; defaultQuestion?: string; translationText?: string }} [options] - Context and prompt overrides
  * @returns {void}
  */
 function showQuickQuestionModal(options?: {
@@ -3724,6 +3748,7 @@ function showQuickQuestionModal(options?: {
     intentText?: string;
     systemPrompt?: string;
     defaultQuestion?: string;
+    translationText?: string;
 }): void {
     if (quickQuestionModalOpen) return;
     const template = document.getElementById('quick-question-modal-template') as HTMLTemplateElement | null;
@@ -3816,10 +3841,13 @@ function showQuickQuestionModal(options?: {
             currentAnswerEl = addHistoryItem(question, true);
 
             // When options.sourceText is provided, use it directly as the source
-            // (for input message quick questions). Otherwise read from the global textareas.
-            const isMessageQuestion = options?.sourceText !== undefined;
-            const sourceText = isMessageQuestion ? options!.sourceText! : (document.getElementById('source-textarea') as HTMLTextAreaElement | null)?.value ?? '';
-            const intentText = isMessageQuestion ? '' : (document.getElementById('intent-textarea') as HTMLTextAreaElement | null)?.value ?? '';
+            // (for input message quick questions). When options.translationText is provided,
+            // both source and translation are used (for output message quick questions).
+            // Otherwise read from the global textareas (for draft quick questions).
+            const isTranslationQuestion = options?.translationText !== undefined;
+            const isMessageQuestion = !isTranslationQuestion && options?.sourceText !== undefined;
+            const sourceText = (isMessageQuestion || isTranslationQuestion) ? (options!.sourceText ?? '') : (document.getElementById('source-textarea') as HTMLTextAreaElement | null)?.value ?? '';
+            const intentText = (isMessageQuestion || isTranslationQuestion) ? '' : (document.getElementById('intent-textarea') as HTMLTextAreaElement | null)?.value ?? '';
 
             if (!config || !config.openRouterApiKey) {
                 showErrorInCurrentAnswer('No API key configured.');
@@ -3849,7 +3877,8 @@ function showQuickQuestionModal(options?: {
                 .replace(/\[TARGET_LANGUAGE\]/g, theirLangName);
             const userMessage = await buildQuickQuestionMessage(
                 question, sourceText, intentText, myLangName, dialogHistory,
-                isMessageQuestion ? sourceText : undefined
+                isMessageQuestion ? sourceText : undefined,
+                options?.translationText
             );
 
             const abortHandle = streamSendChatMessage(

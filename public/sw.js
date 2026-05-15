@@ -1,7 +1,8 @@
 /**
  * Service Worker for LlmTranslator PWA
  * - JS/CSS: cache-first (instant load from cache, hash-busted on deploy)
- * - HTML/Images: network-first (ETags handled by browser, offline fallback)
+ * - HTML: network-first with cache:no-cache (forces ETag validation on every load)
+ * - Images: network-first (offline fallback)
  */
 
 const CACHE_NAME = 'llm-translator-v1';
@@ -75,7 +76,10 @@ function cacheFirst(request) {
 }
 
 function networkFirst(request, cacheName, fetchEvent) {
-    return fetch(request).then(function(response) {
+    const fetchOptions = (fetchEvent.request.mode === 'navigate' || request.url.endsWith('.html'))
+        ? { cache: 'no-cache' }
+        : {};
+    return fetch(request, fetchOptions).then(function(response) {
         if (response.ok) {
             const responseClone = response.clone();
             caches.open(cacheName).then(function(cache) {
