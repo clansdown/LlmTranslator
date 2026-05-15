@@ -52,25 +52,41 @@ Use casual verb endings and vocabulary appropriate for close friends, family, or
                     name: 'sonkeigo',
                     openTag: '<sonkeigo>',
                     closeTag: '</sonkeigo>',
-                    guidance: 'Use respectful language (尊敬語). Elevates the status of the person being spoken about. For customers, superiors, or those deserving respect.'
+                    guidance: 
+`Translate the enclosed text using respectful/honorific language (尊敬語). Use honorific verb
+forms (お/ご〜になる, なさる, いらっしゃる, おっしゃる, 召し上がる, ご覧になる) and
+honorific noun prefixes (お/ご). Use elevated, formal vocabulary throughout. Avoid contractions
+and casual forms. Combine with です/ます endings for complete politeness.`
                 },
                 {
                     name: 'kenjougo',
                     openTag: '<kenjougo>',
                     closeTag: '</kenjougo>',
-                    guidance: 'Use humble language (謙譲語). Lowers the speaker\'s own status. For speaking about yourself or your group to outsiders.'
+                    guidance: 
+`Translate the enclosed text using humble language (謙譲語). Use humble verb forms for the
+speaker's own actions (お/ご〜する/いたす, 申す, いただく, 参る, おる, 伺う). Lower the
+speaker's status through verb choice. Use modest, self-effacing vocabulary. Combine with
+です/ます endings for politeness.`
                 },
                 {
                     name: 'teineigo',
                     openTag: '<teineigo>',
                     closeTag: '</teineigo>',
-                    guidance: 'Use polite language (丁寧語). Standard polite register using -masu/desu forms. Safe default for most situations.'
+                    guidance: 
+`Translate the enclosed text using standard polite language (丁寧語). Use です/ます verb
+endings consistently. Use polite vocabulary appropriate for general social interactions.
+This is the neutral polite register — natural and approachable. Use honorific and humble
+forms where relevant, but keep the overall tone accessible.`
                 },
                 {
                     name: 'casual',
                     openTag: '<casual>',
                     closeTag: '</casual>',
-                    guidance: 'Use casual/plain language (常体/タメ口). No -masu/desu endings. For friends, family, or subordinates.'
+                    guidance: 
+`Translate the enclosed text using casual/plain speech (常体/タメ口). Use plain/dictionary
+verb forms without です/ます. Use casual sentence-ending particles (よ, ね, な, の)
+where natural. Use colloquial vocabulary and contracted forms (してる instead of している,
+じゃ instead of では). The tone should be informal and intimate.`
                 }
             ];
         default:
