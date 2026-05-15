@@ -260,27 +260,19 @@
         }
 
         .tag-item {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0.25rem 0.5rem;
-            border: 1px solid var(--bs-border-color);
-            border-radius: 0.25rem;
-            margin-bottom: 0.25rem;
+            border-bottom: 1px solid var(--bs-border-color);
+            padding-bottom: 0.5rem;
+            margin-bottom: 0.5rem;
         }
         .tag-item .tag-name {
             font-weight: bold;
             font-family: monospace;
-            min-width: 6rem;
+            font-size: 0.875rem;
+            padding-top: 0.25rem;
         }
-        .tag-item .tag-guidance {
-            color: var(--bs-secondary-color);
+        .tag-item .tag-guidance-textarea {
             font-size: 0.85rem;
-            flex: 1;
-            padding: 0 0.5rem;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
+            resize: none;
         }
     </style>
 </head>
@@ -1080,6 +1072,21 @@
                             <button type="button" class="btn btn-primary sync-conflict-confirm-btn" data-bs-dismiss="modal">Confirm Resolutions</button>
                         </div>
                     </div>
+                </div>
+            </div>
+        </template>
+
+        <!-- settings-tag-item-template: Template for a single editable translation tag row in the settings dialog -->
+        <template id="settings-tag-item-template">
+            <div class="row g-2 align-items-start mb-2 tag-item">
+                <div class="col-3">
+                    <div class="tag-name"></div>
+                </div>
+                <div class="col">
+                    <textarea class="form-control form-control-sm tag-guidance-textarea" rows="3" aria-label="Tag guidance"></textarea>
+                </div>
+                <div class="col-auto">
+                    <button type="button" class="btn btn-sm btn-outline-danger" title="Remove tag">&times;</button>
                 </div>
             </div>
         </template>

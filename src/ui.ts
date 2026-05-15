@@ -15,9 +15,9 @@ export function displayError(message: string): void {
     if (!template) {
         return;
     }
-    const clone = template.content.cloneNode(true);
-    const container = (clone as DocumentFragment).firstElementChild as HTMLElement;
-    const messageSpan = (clone as Element).querySelector('.error-message');
+    const clone = template.content.cloneNode(true) as DocumentFragment;
+    const container = clone.firstElementChild as HTMLElement;
+    const messageSpan = container.querySelector('.error-message');
     if (messageSpan) {
         messageSpan.textContent = message;
     }

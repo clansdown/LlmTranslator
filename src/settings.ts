@@ -1122,7 +1122,7 @@ function updateDeleteSessionButton(): void {
 }
 
 /**
- * Renders the tag list in the settings editor
+ * Renders the tag list in the settings editor using the tag-item template
  * @returns {void}
  */
 function renderTagList(): void {
@@ -1134,26 +1134,31 @@ function renderTagList(): void {
         return;
     }
 
+    const template = document.getElementById('settings-tag-item-template') as HTMLTemplateElement;
+    if (!template) {
+        refs.tagsListContainer.textContent = 'Tag template not found.';
+        return;
+    }
+
     currentEditorTags.forEach(function(tag, index) {
-        const item = document.createElement('div');
-        item.className = 'tag-item';
-        const nameSpan = document.createElement('span');
-        nameSpan.className = 'tag-name';
-        nameSpan.textContent = tag.openTag + '...' + tag.closeTag;
-        const guidanceSpan = document.createElement('span');
-        guidanceSpan.className = 'tag-guidance';
-        guidanceSpan.textContent = tag.guidance;
-        const deleteBtn = document.createElement('button');
-        deleteBtn.className = 'btn btn-sm btn-outline-danger';
-        deleteBtn.textContent = '✕';
-        deleteBtn.title = 'Remove tag "' + tag.name + '"';
+        const clone = template.content.cloneNode(true) as DocumentFragment;
+        const root = clone.firstElementChild as HTMLElement;
+        const nameEl = root.querySelector('.tag-name') as HTMLDivElement;
+        const textarea = root.querySelector('.tag-guidance-textarea') as HTMLTextAreaElement;
+        const deleteBtn = root.querySelector('button') as HTMLButtonElement;
+
+        nameEl.textContent = tag.openTag + '...' + tag.closeTag;
+        textarea.value = tag.guidance;
+
+        textarea.addEventListener('input', function() {
+            currentEditorTags[index].guidance = textarea.value;
+        });
+
         deleteBtn.addEventListener('click', function() {
             removeTag(index);
         });
-        item.appendChild(nameSpan);
-        item.appendChild(guidanceSpan);
-        item.appendChild(deleteBtn);
-        refs!.tagsListContainer.appendChild(item);
+
+        refs!.tagsListContainer.appendChild(clone);
     });
 }
 
