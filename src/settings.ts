@@ -10,6 +10,7 @@ import { saveApiKey } from './main';
 import { LANGUAGES } from './languages';
 import { getDefaultTags } from './defaultTranslationTags';
 import * as cloudSync from './cloudSync';
+import { showBackgroundUpdateModal } from './backgroundUpdate';
 import { STATE } from './state';
 import type { Config } from './types/config';
 import type { VisionModel } from './types/api';
@@ -93,6 +94,10 @@ interface SettingsReferences {
     defaultInterpretationReasoningSelect: HTMLSelectElement;
     defaultQuickQuestionModelSelect: HTMLSelectElement;
     defaultQuickQuestionReasoningSelect: HTMLSelectElement;
+    sessionQuestionModelSelect: HTMLSelectElement;
+    sessionQuestionReasoningSelect: HTMLSelectElement;
+    defaultQuestionModelSelect: HTMLSelectElement;
+    defaultQuestionReasoningSelect: HTMLSelectElement;
     tagsListContainer: HTMLDivElement;
     tagNameInput: HTMLInputElement;
     tagGuidanceInput: HTMLInputElement;
@@ -105,6 +110,7 @@ interface SettingsReferences {
     cloudSyncExportButton: HTMLButtonElement;
     cloudSyncLastSpan: HTMLSpanElement;
     cloudSyncStatusDiv: HTMLDivElement;
+    proposeBackgroundButton: HTMLButtonElement;
 }
 
 let refs: SettingsReferences | null = null;
@@ -186,6 +192,10 @@ function openSettingsModal(): void {
             defaultInterpretationReasoningSelect: settingsModalElement.querySelector('#settings-default-interpretation-reasoning') as HTMLSelectElement,
             defaultQuickQuestionModelSelect: settingsModalElement.querySelector('#settings-default-quick-question-model') as HTMLSelectElement,
             defaultQuickQuestionReasoningSelect: settingsModalElement.querySelector('#settings-default-quick-question-reasoning') as HTMLSelectElement,
+            sessionQuestionModelSelect: settingsModalElement.querySelector('#settings-session-question-model') as HTMLSelectElement,
+            sessionQuestionReasoningSelect: settingsModalElement.querySelector('#settings-session-question-reasoning') as HTMLSelectElement,
+            defaultQuestionModelSelect: settingsModalElement.querySelector('#settings-default-question-model') as HTMLSelectElement,
+            defaultQuestionReasoningSelect: settingsModalElement.querySelector('#settings-default-question-reasoning') as HTMLSelectElement,
             tagsListContainer: settingsModalElement.querySelector('#settings-tags-list') as HTMLDivElement,
             tagNameInput: settingsModalElement.querySelector('#settings-tag-name') as HTMLInputElement,
             tagGuidanceInput: settingsModalElement.querySelector('#settings-tag-guidance') as HTMLInputElement,
@@ -197,7 +207,8 @@ function openSettingsModal(): void {
             cloudSyncResyncButton: settingsModalElement.querySelector('#settings-cloud-sync-resync') as HTMLButtonElement,
             cloudSyncExportButton: settingsModalElement.querySelector('#settings-cloud-sync-export') as HTMLButtonElement,
             cloudSyncLastSpan: settingsModalElement.querySelector('#settings-cloud-sync-last') as HTMLSpanElement,
-            cloudSyncStatusDiv: settingsModalElement.querySelector('#settings-cloud-sync-status') as HTMLDivElement
+            cloudSyncStatusDiv: settingsModalElement.querySelector('#settings-cloud-sync-status') as HTMLDivElement,
+            proposeBackgroundButton: settingsModalElement.querySelector('#settings-propose-background-btn') as HTMLButtonElement
         };
 
         setupEventListeners();
@@ -302,6 +313,14 @@ function setupEventListeners(): void {
         }
     });
     refs.resetTagsButton.addEventListener('click', resetTagsToDefaults);
+
+    if (refs.proposeBackgroundButton) {
+        refs.proposeBackgroundButton.addEventListener('click', function() {
+            if (selectedSessionIdInModal) {
+                showBackgroundUpdateModal(selectedSessionIdInModal);
+            }
+        });
+    }
 
     refs.sessionTheirLanguageSelect.addEventListener('change', function() {
         const theirLanguage = refs!.sessionTheirLanguageSelect.value;
@@ -698,6 +717,27 @@ function populateModelDropdown(): void {
         }
         refs.sessionQuickQuestionModelSelect.appendChild(option);
     }
+
+    refs.sessionQuestionModelSelect.innerHTML = '';
+
+    const questionDisabledPlaceholder = document.createElement('option');
+    questionDisabledPlaceholder.value = '';
+    questionDisabledPlaceholder.textContent = 'Disabled';
+    refs.sessionQuestionModelSelect.appendChild(questionDisabledPlaceholder);
+
+    for (const model of models) {
+        const option = document.createElement('option');
+        option.value = model.id;
+        if (model.pricing) {
+            const promptCost = (parseFloat(model.pricing.prompt) * 1_000_000).toFixed(2);
+            const completionCost = (parseFloat(model.pricing.completion) * 1_000_000).toFixed(2);
+            const providerPart = model.providerName ? ' by ' + model.providerName : '';
+            option.textContent = `${model.name}${providerPart} ($${promptCost}/$${completionCost})`;
+        } else {
+            option.textContent = model.name;
+        }
+        refs.sessionQuestionModelSelect.appendChild(option);
+    }
 }
 
 /**
@@ -787,14 +827,36 @@ async function populateDefaultModelDropdowns(): Promise<void> {
         refs.defaultQuickQuestionModelSelect.appendChild(option);
     }
 
-    const [defaultModelPref, defaultReasoningPref, defaultLiteralModelPref, defaultInterpretationModelPref, defaultInterpretationReasoningPref, defaultQuickQuestionModelPref, defaultQuickQuestionReasoningPref] = await Promise.all([
+    refs.defaultQuestionModelSelect.innerHTML = '';
+    const questionDisabledPlaceholder = document.createElement('option');
+    questionDisabledPlaceholder.value = '';
+    questionDisabledPlaceholder.textContent = 'Disabled';
+    refs.defaultQuestionModelSelect.appendChild(questionDisabledPlaceholder);
+
+    for (const model of models) {
+        const option = document.createElement('option');
+        option.value = model.id;
+        if (model.pricing) {
+            const promptCost = (parseFloat(model.pricing.prompt) * 1_000_000).toFixed(2);
+            const completionCost = (parseFloat(model.pricing.completion) * 1_000_000).toFixed(2);
+            const providerPart = model.providerName ? ' by ' + model.providerName : '';
+            option.textContent = `${model.name}${providerPart} ($${promptCost}/$${completionCost})`;
+        } else {
+            option.textContent = model.name;
+        }
+        refs.defaultQuestionModelSelect.appendChild(option);
+    }
+
+    const [defaultModelPref, defaultReasoningPref, defaultLiteralModelPref, defaultInterpretationModelPref, defaultInterpretationReasoningPref, defaultQuickQuestionModelPref, defaultQuickQuestionReasoningPref, defaultQuestionModelPref, defaultQuestionReasoningPref] = await Promise.all([
         storage.getPreference("defaultModel"),
         storage.getPreference("defaultReasoning"),
         storage.getPreference("defaultLiteralModel"),
         storage.getPreference("defaultInterpretationModel"),
         storage.getPreference("defaultInterpretationReasoning"),
         storage.getPreference("defaultQuickQuestionModel"),
-        storage.getPreference("defaultQuickQuestionReasoning")
+        storage.getPreference("defaultQuickQuestionReasoning"),
+        storage.getPreference("defaultQuestionModel"),
+        storage.getPreference("defaultQuestionReasoning")
     ]);
 
     console.log('[defaults] Loaded from OPFS - model:', defaultModelPref, 'reasoning:', defaultReasoningPref, 'literalModel:', defaultLiteralModelPref, 'interpretationModel:', defaultInterpretationModelPref, 'interpretationReasoning:', defaultInterpretationReasoningPref);
@@ -806,6 +868,8 @@ async function populateDefaultModelDropdowns(): Promise<void> {
     refs.defaultInterpretationReasoningSelect.value = defaultInterpretationReasoningPref ?? 'none';
     refs.defaultQuickQuestionModelSelect.value = defaultQuickQuestionModelPref ?? '';
     refs.defaultQuickQuestionReasoningSelect.value = defaultQuickQuestionReasoningPref ?? 'none';
+    refs.defaultQuestionModelSelect.value = defaultQuestionModelPref ?? '';
+    refs.defaultQuestionReasoningSelect.value = defaultQuestionReasoningPref ?? 'none';
 }
 
 /**
@@ -821,10 +885,12 @@ async function refreshModelDropdowns(): Promise<void> {
         refs.sessionLiteralModelSelect,
         refs.sessionInterpretationModelSelect,
         refs.sessionQuickQuestionModelSelect,
+        refs.sessionQuestionModelSelect,
         refs.defaultModelSelect,
         refs.defaultLiteralModelSelect,
         refs.defaultInterpretationModelSelect,
-        refs.defaultQuickQuestionModelSelect
+        refs.defaultQuickQuestionModelSelect,
+        refs.defaultQuestionModelSelect
     ];
 
     let needsRefresh = false;
@@ -947,6 +1013,8 @@ async function saveSettings(): Promise<void> {
     const defaultInterpretationReasoning = refs.defaultInterpretationReasoningSelect.value;
     const defaultQuickQuestionModel = refs.defaultQuickQuestionModelSelect.value || null;
     const defaultQuickQuestionReasoning = refs.defaultQuickQuestionReasoningSelect.value;
+    const defaultQuestionModel = refs.defaultQuestionModelSelect.value || null;
+    const defaultQuestionReasoning = refs.defaultQuestionReasoningSelect.value;
 
     await saveApprovedModels();
 
@@ -986,7 +1054,18 @@ async function saveSettings(): Promise<void> {
 
     await storage.savePreference('defaultQuickQuestionReasoning', defaultQuickQuestionReasoning);
 
-    console.log('[defaults] Saved - model:', defaultModel, 'reasoning:', defaultReasoning, 'literalModel:', defaultLiteralModel, 'interpretationModel:', defaultInterpretationModel, 'interpretationReasoning:', defaultInterpretationReasoning, 'quickQuestionModel:', defaultQuickQuestionModel, 'quickQuestionReasoning:', defaultQuickQuestionReasoning);
+    config.defaultQuestionModel = defaultQuestionModel;
+    config.defaultQuestionReasoning = defaultQuestionReasoning as ReasoningLevel;
+
+    if (defaultQuestionModel) {
+        await storage.savePreference('defaultQuestionModel', defaultQuestionModel);
+    } else {
+        await storage.deletePreference('defaultQuestionModel');
+    }
+
+    await storage.savePreference('defaultQuestionReasoning', defaultQuestionReasoning);
+
+    console.log('[defaults] Saved - model:', defaultModel, 'reasoning:', defaultReasoning, 'literalModel:', defaultLiteralModel, 'interpretationModel:', defaultInterpretationModel, 'interpretationReasoning:', defaultInterpretationReasoning, 'quickQuestionModel:', defaultQuickQuestionModel, 'quickQuestionReasoning:', defaultQuickQuestionReasoning, 'questionModel:', defaultQuestionModel, 'questionReasoning:', defaultQuestionReasoning);
 
     settingsModalInstance.hide();
 }
@@ -1062,6 +1141,8 @@ function loadSessionIntoEditor(sessionId: string): void {
             refs.sessionInterpretationReasoningSelect.value = session.interpretationReasoning ?? 'none';
             refs.sessionQuickQuestionModelSelect.value = session.quickQuestionModel ?? '';
             refs.sessionQuickQuestionReasoningSelect.value = session.quickQuestionReasoning ?? 'none';
+            refs.sessionQuestionModelSelect.value = session.questionModel ?? '';
+            refs.sessionQuestionReasoningSelect.value = session.questionReasoning ?? 'none';
             refs.sessionBackgroundInput.value = session.background ?? '';
             refs.sessionReasoningSelect.value = session.reasoning ?? 'none';
             refs.sessionTranslationInstructionsInput.value = session.translationInstructions ?? '';
@@ -1078,6 +1159,8 @@ function loadSessionIntoEditor(sessionId: string): void {
             refs.sessionInterpretationReasoningSelect.value = 'none';
             refs.sessionQuickQuestionModelSelect.value = '';
             refs.sessionQuickQuestionReasoningSelect.value = 'none';
+            refs.sessionQuestionModelSelect.value = '';
+            refs.sessionQuestionReasoningSelect.value = 'none';
             refs.sessionBackgroundInput.value = '';
             refs.sessionReasoningSelect.value = 'none';
             refs.sessionTranslationInstructionsInput.value = '';
@@ -1252,6 +1335,8 @@ async function saveSession(): Promise<void> {
     session.interpretationReasoning = refs.sessionInterpretationReasoningSelect.value as ReasoningLevel;
     session.quickQuestionModel = refs.sessionQuickQuestionModelSelect.value || null;
     session.quickQuestionReasoning = refs.sessionQuickQuestionReasoningSelect.value as ReasoningLevel;
+    session.questionModel = refs.sessionQuestionModelSelect.value || null;
+    session.questionReasoning = refs.sessionQuestionReasoningSelect.value as ReasoningLevel;
     session.background = refs.sessionBackgroundInput.value;
     session.reasoning = refs.sessionReasoningSelect.value as ReasoningLevel;
     session.translationInstructions = refs.sessionTranslationInstructionsInput.value || null;

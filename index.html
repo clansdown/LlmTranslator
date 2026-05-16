@@ -20,6 +20,11 @@
             padding: 0.75rem 0;
         }
 
+        #model-override,
+        #reasoning-override {
+            font-size: 0.8rem;
+        }
+
         .pane-toolbar {
             padding: 0.5rem 0;
             border-bottom: 1px solid var(--bs-border-color);
@@ -274,6 +279,10 @@
             font-size: 0.85rem;
             resize: none;
         }
+
+        .background-update-streaming .translation-thinking {
+            max-height: 250px;
+        }
     </style>
 </head>
 <body>
@@ -363,6 +372,15 @@
                                         <div class="col d-flex justify-content-end">
                                             <select class="form-select form-select-sm ms-2" id="model-override" aria-label="Override model" style="width: auto;">
                                                 <option value="">Default LLM</option>
+                                            </select>
+                                            <select class="form-select form-select-sm ms-2" id="reasoning-override" aria-label="Override reasoning" style="width: auto;">
+                                                <option value="">Default</option>
+                                                <option value="none">None</option>
+                                                <option value="minimal">Minimal</option>
+                                                <option value="low">Low</option>
+                                                <option value="medium">Medium</option>
+                                                <option value="high">High</option>
+                                                <option value="xhigh">Max</option>
                                             </select>
                                         </div>
                                     </div>
@@ -757,6 +775,23 @@
                                         </select>
                                     </div>
                                 </div>
+                                <div class="row g-2 mb-2">
+                                    <div class="col">
+                                        <label for="settings-default-question-model" class="form-label">Question Model</label>
+                                        <select id="settings-default-question-model" class="form-select"></select>
+                                    </div>
+                                    <div class="col-lg-2">
+                                        <label for="settings-default-question-reasoning" class="form-label">Reasoning</label>
+                                        <select id="settings-default-question-reasoning" class="form-select">
+                                            <option value="none">None</option>
+                                            <option value="minimal">Minimal</option>
+                                            <option value="low">Low</option>
+                                            <option value="medium">Medium</option>
+                                            <option value="high">High</option>
+                                            <option value="xhigh">Max</option>
+                                        </select>
+                                    </div>
+                                </div>
                             </div>
                             <div class="tab-pane fade" id="conversations-content" role="tabpanel" aria-labelledby="conversations-tab-btn">
                                 <div class="row g-2 mt-3">
@@ -846,14 +881,33 @@
                                                     <option value="medium">Medium</option>
                                                     <option value="high">High</option>
                                                     <option value="xhigh">Max</option>
-                                                </select>
+                                                        </select>
+                                                    </div>
+                                                </div>
                                             </div>
-                                        </div>
-                                    </div>
-                                    <div class="col-12">
-                                        <div class="row g-2">
-                                            <div class="col">
-                                                <label for="settings-session-my-language" class="form-label">My Language</label>
+                                            <div class="col-12">
+                                                <div class="row g-2">
+                                                    <div class="col">
+                                                        <label for="settings-session-question-model" class="form-label">Question Model</label>
+                                                        <select id="settings-session-question-model" class="form-select"></select>
+                                                    </div>
+                                                    <div class="col-lg-2">
+                                                        <label for="settings-session-question-reasoning" class="form-label">Reasoning</label>
+                                                        <select id="settings-session-question-reasoning" class="form-select">
+                                                            <option value="none">None</option>
+                                                            <option value="minimal">Minimal</option>
+                                                            <option value="low">Low</option>
+                                                            <option value="medium">Medium</option>
+                                                            <option value="high">High</option>
+                                                            <option value="xhigh">Max</option>
+                                                        </select>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div class="col-12">
+                                                <div class="row g-2">
+                                                    <div class="col">
+                                                        <label for="settings-session-my-language" class="form-label">My Language</label>
                                                 <select id="settings-session-my-language" class="form-select"></select>
                                             </div>
                                             <div class="col">
@@ -863,7 +917,14 @@
                                         </div>
                                     </div>
                                     <div class="col-12">
-                                        <label for="settings-session-background" class="form-label">Background</label>
+                                        <div class="row align-items-center mb-1">
+                                            <div class="col">
+                                                <label for="settings-session-background" class="form-label">Background</label>
+                                            </div>
+                                            <div class="col-auto">
+                                                <button type="button" class="btn btn-sm btn-outline-primary" id="settings-propose-background-btn">Propose Updates</button>
+                                            </div>
+                                        </div>
                                         <textarea id="settings-session-background" class="form-control" rows="5" placeholder="Context for the AI about who you're talking to, what the conversation is about, etc."></textarea>
                                     </div>
                                     <div class="col-12">
@@ -1087,6 +1148,59 @@
                 </div>
                 <div class="col-auto">
                     <button type="button" class="btn btn-sm btn-outline-danger" title="Remove tag">&times;</button>
+                </div>
+            </div>
+        </template>
+
+        <!-- background-update-modal-template: Modal for proposing background context updates -->
+        <template id="background-update-modal-template">
+            <div class="modal fade" tabindex="-1" data-bs-focus="false">
+                <div class="modal-dialog modal-xl">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title">Propose Background Updates</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                        <div class="modal-body">
+                            <!-- State: Loading -->
+                            <div class="background-update-loading" style="display: none;">
+                                <div class="d-flex align-items-center justify-content-center py-4">
+                                    <div class="spinner-border spinner-border-sm me-2" role="status"></div>
+                                    <span>Loading conversation history...</span>
+                                </div>
+                            </div>
+                            <!-- State: Streaming -->
+                            <div class="background-update-streaming">
+                                <div class="background-update-status my-2 text-muted small" style="display: none;"></div>
+                                <div class="translation-thinking my-2" style="border: 1px solid black; border-radius: 0.25rem; display: none;">
+                                    <div class="thinking-content"></div>
+                                </div>
+                                <div class="background-update-content"></div>
+                            </div>
+                            <!-- State: Proposals / No Updates / Error -->
+                            <div class="background-update-result" style="display: none;">
+                                <div class="proposed-changes-section mb-3">
+                                    <h6>Proposed Changes</h6>
+                                    <div class="proposed-changes-list"></div>
+                                </div>
+                                <div class="proposed-additions-section mb-3">
+                                    <h6>Proposed Additions</h6>
+                                    <div class="proposed-additions-list"></div>
+                                </div>
+                                <div class="background-update-notice"></div>
+                            </div>
+                            <!-- State: Edit / Review -->
+                            <div class="background-update-edit" style="display: none;">
+                                <textarea class="form-control" rows="14" id="background-update-edit-textarea"></textarea>
+                            </div>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                            <button type="button" class="btn btn-primary" id="background-update-merge-btn" style="display: none;">Auto-Merge</button>
+                            <button type="button" class="btn btn-primary" id="background-update-edit-btn" style="display: none;">Edit Manually</button>
+                            <button type="button" class="btn btn-success" id="background-update-save-btn" style="display: none;">Save</button>
+                        </div>
+                    </div>
                 </div>
             </div>
         </template>

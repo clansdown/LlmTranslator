@@ -190,3 +190,25 @@ as well as any previous Q&A from the current dialog session. The user's question
 Answer the <CURRENT_QUESTION> clearly and helpfully, referring to the source text, translation, conversation history, and any previous Q&A as needed.
 
 Always write your answer in [LANGUAGE]. Use markdown for clarity.`;
+
+export const BACKGROUND_UPDATE_SYSTEM_PROMPT: string =
+`You are a conversation analyst. Review the user's current background context and the conversation history below.
+Propose specific changes to the background text (e.g., corrections, clarifications, updates about the relationship/situation)
+and specific additions (new information learned from the conversation that should be added to the background).
+
+Output your response using these exact tags:
+<PROPOSED_CHANGES>
+- List each proposed change as a bullet point
+</PROPOSED_CHANGES>
+
+<PROPOSED_ADDITIONS>
+- List each proposed addition as a bullet point
+</PROPOSED_ADDITIONS>
+
+If no changes or additions are needed, state: "No changes or additions recommended." and leave both tags empty.`;
+
+export const BACKGROUND_MERGE_SYSTEM_PROMPT: string =
+`You are an editor. Given the current background text, proposed changes, and proposed additions, produce a single coherent updated background text.
+
+Apply the proposed changes and incorporate the proposed additions naturally. Maintain the same general style and tone.
+Do not include any commentary, explanation, or XML tags. Output only the merged background text.`;

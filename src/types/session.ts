@@ -18,6 +18,8 @@ export interface TranslationSession {
     interpretationReasoning?: ReasoningLevel;
     quickQuestionModel?: string | null;
     quickQuestionReasoning?: ReasoningLevel;
+    questionModel?: string | null;
+    questionReasoning?: ReasoningLevel;
     interlocutorName?: string;
     translationTags?: import('./translationTag').TranslationTag[];
     createdAt: number;

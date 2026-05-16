@@ -10,7 +10,9 @@ import * as settings from './settings';
 import * as translation from './translation';
 import { initAuth, getClerk, mountAuthComponent, isSignedIn } from './auth';
 import { initCloudSync, setSyncReloadCallback } from './cloudSync';
+import { setConfig as setBackgroundUpdateConfig } from './backgroundUpdate';
 import type { Config } from './types/config';
+import type { ReasoningLevel } from './types/session';
 
 /**
  * Application configuration object
@@ -26,7 +28,9 @@ const config: Config = {
     temperature: 0.2,
     questionTemperature: 0.35,
     quickQuestionModel: null,
-    maxTokens: 32768
+    maxTokens: 32768,
+    defaultQuestionModel: null,
+    defaultQuestionReasoning: 'none'
 };
 
 /**
@@ -218,6 +222,16 @@ async function loadSettings(): Promise<void> {
     if (defaultMyLanguage) {
         config.defaultMyLanguage = defaultMyLanguage;
     }
+
+    const defaultQuestionModel = await getPreference("defaultQuestionModel");
+    if (defaultQuestionModel) {
+        config.defaultQuestionModel = defaultQuestionModel;
+    }
+
+    const defaultQuestionReasoning = await getPreference("defaultQuestionReasoning");
+    if (defaultQuestionReasoning) {
+        config.defaultQuestionReasoning = defaultQuestionReasoning as ReasoningLevel;
+    }
 }
 
 /**
@@ -227,6 +241,7 @@ async function loadSettings(): Promise<void> {
 export async function init(): Promise<void> {
     translation.setConfig(config);
     setOpenRouterConfig(config);
+    setBackgroundUpdateConfig(config);
 
     // Initialize sync journal before any storage writes
     const { init: initJournal } = await import('./syncJournal');

@@ -2,6 +2,8 @@
  * Application configuration types
  */
 
+import type { ReasoningLevel } from './session';
+
 /**
  * Application configuration stored in memory
  */
@@ -16,4 +18,6 @@ export interface Config {
     questionTemperature: number;
     maxTokens: number;
     quickQuestionModel: string | null;
+    defaultQuestionModel: string | null;
+    defaultQuestionReasoning: ReasoningLevel;
 }

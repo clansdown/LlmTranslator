@@ -78,6 +78,7 @@ let modelNameMap: Map<string, string> = new Map();
  * @type {string | null}
  */
 let modelOverride: string | null = null;
+let reasoningOverride: ReasoningLevel | null = null;
 
 /**
  * Captured DOM element references for a translation item.
@@ -264,7 +265,7 @@ export function setModelNameMap(models: Array<{id: string; name: string}>): void
  * @param {string} modelId - Model ID
  * @returns {string} Model display name
  */
-function getModelName(modelId: string): string {
+export function getModelName(modelId: string): string {
     return modelNameMap.get(modelId) ?? modelId;
 }
 
@@ -277,6 +278,39 @@ function getTranslationModelToUse(session: TranslationSession | null): string | 
     if (modelOverride) return modelOverride;
     if (session?.model) return session.model;
     return config?.selectedModel ?? null;
+}
+
+/**
+ * Gets the model to use for question messages, checking override, session, config in order
+ * @param {TranslationSession | null} session - The current translation session
+ * @returns {string | null} The model ID to use
+ */
+function getQuestionModelToUse(session: TranslationSession | null): string | null {
+    if (modelOverride) return modelOverride;
+    if (session?.questionModel) return session.questionModel;
+    if (config?.defaultQuestionModel) return config.defaultQuestionModel;
+    if (session?.model) return session.model;
+    return config?.selectedModel ?? null;
+}
+
+/**
+ * Gets the reasoning level to use for translations, checking override and session
+ * @param {TranslationSession | null} session - The current translation session
+ * @returns {ReasoningLevel} Reasoning level to use
+ */
+function getTranslationReasoningToUse(session: TranslationSession | null): ReasoningLevel {
+    if (reasoningOverride != null) return reasoningOverride;
+    return session?.reasoning ?? 'none';
+}
+
+/**
+ * Gets the reasoning level to use for question messages, checking override and session
+ * @param {TranslationSession | null} session - The current translation session
+ * @returns {ReasoningLevel} Reasoning level to use
+ */
+function getQuestionReasoningToUse(session: TranslationSession | null): ReasoningLevel {
+    if (reasoningOverride != null) return reasoningOverride;
+    return session?.questionReasoning ?? session?.reasoning ?? 'none';
 }
 
 /**
@@ -390,12 +424,14 @@ export async function createSession(name?: string): Promise<string> {
 
     const now = Date.now();
 
-    const [defaultModelPref, defaultReasoningPref, defaultLiteralModelPref, defaultInterpretationModelPref, defaultInterpretationReasoningPref] = await Promise.all([
+    const [defaultModelPref, defaultReasoningPref, defaultLiteralModelPref, defaultInterpretationModelPref, defaultInterpretationReasoningPref, defaultQuestionModelPref, defaultQuestionReasoningPref] = await Promise.all([
         getPreference("defaultModel"),
         getPreference("defaultReasoning"),
         getPreference("defaultLiteralModel"),
         getPreference("defaultInterpretationModel"),
-        getPreference("defaultInterpretationReasoning")
+        getPreference("defaultInterpretationReasoning"),
+        getPreference("defaultQuestionModel"),
+        getPreference("defaultQuestionReasoning")
     ]);
 
     const newSession: TranslationSession = {
@@ -409,6 +445,8 @@ export async function createSession(name?: string): Promise<string> {
         literalModel: defaultLiteralModelPref ?? null,
         interpretationModel: defaultInterpretationModelPref ?? null,
         interpretationReasoning: (defaultInterpretationReasoningPref as ReasoningLevel | null) ?? undefined,
+        questionModel: defaultQuestionModelPref ?? null,
+        questionReasoning: (defaultQuestionReasoningPref as ReasoningLevel | null) ?? undefined,
         createdAt: now
     };
 
@@ -832,6 +870,13 @@ export function setupTranslateButtons(): void {
         });
     }
 
+    const reasoningOverrideSelect = document.getElementById('reasoning-override') as HTMLSelectElement | null;
+    if (reasoningOverrideSelect) {
+        reasoningOverrideSelect.addEventListener('change', function() {
+            reasoningOverride = (reasoningOverrideSelect.value || null) as ReasoningLevel | null;
+        });
+    }
+
     updateButtonStates();
 }
 
@@ -1078,7 +1123,7 @@ export async function translate(mode: 'input' | 'output'): Promise<void> {
             ui.displayError("Please select a model first");
             return;
         }
-        const reasoningLevel = session?.reasoning ?? 'none';
+        const reasoningLevel = getTranslationReasoningToUse(session);
         currentLiteralModel = session?.literalModel ?? null;
         const theirLang = LANGUAGES.find(function(l) { return l.id === session?.theirLanguage; });
         const myLang = LANGUAGES.find(function(l) { return l.id === session?.myLanguage; });
@@ -1201,12 +1246,12 @@ export async function askQuestion(): Promise<void> {
         const myLangName = myLang?.name ?? session?.myLanguage ?? 'English';
         const userMessage = await buildQuestionMessage(questionText, myLangName);
 
-        const effectiveModel = getTranslationModelToUse(session);
+        const effectiveModel = getQuestionModelToUse(session);
         if (!effectiveModel) {
             ui.displayError("Please select a model first");
             return;
         }
-        const reasoningLevel = session?.reasoning ?? 'none';
+        const reasoningLevel = getQuestionReasoningToUse(session);
         console.log(`[askQuestion] Asking question with model: ${effectiveModel}, chars: ${questionText.length}`);
 
         const translation: Translation = {
@@ -2011,16 +2056,22 @@ export async function retryTranslation(translationId: string): Promise<void> {
         return;
     }
 
-    const reasoningLevel = session?.reasoning ?? 'none';
+    const reasoningLevel = getTranslationReasoningToUse(session);
 
     if (translation.pill === 'question') {
         const myLang = LANGUAGES.find(function(l) { return l.id === session?.myLanguage; });
         const myLangName = myLang?.name ?? session?.myLanguage ?? 'English';
-        console.log(`[retryTranslation] Re-asking question with model: ${effectiveModel}, chars: ${entry.source.length}`);
+        const questionModel = getQuestionModelToUse(session);
+        const questionReasoning = getQuestionReasoningToUse(session);
+        if (!questionModel) {
+            ui.displayError('No model configured for question');
+            return;
+        }
+        console.log(`[retryTranslation] Re-asking question with model: ${questionModel}, chars: ${entry.source.length}`);
         const userMessage = await buildQuestionMessage(entry.source, myLangName);
 
         // Delegate to question streaming handler
-        await handleQuestionStreaming(translation, userMessage, effectiveModel, reasoningLevel);
+        await handleQuestionStreaming(translation, userMessage, questionModel, questionReasoning);
         return;
     }
 
@@ -2116,7 +2167,7 @@ async function regenerateTranslationById(translationId: string): Promise<void> {
         ui.displayError("Cannot regenerate: no model selected or no API key");
         return;
     }
-    const reasoningLevel = session?.reasoning ?? 'none';
+    const reasoningLevel = getTranslationReasoningToUse(session);
 
     const systemPrompt = INPUT_SYSTEM_PROMPT;
 
@@ -2164,7 +2215,7 @@ export async function retranslateFromEdit(translationId: string, newSource: stri
         return;
     }
 
-    const reasoningLevel = session?.reasoning ?? 'none';
+    const reasoningLevel = getTranslationReasoningToUse(session);
     const myLang = LANGUAGES.find(function(l) { return l.id === session?.myLanguage; });
     const myLangName = myLang?.name ?? session?.myLanguage ?? 'English';
     const theirLang = LANGUAGES.find(function(l) { return l.id === session?.theirLanguage; });

@@ -1820,7 +1820,7 @@ export async function syncCredentialsFromCloud(force: boolean = false): Promise<
         const remoteFiles = await listRemoteFiles(CREDENTIALS_CLOUD_PREFIX);
         const remoteMap = new Map<string, SyncFileInfo>();
         for (const f of remoteFiles) {
-            remoteMap.set('credentials/' + f.path, f);
+            remoteMap.set(f.path, f);
         }
 
         const actions = resolveSyncActions(localManifest, remoteMap, manifest);
