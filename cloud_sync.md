@@ -68,8 +68,8 @@ by the worker after every upload so other devices know the cloud has newer data.
 
 - **Clerk account** — a publishable key for your app. The build/deploy pipeline
   must inject it as `public/clerk-key.js`, which sets `window.CLERK_PUBLISHABLE_KEY`.
-- **FindForge Storage Worker** — URL: `https://findforge-storage.chris-f57.workers.dev`
-  (set via `USE_DEV_WORKER = true` toggle during development).
+- **FindForge Storage Worker** — URL switched via `import.meta.env.DEV` at build time.
+  Dev: `http://localhost:8787`. Production: `https://findforge-storage.chris-f57.workers.dev`.
 - **An existing PWA** — OPFS storage, `manifest.json`, and a service worker.
   This guide adds the sync layer on top.
 
@@ -91,6 +91,33 @@ Include it in `index.html` **after** Bootstrap but **before** your TypeScript en
 ```html
 <script src="./clerk-key.js"></script>
 ```
+
+#### Production Note
+
+The development `clerk-key.js` (with `pk_test_...`) must **never** end up in the
+production build output. The reference implementation excludes it using a Vite plugin
+in `vite.config.ts`:
+
+```typescript
+{
+    name: 'exclude-clerk-key',
+    closeBundle() {
+        const distPath = path.resolve('dist', 'clerk-key.js');
+        if (fs.existsSync(distPath)) {
+            fs.unlinkSync(distPath);
+        }
+    }
+}
+```
+
+This plugin runs **after** all build output is written (including the `public/` directory
+copy) and deletes `dist/clerk-key.js`. The result: during development the file is served
+from `public/` by `vite dev`, but the production `dist/` folder contains no dev key.
+Your deployment pipeline places the production `clerk-key.js` alongside the built files
+on the server.
+
+If your app uses a different build tool, ensure the equivalent exclusion — the key file
+must never be part of the published artifact.
 
 ---
 
@@ -329,10 +356,8 @@ Only **one constant** must change. Everything else is generic.
 #### 4.5.1 Constants block — CHANGE `CLOUD_PREFIX`
 
 ```typescript
-// Toggle to target the local dev worker instead of production
-const USE_DEV_WORKER = false;
-
-const WORKER_BASE_URL = USE_DEV_WORKER
+// Worker URL switches at build time — zero runtime overhead in production
+const WORKER_BASE_URL = import.meta.env.DEV
     ? 'http://localhost:8787'
     : 'https://findforge-storage.chris-f57.workers.dev';
 
@@ -353,6 +378,10 @@ const SYNC_SAFETY_WINDOW_MS = 10000;
 
 The trailing `/` on `CLOUD_PREFIX` is required. It's prepended to all remote B2
 paths: `{CLOUD_PREFIX}preferences/apiKey`, `{CLOUD_PREFIX}sessions/{id}/session.json`, etc.
+
+`import.meta.env.DEV` is replaced by Vite at build time with the literal `true` or
+`false`. In the production bundle, only the production URL string remains — zero runtime
+branching, zero overhead, and no manual flag to flip.
 
 #### 4.5.2 Public API
 
@@ -540,6 +569,10 @@ In `index.html`, before the closing `</body>` and after Bootstrap CDN scripts:
 The exact position matters: above your TypeScript entry point so
 `window.CLERK_PUBLISHABLE_KEY` is available when `auth.ts` loads.
 
+> **Production deployment:** The `clerk-key.js` file is intentionally excluded from
+> the build output (see §4.1). Your deployment process must place the production
+> `clerk-key.js` alongside the built `dist/` files on the server.
+
 ### 5.2 Create `auth.ts`
 
 Copy the full source from Section 4.2 into `src/auth.ts`.
@@ -596,8 +629,10 @@ truth for "what changed" — the sync engine reads the journal, not the filesyst
 
 ### 5.7 Wire the init order in `main.ts`
 
-**The order matters.** Config must be in memory before cloud sync starts,
-otherwise you get the bug described in Section 7.
+**The order matters.** The reload callback must be registered **before**
+`initCloudSync()` runs. If registered after, files downloaded during the initial
+sync never trigger a UI refresh — sessions land on disk but the conversation
+dropdown stays stale until a page refresh.
 
 ```typescript
 export async function init(): Promise<void> {
@@ -611,13 +646,13 @@ export async function init(): Promise<void> {
     // 3. Load your app data (sessions, conversations, etc.)
     await loadAppData();
 
-    // 4. Cloud sync — AFTER config is loaded
-    await initCloudSync();
-
-    // 5. Register the reload callback
+    // 4. Register the reload callback BEFORE cloud sync
     setSyncReloadCallback(async function(changedPaths: string[]): Promise<void> {
         // See Section 5.8
     });
+
+    // 5. Cloud sync — AFTER callback is registered
+    await initCloudSync();
 }
 ```
 
@@ -818,6 +853,35 @@ Gated by `ALLOW_CLOUD_DELETIONS`. In production, deletions are disabled globally
   `{CLOUD_PREFIX}preferences/apiKey`, not `preferences/apiKey` directly. The worker
   strips the prefix in list results, but upload/download require it.
 
+- **`clerk-key.js` must never be part of the production build.** The development key
+  (`pk_test_...`) should never end up in `dist/`. Use a Vite plugin (or equivalent build
+  tool hook) to exclude it after the build finishes. Your deployment process provides the
+  production key file separately.
+
+- **The reload callback must be registered before `initCloudSync()`.** If registered
+  after, files downloaded during the initial sync never trigger a UI refresh. Sessions
+  land on disk but the conversation dropdown stays stale until a page refresh. This also
+  breaks subsequent manual syncs because the checkpoint timestamp was advanced during
+  the initial sync, causing the fast-path to skip re-downloads of already-local files.
+
+- **Do not modify local sync state before confirming cloud operations.** In
+  `syncToCloudInternal()`, the journal checkpoint and the manifest must be saved only
+  **after** `uploadCloudState()` succeeds. If the cloud-state upload fails, no local
+  state should change — dirty entries stay dirty for the next sync attempt.
+
+- **`downloadCloudState()` must distinguish network failures from genuine 404.** A
+  network error (`TypeError`) or non-404 HTTP error (500, 403) means the worker is
+  unreachable or broken — the sync must abort immediately. A 404 means `cloud-state.json`
+  genuinely doesn't exist yet (fresh B2 bucket) — return `null` and proceed. Swallowing
+  all errors as `null` causes the sync to continue into operations that will also fail,
+  wasting time and potentially corrupting state. `downloadCredentialCloudState()` must
+  follow the same pattern.
+
+- **Log expected errors cleanly.** Network failures (`TypeError`) and worker HTTP
+  errors (`Worker request failed: NNN`) are expected conditions — use `console.warn`
+  with just the message, not a stack trace. Reserve `console.error` with the full error
+  object for unexpected bugs that need debugging.
+
 - **One-time migration runs automatically** on first access after deploying
   namespaced paths. Old root-level data is copied into `/{APP_PREFIX}/`. It's
   idempotent — if the namespace directory already exists, it skips.
@@ -844,6 +908,7 @@ Gated by `ALLOW_CLOUD_DELETIONS`. In production, deletions are disabled globally
 | What | File | Example (`images`) |
 |------|------|-------------------|
 | **Clerk script** | `index.html` | `<script src="./clerk-key.js"></script>` |
+| **Clerk key build exclusion** | `vite.config.ts` | Add `exclude-clerk-key` plugin to delete `dist/clerk-key.js` after build |
 | **Auth module** | `src/auth.ts` | Copy inlined source, no changes |
 | **OPFS prefix** | Your OPFS module | `export const APP_PREFIX = 'images'` |
 | **Cloud handle** | Your OPFS module | `getCloudHandle()`, `readCloudPreference()`, `writeCloudPreference()` |
@@ -852,7 +917,7 @@ Gated by `ALLOW_CLOUD_DELETIONS`. In production, deletions are disabled globally
 | **Sync journal** | `src/syncJournal.ts` | Copy from Translate, no changes |
 | **Cloud types** | `src/types/cloudSync.ts` | Copy from Translate, no changes |
 | **Storage instrumentation** | Your storage module | `recordWrite()` + `queueSync()` on every write/delete |
-| **Init order** | `src/main.ts` | Clerk → config → app data → `initCloudSync()` |
+| **Init order** | `src/main.ts` | Clerk → config → app data → register callback → `initCloudSync()` |
 | **Reload callback** | `src/main.ts` | Handle `preferences/` (reload config) + app-data paths |
 | **Sync UI** | `index.html` | Navbar button, settings tab, modal templates |
 | **Service worker** | `public/sw.js` | `cache: 'no-cache'` for HTML/nav requests |

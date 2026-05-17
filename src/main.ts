@@ -282,7 +282,6 @@ export async function init(): Promise<void> {
 
     await loadApiKey();
     await setupAuthButton();
-    await initCloudSync();
 
     setSyncReloadCallback(async function(changedPaths: string[]): Promise<void> {
         const currentId = translation.getCurrentSessionId();
@@ -328,6 +327,8 @@ export async function init(): Promise<void> {
             await loadApiKey();
         }
     });
+
+    await initCloudSync();
 
     console.log("LLM Translator initialized");
 }

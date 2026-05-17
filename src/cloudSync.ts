@@ -12,10 +12,7 @@ import * as ui from './ui';
 import type { SyncFileInfo, SyncConflict, SyncDeletion, SyncActions, SyncManifest, WorkerErrorResponse, SyncJournalEntry } from './types/cloudSync';
 import type { CloudSyncState } from './types/state';
 
-// Toggle to target the local dev worker instead of production
-const USE_DEV_WORKER = false;
-
-const WORKER_BASE_URL = USE_DEV_WORKER
+const WORKER_BASE_URL = import.meta.env.DEV
     ? 'http://localhost:8787'
     : 'https://findforge-storage.chris-f57.workers.dev';
 const SYNC_INTERVAL_MS = 60 * 60 * 1000;
@@ -92,7 +89,13 @@ async function withSyncLock(fn: () => Promise<void>): Promise<void> {
     } catch (e) {
         const msg = e instanceof Error ? e.message : 'Unknown sync error';
         STATE.cloudSync.lastError = msg;
-        console.error('[cloudSync] Sync failed:', e);
+        if (e instanceof TypeError) {
+            console.warn('[cloudSync] Worker unreachable, sync aborted');
+        } else if (e instanceof Error && e.message.startsWith('Worker request failed:')) {
+            console.warn('[cloudSync] Worker error, sync aborted:', msg);
+        } else {
+            console.error('[cloudSync] Sync failed:', e);
+        }
     } finally {
         STATE.cloudSync.isSyncing = false;
         ui.hideSyncProgress();
@@ -335,8 +338,14 @@ export async function downloadCloudState(): Promise<{ lastUpdateTime: string } |
     try {
         const content = await downloadFile(CLOUD_STATE_PATH);
         return JSON.parse(content as string) as { lastUpdateTime: string };
-    } catch {
-        return null;
+    } catch (e) {
+        if (e instanceof TypeError) {
+            throw e;
+        }
+        if (e instanceof Error && e.message.includes('404')) {
+            return null;
+        }
+        throw e;
     }
 }
 
@@ -1221,39 +1230,31 @@ async function syncToCloudInternal(): Promise<void> {
             const raw = fileEntry.content ?? fileEntry.bytes!;
             const hash = computeHash(raw);
             const uploadContent = fileEntry.content ?? new Blob([fileEntry.bytes!]);
-            try {
-                const etag = await uploadFile(path, uploadContent);
-                manifest[path] = {
-                    localHash: hash,
-                    remoteEtag: etag,
-                    localMtime: fileEntry.mtime,
-                    remoteMtime: new Date().toUTCString()
-                };
-                console.log('[cloudSync] Uploaded:', path);
-                lastSuccessfulId = Math.max(lastSuccessfulId, entry.id);
-            } catch (e) {
-                console.error('[cloudSync] Upload failed:', path, e);
-            }
+            const etag = await uploadFile(path, uploadContent);
+            manifest[path] = {
+                localHash: hash,
+                remoteEtag: etag,
+                localMtime: fileEntry.mtime,
+                remoteMtime: new Date().toUTCString()
+            };
+            console.log('[cloudSync] Uploaded:', path);
+            lastSuccessfulId = Math.max(lastSuccessfulId, entry.id);
         }
     }
 
-    // Advance checkpoint only for successfully processed entries
-    if (lastSuccessfulId > checkpoint.lastId) {
-        await syncJournal.advanceCheckpoint(lastSuccessfulId);
-    }
-
-    // Save manifest
-    await saveSyncManifest(manifest);
-
-    // Update lastCloudCheckTime so future write syncs can detect interleaved changes
+    // Signal cloud state changed — must succeed before we modify any local state
     const syncTime = new Date().toISOString();
-    await syncJournal.setLastCloudCheckTime(syncTime);
-
-    // Signal cloud state changed
     await uploadCloudState(syncTime);
 
     STATE.cloudSync.lastSyncTime = syncTime;
     await saveCloudSyncState();
+
+    // Only now save local state — cloud-state upload was successful
+    if (lastSuccessfulId > checkpoint.lastId) {
+        await syncJournal.advanceCheckpoint(lastSuccessfulId);
+    }
+    await saveSyncManifest(manifest);
+    await syncJournal.setLastCloudCheckTime(syncTime);
 
     // Reset 1-hour timer since we just synced
     if (syncTimerId !== null) {
@@ -1528,7 +1529,9 @@ export async function initCloudSync(): Promise<void> {
             await syncToCloud();
         }
 
-        await syncJournal.setLastCloudCheckTime(new Date().toISOString());
+        if (!STATE.cloudSync.lastError) {
+            await syncJournal.setLastCloudCheckTime(new Date().toISOString());
+        }
     }
 
     // Sync shared credentials on startup (always full sync, across all FindForge apps)
@@ -1746,8 +1749,14 @@ async function downloadCredentialCloudState(): Promise<{ lastUpdateTime: string 
     try {
         const content = await downloadFile(CREDENTIALS_CLOUD_STATE_PATH) as string;
         return JSON.parse(content) as { lastUpdateTime: string };
-    } catch {
-        return null;
+    } catch (e) {
+        if (e instanceof TypeError) {
+            throw e;
+        }
+        if (e instanceof Error && e.message.includes('404')) {
+            return null;
+        }
+        throw e;
     }
 }
 

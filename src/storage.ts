@@ -957,7 +957,7 @@ export async function listSessions(): Promise<TranslationSession[]> {
         }
 
         sessions.sort(function(a: TranslationSession, b: TranslationSession): number {
-            return b.createdAt - a.createdAt;
+            return a.name.localeCompare(b.name);
         });
 
         if (DEBUG_SESSIONS) {
