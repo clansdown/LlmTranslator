@@ -281,7 +281,70 @@ function getTranslationModelToUse(session: TranslationSession | null): string | 
 }
 
 /**
- * Gets the model to use for question messages, checking override, session, config in order
+ * Gets the translation reasoning level to use
+ * @param {TranslationSession | null} session - The current translation session
+ * @returns {ReasoningLevel} Reasoning level to use
+ */
+function getTranslationReasoningToUse(session: TranslationSession | null): ReasoningLevel {
+    if (reasoningOverride != null) return reasoningOverride;
+    if (session?.reasoning) return session.reasoning;
+    return config?.defaultReasoning ?? 'none';
+}
+
+/**
+ * Gets the literal retranslation model to use
+ * @param {TranslationSession | null} session - The current translation session
+ * @returns {string | null} The model ID to use, or null if disabled
+ */
+function getLiteralModelToUse(session: TranslationSession | null): string | null {
+    if (session?.literalModel) return session.literalModel;
+    return config?.defaultLiteralModel ?? null;
+}
+
+/**
+ * Gets the interpretation model to use
+ * @param {TranslationSession | null} session - The current translation session
+ * @returns {string | null} The model ID to use, or null if disabled
+ */
+function getInterpretationModelToUse(session: TranslationSession | null): string | null {
+    if (session?.interpretationModel) return session.interpretationModel;
+    return config?.defaultInterpretationModel ?? null;
+}
+
+/**
+ * Gets the interpretation reasoning level to use
+ * @param {TranslationSession | null} session - The current translation session
+ * @returns {ReasoningLevel} Reasoning level to use
+ */
+function getInterpretationReasoningToUse(session: TranslationSession | null): ReasoningLevel {
+    if (session?.interpretationReasoning) return session.interpretationReasoning;
+    return config?.defaultInterpretationReasoning ?? 'none';
+}
+
+/**
+ * Gets the quick question model to use
+ * @param {TranslationSession | null} session - The current translation session
+ * @returns {string | null} The model ID to use
+ */
+function getQuickQuestionModelToUse(session: TranslationSession | null): string | null {
+    if (session?.quickQuestionModel) return session.quickQuestionModel;
+    if (config?.quickQuestionModel) return config.quickQuestionModel;
+    if (session?.model) return session.model;
+    return config?.selectedModel ?? null;
+}
+
+/**
+ * Gets the quick question reasoning level to use
+ * @param {TranslationSession | null} session - The current translation session
+ * @returns {ReasoningLevel} Reasoning level to use
+ */
+function getQuickQuestionReasoningToUse(session: TranslationSession | null): ReasoningLevel {
+    if (session?.quickQuestionReasoning) return session.quickQuestionReasoning;
+    return config?.defaultQuickQuestionReasoning ?? 'none';
+}
+
+/**
+ * Gets the model to use for question messages
  * @param {TranslationSession | null} session - The current translation session
  * @returns {string | null} The model ID to use
  */
@@ -294,23 +357,36 @@ function getQuestionModelToUse(session: TranslationSession | null): string | nul
 }
 
 /**
- * Gets the reasoning level to use for translations, checking override and session
- * @param {TranslationSession | null} session - The current translation session
- * @returns {ReasoningLevel} Reasoning level to use
- */
-function getTranslationReasoningToUse(session: TranslationSession | null): ReasoningLevel {
-    if (reasoningOverride != null) return reasoningOverride;
-    return session?.reasoning ?? 'none';
-}
-
-/**
- * Gets the reasoning level to use for question messages, checking override and session
+ * Gets the reasoning level to use for question messages
  * @param {TranslationSession | null} session - The current translation session
  * @returns {ReasoningLevel} Reasoning level to use
  */
 function getQuestionReasoningToUse(session: TranslationSession | null): ReasoningLevel {
     if (reasoningOverride != null) return reasoningOverride;
-    return session?.questionReasoning ?? session?.reasoning ?? 'none';
+    if (session?.questionReasoning) return session.questionReasoning;
+    return config?.defaultQuestionReasoning ?? 'none';
+}
+
+/**
+ * Gets the word definitions model to use
+ * @param {TranslationSession | null} session - The current translation session
+ * @returns {string | null} The model ID to use
+ */
+function getWordDefModelToUse(session: TranslationSession | null): string | null {
+    if (session?.wordDefModel) return session.wordDefModel;
+    if (config?.defaultWordDefModel) return config.defaultWordDefModel;
+    if (session?.model) return session.model;
+    return config?.selectedModel ?? null;
+}
+
+/**
+ * Gets the word definitions reasoning level to use
+ * @param {TranslationSession | null} session - The current translation session
+ * @returns {ReasoningLevel} The reasoning level to use
+ */
+function getWordDefReasoningToUse(session: TranslationSession | null): ReasoningLevel {
+    if (session?.wordDefReasoning) return session.wordDefReasoning;
+    return config?.defaultWordDefReasoning ?? 'none';
 }
 
 /**
@@ -348,8 +424,8 @@ export async function setCurrentSession(sessionId: string): Promise<void> {
     }
 
     currentSessionId = sessionId;
-    currentLiteralModel = session.literalModel ?? null;
-    currentInterpretationModel = session.interpretationModel ?? null;
+    currentLiteralModel = getLiteralModelToUse(session);
+    currentInterpretationModel = getInterpretationModelToUse(session);
     await savePreference('currentSession', sessionId);
 
     allTranslations = [];
@@ -424,29 +500,21 @@ export async function createSession(name?: string): Promise<string> {
 
     const now = Date.now();
 
-    const [defaultModelPref, defaultReasoningPref, defaultLiteralModelPref, defaultInterpretationModelPref, defaultInterpretationReasoningPref, defaultQuestionModelPref, defaultQuestionReasoningPref] = await Promise.all([
-        getPreference("defaultModel"),
-        getPreference("defaultReasoning"),
-        getPreference("defaultLiteralModel"),
-        getPreference("defaultInterpretationModel"),
-        getPreference("defaultInterpretationReasoning"),
-        getPreference("defaultQuestionModel"),
-        getPreference("defaultQuestionReasoning")
-    ]);
-
     const newSession: TranslationSession = {
         id: generateUuid(),
         name: name ?? "New Conversation",
-        model: defaultModelPref ?? config?.selectedModel ?? null,
+        model: null,
         theirLanguage: 'english',
         myLanguage: config?.defaultMyLanguage ?? 'english',
         background: "",
-        reasoning: (defaultReasoningPref as ReasoningLevel) ?? 'none',
-        literalModel: defaultLiteralModelPref ?? null,
-        interpretationModel: defaultInterpretationModelPref ?? null,
-        interpretationReasoning: (defaultInterpretationReasoningPref as ReasoningLevel | null) ?? undefined,
-        questionModel: defaultQuestionModelPref ?? null,
-        questionReasoning: (defaultQuestionReasoningPref as ReasoningLevel | null) ?? undefined,
+        reasoning: null,
+        literalModel: null,
+        interpretationModel: null,
+        interpretationReasoning: undefined,
+        questionModel: null,
+        questionReasoning: undefined,
+        wordDefModel: null,
+        wordDefReasoning: undefined,
         createdAt: now
     };
 
@@ -638,7 +706,7 @@ function buildHistorySection(includeQuestions: boolean = true, sourcesOnly: bool
                 history += `<ME>${entry.translation}</ME>\n`;
             }
         } else if (t.pill === 'question' && includeQuestions && (!respectQuestionToggle || t.includeInContext === true)) {
-            history += `<USERQUESTION>${entry.source}</USERQUESTION>\n`;
+            history += `<ALREADY_ANSWERED>${entry.source}</ALREADY_ANSWERED>\n`;
             if (!sourcesOnly) {
                 history += `<AGENTANSWER>${entry.translation}</AGENTANSWER>\n`;
             }
@@ -1124,7 +1192,7 @@ export async function translate(mode: 'input' | 'output'): Promise<void> {
             return;
         }
         const reasoningLevel = getTranslationReasoningToUse(session);
-        currentLiteralModel = session?.literalModel ?? null;
+        currentLiteralModel = getLiteralModelToUse(session);
         const theirLang = LANGUAGES.find(function(l) { return l.id === session?.theirLanguage; });
         const myLang = LANGUAGES.find(function(l) { return l.id === session?.myLanguage; });
         const myLangName = myLang?.name ?? session?.myLanguage ?? 'English';
@@ -2289,7 +2357,7 @@ export async function regenerateInterpretation(translationId: string): Promise<v
     }
 
     const session = await loadSession(currentSessionId);
-    if (!session?.interpretationModel) {
+    if (!getInterpretationModelToUse(session)) {
         console.error('[regenerateInterpretation] No interpretation model configured');
         return;
     }
@@ -2310,12 +2378,13 @@ export async function regenerateInterpretation(translationId: string): Promise<v
     updateTranslationItem(translation);
 
     const message = await buildInterpretationMessage(translation);
-    console.log('[regenerateInterpretation] Starting interpretation with model:', session.interpretationModel);
+    const interpModel = getInterpretationModelToUse(session)!;
+    console.log('[regenerateInterpretation] Starting interpretation with model:', interpModel);
     const abortHandle = streamSendChatMessage(
         config!.openRouterApiKey!,
         message,
         INTERPRETATION_PROMPT,
-        session.interpretationModel,
+        interpModel,
         {
             onChunk: function(text: string, reasoning: string): void {
                 entry.interpretation = text;
@@ -2359,7 +2428,7 @@ export async function regenerateInterpretation(translationId: string): Promise<v
                 updateTranslationItem(translation);
             }
         },
-        session?.interpretationReasoning ?? 'none',
+        getInterpretationReasoningToUse(session),
         config!.temperature
     );
     interpretationAbortMap.set(translation, abortHandle.abort);
@@ -2406,7 +2475,7 @@ export async function regenerateIndependentSections(translationId: string): Prom
     const literalUserMessage = translation.pill === 'input'
         ? entry.source
         : entry.translation;
-    console.log('[regenerateLiteral] Starting literal retranslation with model:', session.literalModel);
+    console.log('[regenerateLiteral] Starting literal retranslation with model:', session?.literalModel);
     console.log('[regenerateLiteral] Input text (' + translation.pill + '):', literalUserMessage.substring(0, 200));
 
     entry.literalPending = true;
@@ -2416,18 +2485,19 @@ export async function regenerateIndependentSections(translationId: string): Prom
     /** @type {Promise<void>[]} */
     const tasks: Promise<void>[] = [];
 
-    if (session?.literalModel) {
-        console.log('[regenerateLiteral] Starting literal retranslation streaming with model:', session.literalModel);
+    if (getLiteralModelToUse(session)) {
+        const literalModel = getLiteralModelToUse(session)!;
+        console.log('[regenerateLiteral] Starting literal retranslation streaming with model:', literalModel);
         handleLiteralRetranslationStreaming(
             translation,
             literalUserMessage,
-            session.literalModel,
+            literalModel,
             myLangName,
             translation.pill === 'input' ? 'input' : 'output'
         );
     }
 
-    const wordDefModel = session?.literalModel ?? effectiveModel;
+    const wordDefModel = getWordDefModelToUse(session);
     if (wordDefModel && entry.translation) {
         entry.wordPending = true;
         entry.wordDefinitions = undefined;
@@ -2438,7 +2508,7 @@ export async function regenerateIndependentSections(translationId: string): Prom
                 const wordText = translation.pill === 'input'
                     ? entry.source
                     : entry.translation;
-                const { xml: wordXml, generationId: wordGenerationId } = await fetchWordDefinitions(wordDefModel, wordText, myLangName);
+                const { xml: wordXml, generationId: wordGenerationId } = await fetchWordDefinitions(wordDefModel, getWordDefReasoningToUse(session), wordText, myLangName);
                 entry.wordDefinitions = wordXml;
 
                 // Fetch generation info after 1s delay
@@ -2464,19 +2534,20 @@ export async function regenerateIndependentSections(translationId: string): Prom
         })());
     }
 
-    if (session?.interpretationModel && entry.translation) {
+    const interpModel = getInterpretationModelToUse(session);
+    if (interpModel && entry.translation) {
         abortExistingInterpretation(translation);
         entry.interpretationPending = true;
         entry.interpretation = undefined;
         updateTranslationItem(translation);
 
         const message = await buildInterpretationMessage(translation);
-        console.log('[interpretation] Starting interpretation with model:', session.interpretationModel);
+        console.log('[interpretation] Starting interpretation with model:', interpModel);
         const abortHandle = streamSendChatMessage(
             config!.openRouterApiKey!,
             message,
             INTERPRETATION_PROMPT,
-            session.interpretationModel,
+            interpModel,
             {
                 onChunk: function(text: string, reasoning: string): void {
                     entry.interpretation = text;
@@ -2520,7 +2591,7 @@ export async function regenerateIndependentSections(translationId: string): Prom
                     updateTranslationItem(translation);
                 }
             },
-            session?.interpretationReasoning ?? 'none',
+            getInterpretationReasoningToUse(session),
             config!.temperature
         );
         interpretationAbortMap.set(translation, abortHandle.abort);
@@ -2537,12 +2608,13 @@ export async function regenerateIndependentSections(translationId: string): Prom
 /**
  * Fetches word-by-word definitions for a completed translation
  * @param {string} model - Model ID to use
+ * @param {string} reasoning - Reasoning level
  * @param {string} text - The translation text to analyze
  * @param {string} outputLanguage - Language name for definitions/explanations in the prompt
- * @returns {Promise<string>} Raw XML response
+ * @returns {Promise<{ xml: string; generationId: string }>} Raw XML response and generation ID
  * @throws {Error} If API request fails
  */
-async function fetchWordDefinitions(model: string, text: string, outputLanguage: string): Promise<{ xml: string; generationId: string }> {
+async function fetchWordDefinitions(model: string, reasoning: string, text: string, outputLanguage: string): Promise<{ xml: string; generationId: string }> {
     const prompt = WORD_DEFINITIONS_PROMPT.replace(/\[TEXT\]/g, text).replace(/\[LANGUAGE\]/g, outputLanguage);
     console.log('[wordDefinitions] Sending API request, text length:', text.length);
     const { content, generationId } = await sendChatMessage(
@@ -2550,7 +2622,7 @@ async function fetchWordDefinitions(model: string, text: string, outputLanguage:
         prompt,
         'You are a linguistic analysis tool. Output only the requested XML structure with no additional text.',
         model,
-        'none',
+        reasoning,
         config!.temperature
     );
     console.log('[wordDefinitions] API response length:', content.length, 'first 200 chars:', content.substring(0, 200));
@@ -3294,27 +3366,28 @@ async function startBackgroundTasksAfterStreaming(
     /** @type {Promise<void>[]} */
     const tasks: Promise<void>[] = [];
 
-    if (session?.literalModel) {
+    if (getLiteralModelToUse(session)) {
         const literalUserMessage = mode === 'input'
             ? sourceText
             : translationText;
-        console.log('[translateLiteral] Starting literal retranslation streaming with model:', session.literalModel);
+        const literalModel = getLiteralModelToUse(session)!;
+        console.log('[translateLiteral] Starting literal retranslation streaming with model:', literalModel);
         handleLiteralRetranslationStreaming(
             translation,
             literalUserMessage,
-            session.literalModel,
+            literalModel,
             myLangName,
             mode
         );
     }
 
-    const wordDefModel = session?.literalModel ?? session?.model;
+    const wordDefModel = getWordDefModelToUse(session);
     if (wordDefModel && translationText) {
         translation.entries[0].wordPending = true;
         tasks.push((async () => {
             try {
                 console.log('[wordDefinitions] Starting word definitions with model:', wordDefModel);
-                const { xml: wordXml, generationId: wordGenerationId } = await fetchWordDefinitions(wordDefModel, translationText, myLangName);
+                const { xml: wordXml, generationId: wordGenerationId } = await fetchWordDefinitions(wordDefModel, getWordDefReasoningToUse(session), translationText, myLangName);
                 translation.entries[0].wordDefinitions = wordXml;
 
                 // Fetch generation info after 1s delay
@@ -3334,18 +3407,19 @@ async function startBackgroundTasksAfterStreaming(
         })());
     }
 
-    if (mode === 'output' && session?.interpretationModel) {
+    const interpModel = getInterpretationModelToUse(session);
+    if (mode === 'output' && interpModel) {
         translation.entries[0].interpretationPending = true;
         tasks.push((async () => {
             try {
                 const message = await buildInterpretationMessage(translation);
-                console.log('[interpretation] Starting interpretation with model:', session.interpretationModel);
+                console.log('[interpretation] Starting interpretation with model:', interpModel);
                 const { content: interpretationResult, generationId } = await sendChatMessage(
                     config!.openRouterApiKey!,
                     message,
                     INTERPRETATION_PROMPT,
-                    session.interpretationModel!,
-                    session?.interpretationReasoning ?? 'none',
+                    interpModel,
+                    getInterpretationReasoningToUse(session),
                     config!.temperature
                 );
                 translation.entries[0].interpretation = interpretationResult;
@@ -3913,7 +3987,7 @@ function showQuickQuestionModal(options?: {
             const theirLang = LANGUAGES.find(function(l) { return l.id === session?.theirLanguage; });
             const theirLangName = theirLang?.name ?? session?.theirLanguage ?? 'Foreign';
 
-            const effectiveModel = session?.quickQuestionModel ?? config?.quickQuestionModel ?? session?.model ?? config?.selectedModel;
+            const effectiveModel = getQuickQuestionModelToUse(session);
             if (!effectiveModel) {
                 showErrorInCurrentAnswer('No model configured for quick questions.');
                 if (submitBtn) submitBtn.disabled = false;
@@ -3921,7 +3995,7 @@ function showQuickQuestionModal(options?: {
                 return;
             }
 
-            const reasoningLevel = session?.quickQuestionReasoning ?? 'none';
+            const reasoningLevel = getQuickQuestionReasoningToUse(session);
             const effectivePrompt = options?.systemPrompt ?? QUICK_QUESTION_DRAFT_PROMPT;
             const systemPrompt = effectivePrompt
                 .replace(/\[LANGUAGE\]/g, myLangName)

@@ -11,7 +11,7 @@ export interface TranslationSession {
     theirLanguage: string;
     myLanguage: string;
     background: string;
-    reasoning: ReasoningLevel;
+    reasoning: ReasoningLevel | null;
     literalModel?: string | null;
     translationInstructions?: string | null;
     interpretationModel?: string | null;
@@ -20,6 +20,8 @@ export interface TranslationSession {
     quickQuestionReasoning?: ReasoningLevel;
     questionModel?: string | null;
     questionReasoning?: ReasoningLevel;
+    wordDefModel?: string | null;
+    wordDefReasoning?: ReasoningLevel;
     interlocutorName?: string;
     translationTags?: import('./translationTag').TranslationTag[];
     createdAt: number;

@@ -96,8 +96,12 @@ interface SettingsReferences {
     defaultQuickQuestionReasoningSelect: HTMLSelectElement;
     sessionQuestionModelSelect: HTMLSelectElement;
     sessionQuestionReasoningSelect: HTMLSelectElement;
+    sessionWordDefModelSelect: HTMLSelectElement;
+    sessionWordDefReasoningSelect: HTMLSelectElement;
     defaultQuestionModelSelect: HTMLSelectElement;
     defaultQuestionReasoningSelect: HTMLSelectElement;
+    defaultWordDefModelSelect: HTMLSelectElement;
+    defaultWordDefReasoningSelect: HTMLSelectElement;
     tagsListContainer: HTMLDivElement;
     tagNameInput: HTMLInputElement;
     tagGuidanceInput: HTMLInputElement;
@@ -194,8 +198,12 @@ function openSettingsModal(): void {
             defaultQuickQuestionReasoningSelect: settingsModalElement.querySelector('#settings-default-quick-question-reasoning') as HTMLSelectElement,
             sessionQuestionModelSelect: settingsModalElement.querySelector('#settings-session-question-model') as HTMLSelectElement,
             sessionQuestionReasoningSelect: settingsModalElement.querySelector('#settings-session-question-reasoning') as HTMLSelectElement,
+            sessionWordDefModelSelect: settingsModalElement.querySelector('#settings-session-word-def-model') as HTMLSelectElement,
+            sessionWordDefReasoningSelect: settingsModalElement.querySelector('#settings-session-word-def-reasoning') as HTMLSelectElement,
             defaultQuestionModelSelect: settingsModalElement.querySelector('#settings-default-question-model') as HTMLSelectElement,
             defaultQuestionReasoningSelect: settingsModalElement.querySelector('#settings-default-question-reasoning') as HTMLSelectElement,
+            defaultWordDefModelSelect: settingsModalElement.querySelector('#settings-default-word-def-model') as HTMLSelectElement,
+            defaultWordDefReasoningSelect: settingsModalElement.querySelector('#settings-default-word-def-reasoning') as HTMLSelectElement,
             tagsListContainer: settingsModalElement.querySelector('#settings-tags-list') as HTMLDivElement,
             tagNameInput: settingsModalElement.querySelector('#settings-tag-name') as HTMLInputElement,
             tagGuidanceInput: settingsModalElement.querySelector('#settings-tag-guidance') as HTMLInputElement,
@@ -379,6 +387,21 @@ function setupEventListeners(): void {
         settingsModalElement.querySelectorAll('[data-bs-toggle="tab"]').forEach(function(btn) {
             btn.addEventListener('shown.bs.tab', async function() {
                 await refreshModelDropdowns();
+            });
+        });
+
+        const subTabButtons = settingsModalElement.querySelectorAll('[data-conversation-subtab]');
+        subTabButtons.forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                const targetTab = (btn as HTMLElement).dataset.conversationSubtab;
+
+                subTabButtons.forEach(function(b) { b.classList.remove('active'); });
+                btn.classList.add('active');
+
+                const contextPane = settingsModalElement!.querySelector('#conversation-subtab-context') as HTMLElement;
+                const modelsPane = settingsModalElement!.querySelector('#conversation-subtab-models') as HTMLElement;
+                if (contextPane) { contextPane.style.display = targetTab === 'context' ? '' : 'none'; }
+                if (modelsPane) { modelsPane.style.display = targetTab === 'models' ? '' : 'none'; }
             });
         });
     }
@@ -659,7 +682,7 @@ function populateModelDropdown(): void {
 
     const disabledPlaceholder = document.createElement('option');
     disabledPlaceholder.value = '';
-    disabledPlaceholder.textContent = 'Disabled';
+    disabledPlaceholder.textContent = 'Default';
     refs.sessionLiteralModelSelect.appendChild(disabledPlaceholder);
 
     for (const model of models) {
@@ -680,7 +703,7 @@ function populateModelDropdown(): void {
 
     const interpDisabledPlaceholder = document.createElement('option');
     interpDisabledPlaceholder.value = '';
-    interpDisabledPlaceholder.textContent = 'Disabled';
+    interpDisabledPlaceholder.textContent = 'Default';
     refs.sessionInterpretationModelSelect.appendChild(interpDisabledPlaceholder);
 
     for (const model of models) {
@@ -701,7 +724,7 @@ function populateModelDropdown(): void {
 
     const qqDisabledPlaceholder = document.createElement('option');
     qqDisabledPlaceholder.value = '';
-    qqDisabledPlaceholder.textContent = 'Disabled';
+    qqDisabledPlaceholder.textContent = 'Default';
     refs.sessionQuickQuestionModelSelect.appendChild(qqDisabledPlaceholder);
 
     for (const model of models) {
@@ -722,7 +745,7 @@ function populateModelDropdown(): void {
 
     const questionDisabledPlaceholder = document.createElement('option');
     questionDisabledPlaceholder.value = '';
-    questionDisabledPlaceholder.textContent = 'Disabled';
+    questionDisabledPlaceholder.textContent = 'Default';
     refs.sessionQuestionModelSelect.appendChild(questionDisabledPlaceholder);
 
     for (const model of models) {
@@ -737,6 +760,27 @@ function populateModelDropdown(): void {
             option.textContent = model.name;
         }
         refs.sessionQuestionModelSelect.appendChild(option);
+    }
+
+    refs.sessionWordDefModelSelect.innerHTML = '';
+
+    const wordDefDisabledPlaceholder = document.createElement('option');
+    wordDefDisabledPlaceholder.value = '';
+    wordDefDisabledPlaceholder.textContent = 'Default';
+    refs.sessionWordDefModelSelect.appendChild(wordDefDisabledPlaceholder);
+
+    for (const model of models) {
+        const option = document.createElement('option');
+        option.value = model.id;
+        if (model.pricing) {
+            const promptCost = (parseFloat(model.pricing.prompt) * 1_000_000).toFixed(2);
+            const completionCost = (parseFloat(model.pricing.completion) * 1_000_000).toFixed(2);
+            const providerPart = model.providerName ? ' by ' + model.providerName : '';
+            option.textContent = `${model.name}${providerPart} ($${promptCost}/$${completionCost})`;
+        } else {
+            option.textContent = model.name;
+        }
+        refs.sessionWordDefModelSelect.appendChild(option);
     }
 }
 
@@ -770,7 +814,7 @@ async function populateDefaultModelDropdowns(): Promise<void> {
     refs.defaultLiteralModelSelect.innerHTML = '';
     const disabledPlaceholder = document.createElement('option');
     disabledPlaceholder.value = '';
-    disabledPlaceholder.textContent = 'Disabled';
+    disabledPlaceholder.textContent = 'Default';
     refs.defaultLiteralModelSelect.appendChild(disabledPlaceholder);
 
     for (const model of models) {
@@ -790,7 +834,7 @@ async function populateDefaultModelDropdowns(): Promise<void> {
     refs.defaultInterpretationModelSelect.innerHTML = '';
     const interpDisabledPlaceholder = document.createElement('option');
     interpDisabledPlaceholder.value = '';
-    interpDisabledPlaceholder.textContent = 'Disabled';
+    interpDisabledPlaceholder.textContent = 'Default';
     refs.defaultInterpretationModelSelect.appendChild(interpDisabledPlaceholder);
 
     for (const model of models) {
@@ -810,7 +854,7 @@ async function populateDefaultModelDropdowns(): Promise<void> {
     refs.defaultQuickQuestionModelSelect.innerHTML = '';
     const qqDisabledPlaceholder = document.createElement('option');
     qqDisabledPlaceholder.value = '';
-    qqDisabledPlaceholder.textContent = 'Disabled';
+    qqDisabledPlaceholder.textContent = 'Default';
     refs.defaultQuickQuestionModelSelect.appendChild(qqDisabledPlaceholder);
 
     for (const model of models) {
@@ -830,7 +874,7 @@ async function populateDefaultModelDropdowns(): Promise<void> {
     refs.defaultQuestionModelSelect.innerHTML = '';
     const questionDisabledPlaceholder = document.createElement('option');
     questionDisabledPlaceholder.value = '';
-    questionDisabledPlaceholder.textContent = 'Disabled';
+    questionDisabledPlaceholder.textContent = 'Default';
     refs.defaultQuestionModelSelect.appendChild(questionDisabledPlaceholder);
 
     for (const model of models) {
@@ -847,7 +891,27 @@ async function populateDefaultModelDropdowns(): Promise<void> {
         refs.defaultQuestionModelSelect.appendChild(option);
     }
 
-    const [defaultModelPref, defaultReasoningPref, defaultLiteralModelPref, defaultInterpretationModelPref, defaultInterpretationReasoningPref, defaultQuickQuestionModelPref, defaultQuickQuestionReasoningPref, defaultQuestionModelPref, defaultQuestionReasoningPref] = await Promise.all([
+    refs.defaultWordDefModelSelect.innerHTML = '';
+    const wordDefDefPlaceholder = document.createElement('option');
+    wordDefDefPlaceholder.value = '';
+    wordDefDefPlaceholder.textContent = 'Select model...';
+    refs.defaultWordDefModelSelect.appendChild(wordDefDefPlaceholder);
+
+    for (const model of models) {
+        const option = document.createElement('option');
+        option.value = model.id;
+        if (model.pricing) {
+            const promptCost = (parseFloat(model.pricing.prompt) * 1_000_000).toFixed(2);
+            const completionCost = (parseFloat(model.pricing.completion) * 1_000_000).toFixed(2);
+            const providerPart = model.providerName ? ' by ' + model.providerName : '';
+            option.textContent = `${model.name}${providerPart} ($${promptCost}/$${completionCost})`;
+        } else {
+            option.textContent = model.name;
+        }
+        refs.defaultWordDefModelSelect.appendChild(option);
+    }
+
+    const [defaultModelPref, defaultReasoningPref, defaultLiteralModelPref, defaultInterpretationModelPref, defaultInterpretationReasoningPref, defaultQuickQuestionModelPref, defaultQuickQuestionReasoningPref, defaultQuestionModelPref, defaultQuestionReasoningPref, defaultWordDefModelPref, defaultWordDefReasoningPref] = await Promise.all([
         storage.getPreference("defaultModel"),
         storage.getPreference("defaultReasoning"),
         storage.getPreference("defaultLiteralModel"),
@@ -856,7 +920,9 @@ async function populateDefaultModelDropdowns(): Promise<void> {
         storage.getPreference("defaultQuickQuestionModel"),
         storage.getPreference("defaultQuickQuestionReasoning"),
         storage.getPreference("defaultQuestionModel"),
-        storage.getPreference("defaultQuestionReasoning")
+        storage.getPreference("defaultQuestionReasoning"),
+        storage.getPreference("defaultWordDefModel"),
+        storage.getPreference("defaultWordDefReasoning")
     ]);
 
     console.log('[defaults] Loaded from OPFS - model:', defaultModelPref, 'reasoning:', defaultReasoningPref, 'literalModel:', defaultLiteralModelPref, 'interpretationModel:', defaultInterpretationModelPref, 'interpretationReasoning:', defaultInterpretationReasoningPref);
@@ -870,6 +936,8 @@ async function populateDefaultModelDropdowns(): Promise<void> {
     refs.defaultQuickQuestionReasoningSelect.value = defaultQuickQuestionReasoningPref ?? 'none';
     refs.defaultQuestionModelSelect.value = defaultQuestionModelPref ?? '';
     refs.defaultQuestionReasoningSelect.value = defaultQuestionReasoningPref ?? 'none';
+    refs.defaultWordDefModelSelect.value = defaultWordDefModelPref ?? '';
+    refs.defaultWordDefReasoningSelect.value = defaultWordDefReasoningPref ?? 'none';
 }
 
 /**
@@ -886,11 +954,13 @@ async function refreshModelDropdowns(): Promise<void> {
         refs.sessionInterpretationModelSelect,
         refs.sessionQuickQuestionModelSelect,
         refs.sessionQuestionModelSelect,
+        refs.sessionWordDefModelSelect,
         refs.defaultModelSelect,
         refs.defaultLiteralModelSelect,
         refs.defaultInterpretationModelSelect,
         refs.defaultQuickQuestionModelSelect,
-        refs.defaultQuestionModelSelect
+        refs.defaultQuestionModelSelect,
+        refs.defaultWordDefModelSelect
     ];
 
     let needsRefresh = false;
@@ -1015,6 +1085,8 @@ async function saveSettings(): Promise<void> {
     const defaultQuickQuestionReasoning = refs.defaultQuickQuestionReasoningSelect.value;
     const defaultQuestionModel = refs.defaultQuestionModelSelect.value || null;
     const defaultQuestionReasoning = refs.defaultQuestionReasoningSelect.value;
+    const defaultWordDefModel = refs.defaultWordDefModelSelect.value || null;
+    const defaultWordDefReasoning = refs.defaultWordDefReasoningSelect.value;
 
     await saveApprovedModels();
 
@@ -1031,28 +1103,34 @@ async function saveSettings(): Promise<void> {
     }
 
     await storage.savePreference('defaultReasoning', defaultReasoning);
+    config.defaultReasoning = defaultReasoning as ReasoningLevel;
 
     if (defaultLiteralModel) {
         await storage.savePreference('defaultLiteralModel', defaultLiteralModel);
     } else {
         await storage.deletePreference('defaultLiteralModel');
     }
+    config.defaultLiteralModel = defaultLiteralModel;
 
     if (defaultInterpretationModel) {
         await storage.savePreference('defaultInterpretationModel', defaultInterpretationModel);
     } else {
         await storage.deletePreference('defaultInterpretationModel');
     }
+    config.defaultInterpretationModel = defaultInterpretationModel;
 
     await storage.savePreference('defaultInterpretationReasoning', defaultInterpretationReasoning);
+    config.defaultInterpretationReasoning = defaultInterpretationReasoning as ReasoningLevel;
 
     if (defaultQuickQuestionModel) {
         await storage.savePreference('defaultQuickQuestionModel', defaultQuickQuestionModel);
     } else {
         await storage.deletePreference('defaultQuickQuestionModel');
     }
+    config.quickQuestionModel = defaultQuickQuestionModel;
 
     await storage.savePreference('defaultQuickQuestionReasoning', defaultQuickQuestionReasoning);
+    config.defaultQuickQuestionReasoning = defaultQuickQuestionReasoning as ReasoningLevel;
 
     config.defaultQuestionModel = defaultQuestionModel;
     config.defaultQuestionReasoning = defaultQuestionReasoning as ReasoningLevel;
@@ -1065,7 +1143,18 @@ async function saveSettings(): Promise<void> {
 
     await storage.savePreference('defaultQuestionReasoning', defaultQuestionReasoning);
 
-    console.log('[defaults] Saved - model:', defaultModel, 'reasoning:', defaultReasoning, 'literalModel:', defaultLiteralModel, 'interpretationModel:', defaultInterpretationModel, 'interpretationReasoning:', defaultInterpretationReasoning, 'quickQuestionModel:', defaultQuickQuestionModel, 'quickQuestionReasoning:', defaultQuickQuestionReasoning, 'questionModel:', defaultQuestionModel, 'questionReasoning:', defaultQuestionReasoning);
+    config.defaultWordDefModel = defaultWordDefModel;
+    config.defaultWordDefReasoning = defaultWordDefReasoning as ReasoningLevel;
+
+    if (defaultWordDefModel) {
+        await storage.savePreference('defaultWordDefModel', defaultWordDefModel);
+    } else {
+        await storage.deletePreference('defaultWordDefModel');
+    }
+
+    await storage.savePreference('defaultWordDefReasoning', defaultWordDefReasoning);
+
+    console.log('[defaults] Saved - model:', defaultModel, 'reasoning:', defaultReasoning, 'literalModel:', defaultLiteralModel, 'interpretationModel:', defaultInterpretationModel, 'interpretationReasoning:', defaultInterpretationReasoning, 'quickQuestionModel:', defaultQuickQuestionModel, 'quickQuestionReasoning:', defaultQuickQuestionReasoning, 'questionModel:', defaultQuestionModel, 'questionReasoning:', defaultQuestionReasoning, 'wordDefModel:', defaultWordDefModel, 'wordDefReasoning:', defaultWordDefReasoning);
 
     settingsModalInstance.hide();
 }
@@ -1138,13 +1227,15 @@ function loadSessionIntoEditor(sessionId: string): void {
             refs.sessionModelSelect.value = session.model ?? '';
             refs.sessionLiteralModelSelect.value = session.literalModel ?? '';
             refs.sessionInterpretationModelSelect.value = session.interpretationModel ?? '';
-            refs.sessionInterpretationReasoningSelect.value = session.interpretationReasoning ?? 'none';
+            refs.sessionInterpretationReasoningSelect.value = session.interpretationReasoning ?? '';
             refs.sessionQuickQuestionModelSelect.value = session.quickQuestionModel ?? '';
-            refs.sessionQuickQuestionReasoningSelect.value = session.quickQuestionReasoning ?? 'none';
+            refs.sessionQuickQuestionReasoningSelect.value = session.quickQuestionReasoning ?? '';
             refs.sessionQuestionModelSelect.value = session.questionModel ?? '';
-            refs.sessionQuestionReasoningSelect.value = session.questionReasoning ?? 'none';
+            refs.sessionQuestionReasoningSelect.value = session.questionReasoning ?? '';
+            refs.sessionWordDefModelSelect.value = session.wordDefModel ?? '';
+            refs.sessionWordDefReasoningSelect.value = session.wordDefReasoning ?? '';
             refs.sessionBackgroundInput.value = session.background ?? '';
-            refs.sessionReasoningSelect.value = session.reasoning ?? 'none';
+            refs.sessionReasoningSelect.value = session.reasoning ?? '';
             refs.sessionTranslationInstructionsInput.value = session.translationInstructions ?? '';
             refs.sessionTheirLanguageSelect.value = session.theirLanguage ?? 'english';
             refs.sessionMyLanguageSelect.value = session.myLanguage ?? config?.defaultMyLanguage ?? 'english';
@@ -1156,13 +1247,15 @@ function loadSessionIntoEditor(sessionId: string): void {
             refs.sessionModelSelect.value = '';
             refs.sessionLiteralModelSelect.value = '';
             refs.sessionInterpretationModelSelect.value = '';
-            refs.sessionInterpretationReasoningSelect.value = 'none';
+            refs.sessionInterpretationReasoningSelect.value = '';
             refs.sessionQuickQuestionModelSelect.value = '';
-            refs.sessionQuickQuestionReasoningSelect.value = 'none';
+            refs.sessionQuickQuestionReasoningSelect.value = '';
             refs.sessionQuestionModelSelect.value = '';
-            refs.sessionQuestionReasoningSelect.value = 'none';
+            refs.sessionQuestionReasoningSelect.value = '';
+            refs.sessionWordDefModelSelect.value = '';
+            refs.sessionWordDefReasoningSelect.value = '';
             refs.sessionBackgroundInput.value = '';
-            refs.sessionReasoningSelect.value = 'none';
+            refs.sessionReasoningSelect.value = '';
             refs.sessionTranslationInstructionsInput.value = '';
             currentEditorTags = [];
             renderTagList();
@@ -1332,13 +1425,15 @@ async function saveSession(): Promise<void> {
     session.model = refs.sessionModelSelect.value || null;
     session.literalModel = refs.sessionLiteralModelSelect.value || null;
     session.interpretationModel = refs.sessionInterpretationModelSelect.value || null;
-    session.interpretationReasoning = refs.sessionInterpretationReasoningSelect.value as ReasoningLevel;
+    session.interpretationReasoning = (refs.sessionInterpretationReasoningSelect.value || undefined) as ReasoningLevel | undefined;
     session.quickQuestionModel = refs.sessionQuickQuestionModelSelect.value || null;
-    session.quickQuestionReasoning = refs.sessionQuickQuestionReasoningSelect.value as ReasoningLevel;
+    session.quickQuestionReasoning = (refs.sessionQuickQuestionReasoningSelect.value || undefined) as ReasoningLevel | undefined;
     session.questionModel = refs.sessionQuestionModelSelect.value || null;
-    session.questionReasoning = refs.sessionQuestionReasoningSelect.value as ReasoningLevel;
+    session.questionReasoning = (refs.sessionQuestionReasoningSelect.value || undefined) as ReasoningLevel | undefined;
+    session.wordDefModel = refs.sessionWordDefModelSelect.value || null;
+    session.wordDefReasoning = (refs.sessionWordDefReasoningSelect.value || undefined) as ReasoningLevel | undefined;
     session.background = refs.sessionBackgroundInput.value;
-    session.reasoning = refs.sessionReasoningSelect.value as ReasoningLevel;
+    session.reasoning = (refs.sessionReasoningSelect.value || null) as ReasoningLevel | null;
     session.translationInstructions = refs.sessionTranslationInstructionsInput.value || null;
     session.translationTags = currentEditorTags.length > 0 ? currentEditorTags : undefined;
     session.theirLanguage = refs.sessionTheirLanguageSelect.value;

@@ -14,7 +14,7 @@ You will receive messages with XML-style tags that structure the input. Here is 
 
 - <BACKGROUND> - Additional context about the conversation or situation. Use this to inform your translation but do not translate it.
 - <HISTORY> - Previous conversation exchanges, marked as <ME> (the user's own words) and <THEM> (the other party's words). Use this for context but do not translate it.
-- <USERQUESTION> - Previous questions from the user about the conversation. Use these for context but do not answer them here.
+- <ALREADY_ANSWERED> - Previous questions from the user about the conversation. Use these for context but do not answer them here.
 - <AGENTANSWER> - Answers to previous questions. Use these for context but do not translate them.
 - <TRANSLATE> - The text to be translated. This is the ONLY section you should translate.
 - <INSTRUCTIONS> - Specific directions for this translation, such as the target language. Follow these instructions but do not translate them.
@@ -138,7 +138,7 @@ export const QUESTION_SYSTEM_PROMPT: string =
 
 You will receive messages with XML-style tags that structure the input:
 - <BACKGROUND> - Additional context about the conversation or situation.
-- <HISTORY> - Previous conversation exchanges, marked as <ME> (the user's own words), <THEM> (the other party's words), <USERQUESTION> (previous questions from the user), and <AGENTANSWER> (your previous answers).
+- <HISTORY> - Previous conversation exchanges, marked as <ME> (the user's own words), <THEM> (the other party's words), <ALREADY_ANSWERED> (previous questions from the user), and <AGENTANSWER> (your previous answers).
 - <QUESTION> - The user's question. Answer it directly.
 - <INSTRUCTIONS> - Any additional directions.
 
@@ -172,9 +172,12 @@ and its suitability for translation or the culture of the target language and ho
 
 You will receive the full conversation context and history (up to the last 7 days of active conversation), 
 as well as any previous Q&A from the current dialog session. The user's question about the draft is below in <CURRENT_QUESTION> tags.
-Answer the <CURRENT_QUESTION> clearly and helpfully, referring to the source text, intent, conversation history, and any previous Q&A as needed.
+Answer the <CURRENT_QUESTION> clearly and helpfully, referring to the source text, intent, conversation history, and any previous Q&A as needed 
+in order to understand the intent of the question. This question is about how the translation of the draft will be understood by the receipient,
+they will be sending the translation, not the original text. Unless their question is specifically about how the text will be translated,
+answer their question about the likely translation and its perception, not about  the original text.
 
-Write your answer in [LANGUAGE]. Use markdown for clarity.`;
+Write your answer in [LANGUAGE]. If you include any words in [TARGET_LANGUAGE], be sure to also translate them into [LANGUAGE]. Use markdown for clarity.`;
 
 export const QUICK_QUESTION_MESSAGE_PROMPT: string =
 `You are a helpful translation assistant and cultural expert. The user received a message in [TARGET_LANGUAGE] and wants to understand it better.

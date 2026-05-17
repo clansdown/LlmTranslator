@@ -792,6 +792,23 @@
                                         </select>
                                     </div>
                                 </div>
+                                <div class="row g-2 mb-2">
+                                    <div class="col">
+                                        <label for="settings-default-word-def-model" class="form-label">Definitions Model</label>
+                                        <select id="settings-default-word-def-model" class="form-select"></select>
+                                    </div>
+                                    <div class="col-lg-2">
+                                        <label for="settings-default-word-def-reasoning" class="form-label">Reasoning</label>
+                                        <select id="settings-default-word-def-reasoning" class="form-select">
+                                            <option value="none">None</option>
+                                            <option value="minimal">Minimal</option>
+                                            <option value="low">Low</option>
+                                            <option value="medium">Medium</option>
+                                            <option value="high">High</option>
+                                            <option value="xhigh">Max</option>
+                                        </select>
+                                    </div>
+                                </div>
                             </div>
                             <div class="tab-pane fade" id="conversations-content" role="tabpanel" aria-labelledby="conversations-tab-btn">
                                 <div class="row g-2 mt-3">
@@ -808,6 +825,20 @@
                                             </div>
                                         </div>
                                     </div>
+                                </div>
+
+                                <!-- Sub-tab navigation -->
+                                <ul class="nav nav-tabs mt-3 mb-2" id="conversation-subtabs-nav" role="tablist">
+                                    <li class="nav-item" role="presentation">
+                                        <button type="button" class="nav-link active" data-conversation-subtab="context" role="tab">Context</button>
+                                    </li>
+                                    <li class="nav-item" role="presentation">
+                                        <button type="button" class="nav-link" data-conversation-subtab="models" role="tab">Models</button>
+                                    </li>
+                                </ul>
+
+                                <!-- Context sub-tab -->
+                                <div id="conversation-subtab-context" class="row g-2">
                                     <div class="col-12">
                                         <div class="row g-2">
                                             <div class="col">
@@ -823,91 +854,7 @@
                                     <div class="col-12">
                                         <div class="row g-2">
                                             <div class="col">
-                                                <label for="settings-session-model" class="form-label">Translation Model</label>
-                                                <select id="settings-session-model" class="form-select">
-                                                </select>
-                                            </div>
-                                            <div class="col-lg-2">
-                                                <label for="settings-session-reasoning" class="form-label">Reasoning</label>
-                                                <select id="settings-session-reasoning" class="form-select"
-                                                        title="Controls how much reasoning the model does before responding">
-                                                    <option value="none">None</option>
-                                                    <option value="minimal">Minimal</option>
-                                                    <option value="low">Low</option>
-                                                    <option value="medium">Medium</option>
-                                                    <option value="high">High</option>
-                                                    <option value="xhigh">Max</option>
-                                                </select>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <div class="col-12">
-                                        <label for="settings-session-literal-model" class="form-label">Literal Model</label>
-                                        <select id="settings-session-literal-model" class="form-select">
-                                        </select>
-                                    </div>
-                                    <div class="col-12">
-                                        <div class="row g-2">
-                                            <div class="col">
-                                                <label for="settings-session-interpretation-model" class="form-label">Interpretation Model</label>
-                                                <select id="settings-session-interpretation-model" class="form-select">
-                                                </select>
-                                            </div>
-                                            <div class="col-lg-2">
-                                                <label for="settings-session-interpretation-reasoning" class="form-label">Reasoning</label>
-                                                <select id="settings-session-interpretation-reasoning" class="form-select">
-                                                    <option value="none">None</option>
-                                                    <option value="minimal">Minimal</option>
-                                                    <option value="low">Low</option>
-                                                    <option value="medium">Medium</option>
-                                                    <option value="high">High</option>
-                                                    <option value="xhigh">Max</option>
-                                                </select>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <div class="col-12">
-                                        <div class="row g-2">
-                                            <div class="col">
-                                                <label for="settings-session-quick-question-model" class="form-label">Quick Question Model</label>
-                                                <select id="settings-session-quick-question-model" class="form-select"></select>
-                                            </div>
-                                            <div class="col-lg-2">
-                                                <label for="settings-session-quick-question-reasoning" class="form-label">Reasoning</label>
-                                                <select id="settings-session-quick-question-reasoning" class="form-select">
-                                                    <option value="none">None</option>
-                                                    <option value="minimal">Minimal</option>
-                                                    <option value="low">Low</option>
-                                                    <option value="medium">Medium</option>
-                                                    <option value="high">High</option>
-                                                    <option value="xhigh">Max</option>
-                                                        </select>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                            <div class="col-12">
-                                                <div class="row g-2">
-                                                    <div class="col">
-                                                        <label for="settings-session-question-model" class="form-label">Question Model</label>
-                                                        <select id="settings-session-question-model" class="form-select"></select>
-                                                    </div>
-                                                    <div class="col-lg-2">
-                                                        <label for="settings-session-question-reasoning" class="form-label">Reasoning</label>
-                                                        <select id="settings-session-question-reasoning" class="form-select">
-                                                            <option value="none">None</option>
-                                                            <option value="minimal">Minimal</option>
-                                                            <option value="low">Low</option>
-                                                            <option value="medium">Medium</option>
-                                                            <option value="high">High</option>
-                                                            <option value="xhigh">Max</option>
-                                                        </select>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                            <div class="col-12">
-                                                <div class="row g-2">
-                                                    <div class="col">
-                                                        <label for="settings-session-my-language" class="form-label">My Language</label>
+                                                <label for="settings-session-my-language" class="form-label">My Language</label>
                                                 <select id="settings-session-my-language" class="form-select"></select>
                                             </div>
                                             <div class="col">
@@ -951,6 +898,121 @@
                                             <button type="button" class="btn btn-sm btn-outline-secondary" id="settings-reset-tags-btn">Reset to Defaults</button>
                                         </div>
                                     </div>
+                                </div>
+
+                                <!-- Models sub-tab -->
+                                <div id="conversation-subtab-models" class="row g-2" style="display: none;">
+                                    <div class="col-12">
+                                        <div class="row g-2">
+                                            <div class="col">
+                                                <label for="settings-session-model" class="form-label">Translation Model</label>
+                                                <select id="settings-session-model" class="form-select">
+                                                </select>
+                                            </div>
+                                            <div class="col-lg-2">
+                                                <label for="settings-session-reasoning" class="form-label">Reasoning</label>
+                                                <select id="settings-session-reasoning" class="form-select"
+                                                        title="Controls how much reasoning the model does before responding">
+                                                        <option value="">Default</option>
+                                                    <option value="none">None</option>
+                                                    <option value="minimal">Minimal</option>
+                                                    <option value="low">Low</option>
+                                                    <option value="medium">Medium</option>
+                                                    <option value="high">High</option>
+                                                    <option value="xhigh">Max</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-12">
+                                        <label for="settings-session-literal-model" class="form-label">Literal Model</label>
+                                        <select id="settings-session-literal-model" class="form-select">
+                                        </select>
+                                    </div>
+                                    <div class="col-12">
+                                        <div class="row g-2">
+                                            <div class="col">
+                                                <label for="settings-session-word-def-model" class="form-label">Definitions Model</label>
+                                                <select id="settings-session-word-def-model" class="form-select"></select>
+                                            </div>
+                                            <div class="col-lg-2">
+                                                <label for="settings-session-word-def-reasoning" class="form-label">Reasoning</label>
+                                                <select id="settings-session-word-def-reasoning" class="form-select">
+                                                        <option value="">Default</option>
+                                                    <option value="none">None</option>
+                                                    <option value="minimal">Minimal</option>
+                                                    <option value="low">Low</option>
+                                                    <option value="medium">Medium</option>
+                                                    <option value="high">High</option>
+                                                    <option value="xhigh">Max</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-12">
+                                        <div class="row g-2">
+                                            <div class="col">
+                                                <label for="settings-session-interpretation-model" class="form-label">Interpretation Model</label>
+                                                <select id="settings-session-interpretation-model" class="form-select">
+                                                </select>
+                                            </div>
+                                            <div class="col-lg-2">
+                                                <label for="settings-session-interpretation-reasoning" class="form-label">Reasoning</label>
+                                                <select id="settings-session-interpretation-reasoning" class="form-select">
+                                                        <option value="">Default</option>
+                                                    <option value="none">None</option>
+                                                    <option value="minimal">Minimal</option>
+                                                    <option value="low">Low</option>
+                                                    <option value="medium">Medium</option>
+                                                    <option value="high">High</option>
+                                                    <option value="xhigh">Max</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-12">
+                                        <div class="row g-2">
+                                            <div class="col">
+                                                <label for="settings-session-quick-question-model" class="form-label">Quick Question Model</label>
+                                                <select id="settings-session-quick-question-model" class="form-select"></select>
+                                            </div>
+                                            <div class="col-lg-2">
+                                                <label for="settings-session-quick-question-reasoning" class="form-label">Reasoning</label>
+                                                <select id="settings-session-quick-question-reasoning" class="form-select">
+                                                        <option value="">Default</option>
+                                                    <option value="none">None</option>
+                                                    <option value="minimal">Minimal</option>
+                                                    <option value="low">Low</option>
+                                                    <option value="medium">Medium</option>
+                                                    <option value="high">High</option>
+                                                    <option value="xhigh">Max</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-12">
+                                        <div class="row g-2">
+                                            <div class="col">
+                                                <label for="settings-session-question-model" class="form-label">Question Model</label>
+                                                <select id="settings-session-question-model" class="form-select"></select>
+                                            </div>
+                                            <div class="col-lg-2">
+                                                <label for="settings-session-question-reasoning" class="form-label">Reasoning</label>
+                                                <select id="settings-session-question-reasoning" class="form-select">
+                                                        <option value="">Default</option>
+                                                    <option value="none">None</option>
+                                                    <option value="minimal">Minimal</option>
+                                                    <option value="low">Low</option>
+                                                    <option value="medium">Medium</option>
+                                                    <option value="high">High</option>
+                                                    <option value="xhigh">Max</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="row g-2 mt-2">
                                     <div class="col-12">
                                         <button type="button" class="btn btn-sm btn-primary" id="settings-save-session-btn">Save</button>
                                     </div>

@@ -378,7 +378,7 @@ export function showBackgroundUpdateModal(sessionId: string): void {
                     history += '<ME_TRANSLATION>' + entry.translation + '</ME_TRANSLATION>\n';
                 }
             } else if (t.pill === 'question') {
-                history += '<USERQUESTION>' + entry.source + '</USERQUESTION>\n';
+                history += '<ALREADY_ANSWERED>' + entry.source + '</ALREADY_ANSWERED>\n';
                 if (entry.translation) {
                     history += '<AGENTANSWER>' + entry.translation + '</AGENTANSWER>\n';
                 }

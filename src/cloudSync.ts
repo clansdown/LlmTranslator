@@ -1634,7 +1634,7 @@ export function queueSync(): void {
         if (STATE.cloudSync.enabled) {
             await syncToCloud();
         }
-    }, 5000);
+    }, 2500);
 }
 
 /**

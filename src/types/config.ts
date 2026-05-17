@@ -18,6 +18,13 @@ export interface Config {
     questionTemperature: number;
     maxTokens: number;
     quickQuestionModel: string | null;
+    defaultQuickQuestionReasoning: ReasoningLevel;
     defaultQuestionModel: string | null;
     defaultQuestionReasoning: ReasoningLevel;
+    defaultWordDefModel: string | null;
+    defaultWordDefReasoning: ReasoningLevel;
+    defaultReasoning: ReasoningLevel;
+    defaultLiteralModel: string | null;
+    defaultInterpretationModel: string | null;
+    defaultInterpretationReasoning: ReasoningLevel;
 }

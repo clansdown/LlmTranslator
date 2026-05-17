@@ -30,7 +30,14 @@ const config: Config = {
     quickQuestionModel: null,
     maxTokens: 32768,
     defaultQuestionModel: null,
-    defaultQuestionReasoning: 'none'
+    defaultQuestionReasoning: 'none',
+    defaultWordDefModel: null,
+    defaultWordDefReasoning: 'none',
+    defaultQuickQuestionReasoning: 'none',
+    defaultReasoning: 'none',
+    defaultLiteralModel: null,
+    defaultInterpretationModel: null,
+    defaultInterpretationReasoning: 'none'
 };
 
 /**
@@ -85,6 +92,16 @@ async function loadModels(): Promise<void> {
         const savedQQModelId = await getPreference("defaultQuickQuestionModel");
         if (savedQQModelId && approvedModels.some(function(m) { return m.id === savedQQModelId; })) {
             config.quickQuestionModel = savedQQModelId;
+        }
+
+        const savedLiteralModelId = await getPreference("defaultLiteralModel");
+        if (savedLiteralModelId && approvedModels.some(function(m) { return m.id === savedLiteralModelId; })) {
+            config.defaultLiteralModel = savedLiteralModelId;
+        }
+
+        const savedInterpretationModelId = await getPreference("defaultInterpretationModel");
+        if (savedInterpretationModelId && approvedModels.some(function(m) { return m.id === savedInterpretationModelId; })) {
+            config.defaultInterpretationModel = savedInterpretationModelId;
         }
     } catch (error) {
         console.error("[loadModels] Error:", error);
@@ -232,6 +249,31 @@ async function loadSettings(): Promise<void> {
     if (defaultQuestionReasoning) {
         config.defaultQuestionReasoning = defaultQuestionReasoning as ReasoningLevel;
     }
+
+    const defaultWordDefModel = await getPreference("defaultWordDefModel");
+    if (defaultWordDefModel) {
+        config.defaultWordDefModel = defaultWordDefModel;
+    }
+
+    const defaultWordDefReasoning = await getPreference("defaultWordDefReasoning");
+    if (defaultWordDefReasoning) {
+        config.defaultWordDefReasoning = defaultWordDefReasoning as ReasoningLevel;
+    }
+
+    const defaultReasoning = await getPreference("defaultReasoning");
+    if (defaultReasoning) {
+        config.defaultReasoning = defaultReasoning as ReasoningLevel;
+    }
+
+    const defaultInterpretationReasoning = await getPreference("defaultInterpretationReasoning");
+    if (defaultInterpretationReasoning) {
+        config.defaultInterpretationReasoning = defaultInterpretationReasoning as ReasoningLevel;
+    }
+
+    const defaultQuickQuestionReasoning = await getPreference("defaultQuickQuestionReasoning");
+    if (defaultQuickQuestionReasoning) {
+        config.defaultQuickQuestionReasoning = defaultQuickQuestionReasoning as ReasoningLevel;
+    }
 }
 
 /**
@@ -321,6 +363,12 @@ export async function init(): Promise<void> {
         if (needsConfigReload) {
             await loadSettings();
             await loadApiKey();
+            const qqModel = await getPreference("defaultQuickQuestionModel");
+            config.quickQuestionModel = qqModel || null;
+            const litModel = await getPreference("defaultLiteralModel");
+            config.defaultLiteralModel = litModel || null;
+            const intModel = await getPreference("defaultInterpretationModel");
+            config.defaultInterpretationModel = intModel || null;
         }
 
         if (needsApiKeyReload) {
