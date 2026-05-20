@@ -24,5 +24,6 @@ export interface TranslationSession {
     wordDefReasoning?: ReasoningLevel;
     interlocutorName?: string;
     translationTags?: import('./translationTag').TranslationTag[];
+    selectedContextIds?: string[];
     createdAt: number;
 }

@@ -668,6 +668,12 @@
                                 <button type="button" class="nav-link" id="conversations-tab-btn" data-bs-toggle="tab" data-bs-target="#conversations-content" role="tab" aria-controls="conversations-content" aria-selected="false">Conversations</button>
                             </li>
                             <li class="nav-item" role="presentation">
+                                <button type="button" class="nav-link" id="languages-tab-btn" data-bs-toggle="tab" data-bs-target="#languages-content" role="tab" aria-controls="languages-content" aria-selected="false">Languages</button>
+                            </li>
+                            <li class="nav-item" role="presentation">
+                                <button type="button" class="nav-link" id="contexts-tab-btn" data-bs-toggle="tab" data-bs-target="#contexts-content" role="tab" aria-controls="contexts-content" aria-selected="false">Contexts</button>
+                            </li>
+                            <li class="nav-item" role="presentation">
                                 <button type="button" class="nav-link" id="models-tab-btn" data-bs-toggle="tab" data-bs-target="#models-content" role="tab" aria-controls="models-content" aria-selected="false">Models</button>
                             </li>
                             <li class="nav-item" role="presentation">
@@ -879,6 +885,14 @@
                                         <textarea id="settings-session-translation-instructions" class="form-control" rows="5" placeholder="General instructions for how translations should be styled and presented (e.g. tone, formality, register). Leave empty for default."></textarea>
                                     </div>
                                     <div class="col-12">
+                                        <label class="form-label">Contexts</label>
+                                        <div style="position: relative;">
+                                            <div id="settings-session-context-chips" class="border rounded p-2" style="min-height: 38px; cursor: pointer;">
+                                            </div>
+                                            <div id="settings-session-context-dropdown" class="border rounded bg-body" style="display: none; position: absolute; top: 100%; left: 0; z-index: 1060; width: 100%; max-height: 180px; overflow-y: auto; min-height: 30px;"></div>
+                                        </div>
+                                    </div>
+                                    <div class="col-12">
                                         <label class="form-label">Translation Tags</label>
                                         <p class="text-muted small mb-2">Tags guide the LLM on register/formality for specific text portions. Wrap text like &lt;nida&gt;hello&lt;/nida&gt;. Only active for output (Me) translations.</p>
                                         <div id="settings-tags-list" class="mb-2">
@@ -1016,6 +1030,43 @@
                                     <div class="col-12">
                                         <button type="button" class="btn btn-sm btn-primary" id="settings-save-session-btn">Save</button>
                                     </div>
+                                </div>
+                            </div>
+                            <div class="tab-pane fade" id="languages-content" role="tabpanel" aria-labelledby="languages-tab-btn">
+                                <div class="row g-2 mt-3">
+                                    <div class="col-6">
+                                        <label for="settings-language-select" class="form-label">Language</label>
+                                        <select id="settings-language-select" class="form-select"></select>
+                                    </div>
+                                </div>
+                                <div class="row g-2 mt-2">
+                                    <div class="col-12">
+                                        <label for="settings-language-instructions" class="form-label">Translation Instructions</label>
+                                        <p class="text-muted small mb-2">General instructions for translations into this language (e.g. tone conventions, register expectations, cultural notes). These are included alongside any conversation-specific instructions.</p>
+                                        <textarea id="settings-language-instructions" class="form-control" rows="8" placeholder="e.g. Korean business correspondence should use -nida register with formal titles..."></textarea>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="tab-pane fade" id="contexts-content" role="tabpanel" aria-labelledby="contexts-tab-btn">
+                                <div class="row g-2 mt-3">
+                                    <div class="col-12 mb-2">
+                                        <button type="button" class="btn btn-sm btn-outline-primary" id="settings-add-context-btn">New Context</button>
+                                    </div>
+                                    <div class="col-12 mb-2" id="settings-context-edit-form" style="display: none;">
+                                        <div class="border rounded p-3">
+                                            <div class="mb-2">
+                                                <input type="text" id="settings-context-name" class="form-control form-control-sm" placeholder="Context name (e.g. Business Meeting)">
+                                            </div>
+                                            <div class="mb-2">
+                                                <textarea id="settings-context-content" class="form-control" rows="20" placeholder="Context content that will be prepended to the background"></textarea>
+                                            </div>
+                                            <div>
+                                                <button type="button" class="btn btn-sm btn-primary me-1" id="settings-context-save-btn">Save</button>
+                                                <button type="button" class="btn btn-sm btn-outline-secondary" id="settings-context-cancel-btn">Cancel</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-12" id="settings-contexts-list"></div>
                                 </div>
                             </div>
                             <div class="tab-pane fade" id="models-content" role="tabpanel" aria-labelledby="models-tab-btn">
@@ -1264,6 +1315,34 @@
                         </div>
                     </div>
                 </div>
+            </div>
+        </template>
+
+        <!-- context-definition-item-template: Display a context in the Contexts tab list with edit/delete -->
+        <template id="context-definition-item-template">
+            <div class="context-def-item d-flex align-items-center p-2 border rounded mb-1">
+                <div class="flex-grow-1">
+                    <strong class="context-def-name"></strong>
+                    <small class="text-muted d-block context-def-preview"></small>
+                </div>
+                <button type="button" class="btn btn-sm btn-outline-secondary me-1 context-edit-btn">Edit</button>
+                <button type="button" class="btn btn-sm btn-outline-danger context-delete-btn">Delete</button>
+            </div>
+        </template>
+
+        <!-- context-chip-template: Removable chip for a selected context in Conversations tab -->
+        <template id="context-chip-template">
+            <span class="badge bg-secondary d-inline-flex align-items-center me-1 mb-1">
+                <span class="context-chip-name"></span>
+                <button type="button" class="btn-close btn-close-sm ms-1" aria-label="Remove"></button>
+            </span>
+        </template>
+
+        <!-- context-dropdown-item-template: Item in the chip input's matching dropdown -->
+        <template id="context-dropdown-item-template">
+            <div class="context-dropdown-item px-2 py-1" style="cursor: pointer;">
+                <span class="context-dropdown-name"></span>
+                <small class="text-muted d-block context-dropdown-preview"></small>
             </div>
         </template>
 

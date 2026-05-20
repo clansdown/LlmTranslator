@@ -115,12 +115,46 @@ interface SettingsReferences {
     cloudSyncLastSpan: HTMLSpanElement;
     cloudSyncStatusDiv: HTMLDivElement;
     proposeBackgroundButton: HTMLButtonElement;
+    languageSelect: HTMLSelectElement;
+    languageInstructionsTextarea: HTMLTextAreaElement;
+    addContextButton: HTMLButtonElement;
+    contextNameInput: HTMLInputElement;
+    contextContentTextarea: HTMLTextAreaElement;
+    contextSaveButton: HTMLButtonElement;
+    contextCancelButton: HTMLButtonElement;
+    contextsListContainer: HTMLDivElement;
+    sessionContextChipsContainer: HTMLDivElement;
+    sessionContextDropdown: HTMLDivElement;
 }
 
 let refs: SettingsReferences | null = null;
 
 /** @type {TranslationTag[]} */
 let currentEditorTags: TranslationTag[] = [];
+
+/** @type {Record<string, string>} */
+let languageInstructionDrafts: Record<string, string> = {};
+
+/**
+ * @typedef {Object} ContextDefinition
+ * @property {string} id - Unique ID
+ * @property {string} name - Display name
+ * @property {string} content - Context content text
+ */
+interface ContextDefinition {
+    id: string;
+    name: string;
+    content: string;
+}
+
+/** @type {ContextDefinition[]} */
+let contextDefinitions: ContextDefinition[] = [];
+
+/** @type {string | null} */
+let editingContextId: string | null = null;
+
+/** @type {string[]} */
+let selectedSessionContextIds: string[] = [];
 
 /**
  * Sets the application config reference
@@ -216,7 +250,17 @@ function openSettingsModal(): void {
             cloudSyncExportButton: settingsModalElement.querySelector('#settings-cloud-sync-export') as HTMLButtonElement,
             cloudSyncLastSpan: settingsModalElement.querySelector('#settings-cloud-sync-last') as HTMLSpanElement,
             cloudSyncStatusDiv: settingsModalElement.querySelector('#settings-cloud-sync-status') as HTMLDivElement,
-            proposeBackgroundButton: settingsModalElement.querySelector('#settings-propose-background-btn') as HTMLButtonElement
+            proposeBackgroundButton: settingsModalElement.querySelector('#settings-propose-background-btn') as HTMLButtonElement,
+            languageSelect: settingsModalElement.querySelector('#settings-language-select') as HTMLSelectElement,
+            languageInstructionsTextarea: settingsModalElement.querySelector('#settings-language-instructions') as HTMLTextAreaElement,
+            addContextButton: settingsModalElement.querySelector('#settings-add-context-btn') as HTMLButtonElement,
+            contextNameInput: settingsModalElement.querySelector('#settings-context-name') as HTMLInputElement,
+            contextContentTextarea: settingsModalElement.querySelector('#settings-context-content') as HTMLTextAreaElement,
+            contextSaveButton: settingsModalElement.querySelector('#settings-context-save-btn') as HTMLButtonElement,
+            contextCancelButton: settingsModalElement.querySelector('#settings-context-cancel-btn') as HTMLButtonElement,
+            contextsListContainer: settingsModalElement.querySelector('#settings-contexts-list') as HTMLDivElement,
+            sessionContextChipsContainer: settingsModalElement.querySelector('#settings-session-context-chips') as HTMLDivElement,
+            sessionContextDropdown: settingsModalElement.querySelector('#settings-session-context-dropdown') as HTMLDivElement
         };
 
         setupEventListeners();
@@ -405,6 +449,69 @@ function setupEventListeners(): void {
             });
         });
     }
+
+    refs.languageSelect.addEventListener('change', function() {
+        const lang = refs!.languageSelect.value;
+        languageInstructionDrafts[lang] = refs!.languageInstructionsTextarea.value;
+        refs!.languageInstructionsTextarea.value = languageInstructionDrafts[lang] ?? '';
+    });
+
+    refs.languageInstructionsTextarea.addEventListener('input', function() {
+        const lang = refs!.languageSelect.value;
+        languageInstructionDrafts[lang] = refs!.languageInstructionsTextarea.value;
+    });
+
+    refs.addContextButton.addEventListener('click', function() {
+        startEditContext(null);
+    });
+
+    refs.contextSaveButton.addEventListener('click', async function() {
+        const name = refs!.contextNameInput.value.trim();
+        const content = refs!.contextContentTextarea.value.trim();
+        if (!name) {
+            ui.displayError('Context name is required');
+            return;
+        }
+        if (!content) {
+            ui.displayError('Context content is required');
+            return;
+        }
+        if (editingContextId) {
+            const existing = contextDefinitions.find(function(c) { return c.id === editingContextId; });
+            if (existing) {
+                existing.name = name;
+                existing.content = content;
+            }
+        } else {
+            contextDefinitions.push({ id: crypto.randomUUID(), name: name, content: content });
+        }
+        editingContextId = null;
+        const editForm = document.getElementById('settings-context-edit-form') as HTMLElement | null;
+        if (editForm) editForm.style.display = 'none';
+        await saveContextDefinitions();
+        renderContextList();
+    });
+
+    refs.contextCancelButton.addEventListener('click', function() {
+        editingContextId = null;
+        const editForm = document.getElementById('settings-context-edit-form') as HTMLElement | null;
+        if (editForm) editForm.style.display = 'none';
+    });
+
+    refs.sessionContextChipsContainer.addEventListener('click', function() {
+        showContextDropdown();
+    });
+
+    document.addEventListener('click', function(e) {
+        if (refs && refs.sessionContextDropdown.style.display !== 'none') {
+            const target = e.target as Node;
+            const chipsContainer = refs.sessionContextChipsContainer;
+            const dropdown = refs.sessionContextDropdown;
+            if (!chipsContainer.contains(target) && !dropdown.contains(target)) {
+                dropdown.style.display = 'none';
+            }
+        }
+    });
 }
 
 /**
@@ -429,6 +536,9 @@ async function populateSettingsForm(): Promise<void> {
     await populateDefaultModelDropdowns();
     populateModelsTab();
     populateCloudSyncSettings();
+    populateLanguageSelect();
+    await loadLanguageInstructions();
+    await populateContextsTab();
 }
 
 /**
@@ -941,6 +1051,227 @@ async function populateDefaultModelDropdowns(): Promise<void> {
 }
 
 /**
+ * Populates the language select dropdown in the Languages tab
+ * @returns {void}
+ */
+function populateLanguageSelect(): void {
+    if (!refs) return;
+    refs.languageSelect.innerHTML = '';
+    for (const lang of LANGUAGES) {
+        const option = document.createElement('option');
+        option.value = lang.id;
+        option.textContent = lang.name;
+        refs.languageSelect.appendChild(option);
+    }
+    refs.languageSelect.value = 'english';
+}
+
+/**
+ * Loads language instruction drafts from preferences
+ * @returns {Promise<void>}
+ */
+async function loadLanguageInstructions(): Promise<void> {
+    languageInstructionDrafts = {};
+    for (const lang of LANGUAGES) {
+        const val = await storage.getPreference('langInstructions_' + lang.id);
+        if (val) {
+            languageInstructionDrafts[lang.id] = val;
+        }
+    }
+    if (refs) {
+        const currentLang = refs.languageSelect.value;
+        refs.languageInstructionsTextarea.value = languageInstructionDrafts[currentLang] ?? '';
+    }
+}
+
+/**
+ * Saves all language instruction drafts to preferences
+ * @returns {Promise<void>}
+ */
+async function saveLanguageInstructions(): Promise<void> {
+    for (const lang of LANGUAGES) {
+        const key = 'langInstructions_' + lang.id;
+        const val = languageInstructionDrafts[lang.id];
+        if (val) {
+            await storage.savePreference(key, val);
+        } else {
+            await storage.deletePreference(key);
+        }
+    }
+}
+
+/**
+ * Loads context definitions from preferences
+ * @returns {Promise<void>}
+ */
+async function loadContextDefinitions(): Promise<void> {
+    const val = await storage.getPreference('contextDefinitions');
+    if (val) {
+        try {
+            contextDefinitions = JSON.parse(val) as ContextDefinition[];
+        } catch {
+            contextDefinitions = [];
+        }
+    } else {
+        contextDefinitions = [];
+    }
+}
+
+/**
+ * Saves context definitions to preferences
+ * @returns {Promise<void>}
+ */
+async function saveContextDefinitions(): Promise<void> {
+    if (contextDefinitions.length > 0) {
+        await storage.savePreference('contextDefinitions', JSON.stringify(contextDefinitions));
+    } else {
+        await storage.deletePreference('contextDefinitions');
+    }
+}
+
+/**
+ * Populates the Contexts tab with stored definitions
+ * @returns {Promise<void>}
+ */
+async function populateContextsTab(): Promise<void> {
+    await loadContextDefinitions();
+    renderContextList();
+}
+
+/**
+ * Renders the context definitions list using the template
+ * @returns {void}
+ */
+function renderContextList(): void {
+    if (!refs) return;
+    refs.contextsListContainer.innerHTML = '';
+    const template = document.getElementById('context-definition-item-template') as HTMLTemplateElement | null;
+    if (!template) return;
+
+    for (const ctx of contextDefinitions) {
+        const clone = template.content.cloneNode(true) as DocumentFragment;
+        const container = clone.firstElementChild as HTMLElement;
+        (container.querySelector('.context-def-name') as HTMLElement).textContent = ctx.name;
+        (container.querySelector('.context-def-preview') as HTMLElement).textContent = ctx.content.length > 80 ? ctx.content.substring(0, 80) + '...' : ctx.content;
+        const editBtn = container.querySelector('.context-edit-btn') as HTMLButtonElement | null;
+        const deleteBtn = container.querySelector('.context-delete-btn') as HTMLButtonElement | null;
+        if (editBtn) {
+            editBtn.addEventListener('click', function() {
+                startEditContext(ctx.id);
+            });
+        }
+        if (deleteBtn) {
+            deleteBtn.addEventListener('click', async function() {
+                contextDefinitions = contextDefinitions.filter(function(c) { return c.id !== ctx.id; });
+                await saveContextDefinitions();
+                renderContextList();
+            });
+        }
+        refs.contextsListContainer.appendChild(clone);
+    }
+}
+
+/**
+ * Shows the context edit form for a given context ID, or clears for new
+ * @param {string | null} contextId - Context ID to edit, or null for new
+ * @returns {void}
+ */
+function startEditContext(contextId: string | null): void {
+    if (!refs) return;
+    editingContextId = contextId;
+    const editForm = document.getElementById('settings-context-edit-form') as HTMLElement | null;
+    if (!editForm) return;
+    editForm.style.display = '';
+    if (contextId) {
+        const ctx = contextDefinitions.find(function(c) { return c.id === contextId; });
+        if (ctx) {
+            refs.contextNameInput.value = ctx.name;
+            refs.contextContentTextarea.value = ctx.content;
+        }
+    } else {
+        refs.contextNameInput.value = '';
+        refs.contextContentTextarea.value = '';
+    }
+}
+
+/**
+ * Renders chips for selected contexts in the Conversations tab
+ * @param {string[]} selectedIds - Array of selected context IDs
+ * @returns {void}
+ */
+function renderContextChips(selectedIds: string[]): void {
+    if (!refs) return;
+    refs.sessionContextChipsContainer.innerHTML = '';
+    const template = document.getElementById('context-chip-template') as HTMLTemplateElement | null;
+    if (!template) return;
+
+    for (const ctxId of selectedIds) {
+        const ctx = contextDefinitions.find(function(c) { return c.id === ctxId; });
+        if (!ctx) continue;
+        const clone = template.content.cloneNode(true) as DocumentFragment;
+        const container = clone.firstElementChild as HTMLElement;
+        (container.querySelector('.context-chip-name') as HTMLElement).textContent = ctx.name;
+        const removeBtn = container.querySelector('.btn-close') as HTMLButtonElement | null;
+        if (removeBtn) {
+            removeBtn.addEventListener('click', function() {
+                selectedSessionContextIds = selectedSessionContextIds.filter(function(id) { return id !== ctxId; });
+                renderContextChips(selectedSessionContextIds);
+            });
+        }
+        refs.sessionContextChipsContainer.appendChild(clone);
+    }
+}
+
+/**
+ * Shows dropdown with matching unselected contexts
+ * @param {string} query - Search query
+ * @returns {void}
+ */
+function showContextDropdown(): void {
+    if (!refs) return;
+    const dropdown = refs.sessionContextDropdown;
+    dropdown.innerHTML = '';
+    const template = document.getElementById('context-dropdown-item-template') as HTMLTemplateElement | null;
+    if (!template) return;
+
+    if (contextDefinitions.length === 0) {
+        const noOpts = document.createElement('div');
+        noOpts.className = 'px-2 py-1 text-muted small';
+        noOpts.textContent = 'No contexts defined. Create them in the Contexts tab.';
+        dropdown.appendChild(noOpts);
+        dropdown.style.display = '';
+        return;
+    }
+
+    const matches = contextDefinitions.filter(function(ctx) {
+        return !selectedSessionContextIds.includes(ctx.id);
+    });
+
+    if (matches.length === 0) {
+        const noOpts = document.createElement('div');
+        noOpts.className = 'px-2 py-1 text-muted small';
+        noOpts.textContent = 'All contexts are already selected.';
+        dropdown.appendChild(noOpts);
+        dropdown.style.display = '';
+        return;
+    }
+
+    for (const ctx of matches) {
+        const clone = template.content.cloneNode(true) as DocumentFragment;
+        const container = clone.firstElementChild as HTMLElement;
+        (container.querySelector('.context-dropdown-name') as HTMLElement).textContent = ctx.name;
+        (container.querySelector('.context-dropdown-preview') as HTMLElement).textContent = ctx.content.length > 60 ? ctx.content.substring(0, 60) + '...' : ctx.content;
+        container.addEventListener('click', function() {
+            selectedSessionContextIds.push(ctx.id);
+            renderContextChips(selectedSessionContextIds);
+            dropdown.style.display = 'none';
+        });
+        dropdown.appendChild(clone);
+    }
+    dropdown.style.display = '';
+}
+
+/**
  * Checks if model dropdowns match the current models array and repopulates with
  * selection preserved if they don't
  * @returns {Promise<void>}
@@ -1156,6 +1487,14 @@ async function saveSettings(): Promise<void> {
 
     console.log('[defaults] Saved - model:', defaultModel, 'reasoning:', defaultReasoning, 'literalModel:', defaultLiteralModel, 'interpretationModel:', defaultInterpretationModel, 'interpretationReasoning:', defaultInterpretationReasoning, 'quickQuestionModel:', defaultQuickQuestionModel, 'quickQuestionReasoning:', defaultQuickQuestionReasoning, 'questionModel:', defaultQuestionModel, 'questionReasoning:', defaultQuestionReasoning, 'wordDefModel:', defaultWordDefModel, 'wordDefReasoning:', defaultWordDefReasoning);
 
+    // Save the current language instruction draft before saving all
+    if (refs) {
+        const currentLang = refs.languageSelect.value;
+        languageInstructionDrafts[currentLang] = refs.languageInstructionsTextarea.value;
+    }
+    await saveLanguageInstructions();
+    await saveContextDefinitions();
+
     settingsModalInstance.hide();
 }
 
@@ -1241,6 +1580,8 @@ function loadSessionIntoEditor(sessionId: string): void {
             refs.sessionMyLanguageSelect.value = session.myLanguage ?? config?.defaultMyLanguage ?? 'english';
             currentEditorTags = session.translationTags ? JSON.parse(JSON.stringify(session.translationTags)) : [];
             renderTagList();
+            selectedSessionContextIds = session.selectedContextIds ? session.selectedContextIds.slice() : [];
+            renderContextChips(selectedSessionContextIds);
         } else if (refs) {
             refs.sessionNameInput.value = '';
             refs.sessionInterlocutorNameInput.value = '';
@@ -1278,6 +1619,8 @@ function clearSessionEditor(): void {
     refs.sessionMyLanguageSelect.value = config?.defaultMyLanguage ?? 'english';
     currentEditorTags = [];
     renderTagList();
+    selectedSessionContextIds = [];
+    renderContextChips(selectedSessionContextIds);
 }
 
 /**
@@ -1439,6 +1782,7 @@ async function saveSession(): Promise<void> {
     session.theirLanguage = refs.sessionTheirLanguageSelect.value;
     session.myLanguage = refs.sessionMyLanguageSelect.value;
     session.interlocutorName = refs.sessionInterlocutorNameInput.value.trim() || undefined;
+    session.selectedContextIds = selectedSessionContextIds.length > 0 ? selectedSessionContextIds.slice() : undefined;
     await storage.saveSession(session);
 
     if (config && session.model) {

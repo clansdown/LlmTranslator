@@ -610,7 +610,27 @@ export async function saveBackground(background: string): Promise<void> {
  */
 export async function getBackground(): Promise<string> {
     const session = await loadSession(currentSessionId);
-    return session?.background ?? "";
+    let background = '';
+
+    if (session?.selectedContextIds && session.selectedContextIds.length > 0) {
+        const defsStr = await getPreference('contextDefinitions');
+        if (defsStr) {
+            try {
+                const defs = JSON.parse(defsStr) as Array<{id: string; name: string; content: string}>;
+                for (const ctxId of session.selectedContextIds) {
+                    const ctx = defs.find(function(d) { return d.id === ctxId; });
+                    if (ctx) {
+                        background += ctx.content + '\n\n';
+                    }
+                }
+            } catch {
+                // Invalid context definitions — ignore
+            }
+        }
+    }
+
+    background += session?.background ?? '';
+    return background;
 }
 
 /**
@@ -3501,8 +3521,13 @@ async function handleTranslateStreaming(
     } else {
         const intent = activeEntry?.intent ?? '';
         const translationInstructions = session?.translationInstructions ?? '';
-        const translationInstructionsBlock = translationInstructions
-            ? `The following are instructions on how the translation should be styled and presented:\n<TRANSLATIONINSTRUCTIONS>${translationInstructions}</TRANSLATIONINSTRUCTIONS>`
+        const langInstructionsKey = 'langInstructions_' + (session?.theirLanguage ?? '');
+        const langInstructions = await getPreference(langInstructionsKey);
+        const langInstructionsBlock = langInstructions
+            ? `General ${theirLangName} translation notes:\n${langInstructions}\n\n`
+            : '';
+        const translationInstructionsBlock = (translationInstructions || langInstructions)
+            ? `The following are instructions on how the translation should be styled and presented:\n<TRANSLATIONINSTRUCTIONS>${langInstructionsBlock}${translationInstructions}</TRANSLATIONINSTRUCTIONS>`
             : '';
         const intentBlock = intent
             ? `The following is guidance on the intent of the text to be translated:\n<INTENT>${intent}</INTENT>`
