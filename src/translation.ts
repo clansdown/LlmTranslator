@@ -3823,7 +3823,8 @@ async function buildQuickQuestionMessage(
     messageText?: string,
     translationText?: string,
     translationInstructions?: string,
-    translationTags?: TranslationTag[]
+    translationTags?: TranslationTag[],
+    langInstructions?: string
 ): Promise<string> {
     const background = await getBackground();
 
@@ -3853,9 +3854,13 @@ async function buildQuickQuestionMessage(
         }
     }
 
-    if (translationInstructions || (translationTags && translationTags.length > 0)) {
+    if (translationInstructions || langInstructions || (translationTags && translationTags.length > 0)) {
         let refBlock = '';
+        if (langInstructions) {
+            refBlock += langInstructions;
+        }
         if (translationInstructions) {
+            if (refBlock) refBlock += '\n\n';
             refBlock += translationInstructions;
         }
         if (translationTags && translationTags.length > 0) {
@@ -4051,6 +4056,8 @@ function showQuickQuestionModal(options?: {
             const reasoningLevel = getQuickQuestionReasoningToUse(session);
             const translationInstructions = session?.translationInstructions ?? '';
             const translationTags = session?.translationTags;
+            const langInstructionsKey = 'langInstructions_' + (session?.theirLanguage ?? '');
+            const langInstructions = await getPreference(langInstructionsKey) ?? undefined;
             const effectivePrompt = options?.systemPrompt ?? QUICK_QUESTION_DRAFT_PROMPT;
             const systemPrompt = effectivePrompt
                 .replace(/\[LANGUAGE\]/g, myLangName)
@@ -4060,7 +4067,8 @@ function showQuickQuestionModal(options?: {
                 isMessageQuestion ? sourceText : undefined,
                 options?.translationText,
                 translationInstructions,
-                translationTags
+                translationTags,
+                langInstructions
             );
 
             const abortHandle = streamSendChatMessage(

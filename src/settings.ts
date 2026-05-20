@@ -156,6 +156,12 @@ let editingContextId: string | null = null;
 /** @type {string[]} */
 let selectedSessionContextIds: string[] = [];
 
+/** @type {Record<string, string>} */
+let languageInstructionOriginals: Record<string, string> = {};
+
+/** @type {string} */
+let currentLanguageDraft: string = 'english';
+
 /**
  * Sets the application config reference
  * @param {Config} appConfig - Application configuration object
@@ -451,14 +457,16 @@ function setupEventListeners(): void {
     }
 
     refs.languageSelect.addEventListener('change', function() {
-        const lang = refs!.languageSelect.value;
-        languageInstructionDrafts[lang] = refs!.languageInstructionsTextarea.value;
-        refs!.languageInstructionsTextarea.value = languageInstructionDrafts[lang] ?? '';
+        const oldLang = currentLanguageDraft;
+        const newLang = refs!.languageSelect.value;
+        languageInstructionDrafts[oldLang] = refs!.languageInstructionsTextarea.value;
+        currentLanguageDraft = newLang;
+        refs!.languageInstructionsTextarea.value = languageInstructionDrafts[newLang] ?? '';
+        storage.savePreference('lastLanguageInstructions', newLang).catch(function() {});
     });
 
     refs.languageInstructionsTextarea.addEventListener('input', function() {
-        const lang = refs!.languageSelect.value;
-        languageInstructionDrafts[lang] = refs!.languageInstructionsTextarea.value;
+        languageInstructionDrafts[currentLanguageDraft] = refs!.languageInstructionsTextarea.value;
     });
 
     refs.addContextButton.addEventListener('click', function() {
@@ -1052,9 +1060,9 @@ async function populateDefaultModelDropdowns(): Promise<void> {
 
 /**
  * Populates the language select dropdown in the Languages tab
- * @returns {void}
+ * @returns {Promise<void>}
  */
-function populateLanguageSelect(): void {
+async function populateLanguageSelect(): Promise<void> {
     if (!refs) return;
     refs.languageSelect.innerHTML = '';
     for (const lang of LANGUAGES) {
@@ -1063,7 +1071,8 @@ function populateLanguageSelect(): void {
         option.textContent = lang.name;
         refs.languageSelect.appendChild(option);
     }
-    refs.languageSelect.value = 'english';
+    const lastLang = await storage.getPreference('lastLanguageInstructions');
+    refs.languageSelect.value = lastLang ?? 'english';
 }
 
 /**
@@ -1072,15 +1081,19 @@ function populateLanguageSelect(): void {
  */
 async function loadLanguageInstructions(): Promise<void> {
     languageInstructionDrafts = {};
+    languageInstructionOriginals = {};
     for (const lang of LANGUAGES) {
         const val = await storage.getPreference('langInstructions_' + lang.id);
         if (val) {
             languageInstructionDrafts[lang.id] = val;
+            languageInstructionOriginals[lang.id] = val;
         }
     }
+    console.log('[languageInstructions] Loaded drafts:', JSON.stringify(languageInstructionDrafts));
     if (refs) {
-        const currentLang = refs.languageSelect.value;
-        refs.languageInstructionsTextarea.value = languageInstructionDrafts[currentLang] ?? '';
+        currentLanguageDraft = refs.languageSelect.value;
+        refs.languageInstructionsTextarea.value = languageInstructionDrafts[currentLanguageDraft] ?? '';
+        console.log('[languageInstructions] Set textarea for:', currentLanguageDraft);
     }
 }
 
@@ -1089,15 +1102,22 @@ async function loadLanguageInstructions(): Promise<void> {
  * @returns {Promise<void>}
  */
 async function saveLanguageInstructions(): Promise<void> {
+    if (!refs) return;
+    languageInstructionDrafts[currentLanguageDraft] = refs.languageInstructionsTextarea.value;
     for (const lang of LANGUAGES) {
         const key = 'langInstructions_' + lang.id;
-        const val = languageInstructionDrafts[lang.id];
-        if (val) {
-            await storage.savePreference(key, val);
-        } else {
-            await storage.deletePreference(key);
+        const draft = languageInstructionDrafts[lang.id] ?? '';
+        const original = languageInstructionOriginals[lang.id] ?? '';
+        if (draft !== original) {
+            if (draft) {
+                await storage.savePreference(key, draft);
+            } else {
+                await storage.deletePreference(key);
+            }
         }
     }
+    languageInstructionOriginals = { ...languageInstructionDrafts };
+    console.log('[languageInstructions] Saved. Drafts:', JSON.stringify(languageInstructionDrafts));
 }
 
 /**
@@ -1487,11 +1507,6 @@ async function saveSettings(): Promise<void> {
 
     console.log('[defaults] Saved - model:', defaultModel, 'reasoning:', defaultReasoning, 'literalModel:', defaultLiteralModel, 'interpretationModel:', defaultInterpretationModel, 'interpretationReasoning:', defaultInterpretationReasoning, 'quickQuestionModel:', defaultQuickQuestionModel, 'quickQuestionReasoning:', defaultQuickQuestionReasoning, 'questionModel:', defaultQuestionModel, 'questionReasoning:', defaultQuestionReasoning, 'wordDefModel:', defaultWordDefModel, 'wordDefReasoning:', defaultWordDefReasoning);
 
-    // Save the current language instruction draft before saving all
-    if (refs) {
-        const currentLang = refs.languageSelect.value;
-        languageInstructionDrafts[currentLang] = refs.languageInstructionsTextarea.value;
-    }
     await saveLanguageInstructions();
     await saveContextDefinitions();
 
