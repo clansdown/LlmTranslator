@@ -1702,6 +1702,7 @@ function renderTranslationItem(container: HTMLElement, translation: Translation)
                 const targetText = entry?.translation ?? (t as any).translation ?? '';
                 showQuickQuestionModal({
                     sourceText: sourceText,
+                    intentText: entry.intent ?? '',
                     translationText: targetText,
                     systemPrompt: QUICK_QUESTION_TRANSLATION_PROMPT,
                     defaultQuestion: 'What does this mean?'
@@ -3795,7 +3796,8 @@ async function buildQuickQuestionMessage(
     myLanguage: string,
     previousQA: Array<{question: string; answer: string}> = [],
     messageText?: string,
-    translationText?: string
+    translationText?: string,
+    translationInstructions?: string
 ): Promise<string> {
     const background = await getBackground();
 
@@ -3812,14 +3814,21 @@ async function buildQuickQuestionMessage(
 
     if (translationText) {
         message += `<SOURCE_TEXT>${sourceText}</SOURCE_TEXT>\n`;
+        if (intentText) {
+            message += `<INTENT>${intentText}</INTENT>\n`;
+        }
         message += `<TRANSLATION>${translationText}</TRANSLATION>\n`;
     } else if (messageText) {
         message += `<CURRENT_MESSAGE>${messageText}</CURRENT_MESSAGE>\n`;
     } else {
-        message += `<SOURCE_TEXT>${sourceText}</SOURCE_TEXT>\n`;
+        message += `<DRAFT_TEXT>${sourceText}</DRAFT_TEXT>\n`;
         if (intentText) {
             message += `<INTENT>${intentText}</INTENT>\n`;
         }
+    }
+
+    if (translationInstructions) {
+        message += `<REFERENCE_TRANSLATION_INSTRUCTIONS>${translationInstructions}</REFERENCE_TRANSLATION_INSTRUCTIONS>\n\n`;
     }
 
     if (previousQA.length > 0) {
@@ -3972,7 +3981,14 @@ function showQuickQuestionModal(options?: {
             const isTranslationQuestion = options?.translationText !== undefined;
             const isMessageQuestion = !isTranslationQuestion && options?.sourceText !== undefined;
             const sourceText = (isMessageQuestion || isTranslationQuestion) ? (options!.sourceText ?? '') : (document.getElementById('source-textarea') as HTMLTextAreaElement | null)?.value ?? '';
-            const intentText = (isMessageQuestion || isTranslationQuestion) ? '' : (document.getElementById('intent-textarea') as HTMLTextAreaElement | null)?.value ?? '';
+            let intentText: string;
+            if (isMessageQuestion) {
+                intentText = '';
+            } else if (isTranslationQuestion) {
+                intentText = options!.intentText ?? '';
+            } else {
+                intentText = (document.getElementById('intent-textarea') as HTMLTextAreaElement | null)?.value ?? '';
+            }
 
             if (!config || !config.openRouterApiKey) {
                 showErrorInCurrentAnswer('No API key configured.');
@@ -3996,6 +4012,7 @@ function showQuickQuestionModal(options?: {
             }
 
             const reasoningLevel = getQuickQuestionReasoningToUse(session);
+            const translationInstructions = session?.translationInstructions ?? '';
             const effectivePrompt = options?.systemPrompt ?? QUICK_QUESTION_DRAFT_PROMPT;
             const systemPrompt = effectivePrompt
                 .replace(/\[LANGUAGE\]/g, myLangName)
@@ -4003,7 +4020,8 @@ function showQuickQuestionModal(options?: {
             const userMessage = await buildQuickQuestionMessage(
                 question, sourceText, intentText, myLangName, dialogHistory,
                 isMessageQuestion ? sourceText : undefined,
-                options?.translationText
+                options?.translationText,
+                translationInstructions
             );
 
             const abortHandle = streamSendChatMessage(

@@ -678,7 +678,8 @@ export async function translateStructured(
 
     body.reasoning = {
         effort: reasoningLevel,
-        enabled: reasoningLevel !== 'none'
+        exclude: reasoningLevel === 'none',
+        ...(reasoningLevel === 'none' ? { max_tokens: 0 } : {})
     };
 
     body.temperature = temperature;
@@ -780,7 +781,8 @@ export async function sendChatMessage(
 
     body.reasoning = {
         effort: reasoningLevel,
-        enabled: reasoningLevel !== 'none'
+        exclude: reasoningLevel === 'none',
+        ...(reasoningLevel === 'none' ? { max_tokens: 0 } : {})
     };
 
     body.temperature = temperature;
@@ -895,18 +897,21 @@ export function streamChatCompletion(
                 }
             };
 
-            body.reasoning = {
-                effort: reasoningLevel,
-                enabled: reasoningLevel !== 'none'
-            };
+    body.reasoning = {
+        effort: reasoningLevel,
+        exclude: reasoningLevel === 'none',
+        ...(reasoningLevel === 'none' ? { max_tokens: 0 } : {})
+    };
 
-            body.temperature = temperature;
+    body.temperature = temperature;
 
-            if (config?.maxTokens && config.maxTokens > 0) {
-                body.max_tokens = config.maxTokens;
-            }
+    if (config?.maxTokens && config.maxTokens > 0) {
+        body.max_tokens = config.maxTokens;
+    }
 
-            const response = await fetch(OPENROUTER_BASE_URL + "/chat/completions", {
+    const apiStartTime = performance.now();
+
+    const response = await fetch(OPENROUTER_BASE_URL + "/chat/completions", {
                 method: "POST",
                 headers: {
                     "Authorization": "Bearer " + apiKey,
