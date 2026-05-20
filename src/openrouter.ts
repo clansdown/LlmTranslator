@@ -678,8 +678,7 @@ export async function translateStructured(
 
     body.reasoning = {
         effort: reasoningLevel,
-        exclude: reasoningLevel === 'none',
-        ...(reasoningLevel === 'none' ? { max_tokens: 0 } : {})
+        exclude: reasoningLevel === 'none'
     };
 
     body.temperature = temperature;
@@ -781,8 +780,7 @@ export async function sendChatMessage(
 
     body.reasoning = {
         effort: reasoningLevel,
-        exclude: reasoningLevel === 'none',
-        ...(reasoningLevel === 'none' ? { max_tokens: 0 } : {})
+        exclude: reasoningLevel === 'none'
     };
 
     body.temperature = temperature;
@@ -899,8 +897,7 @@ export function streamChatCompletion(
 
     body.reasoning = {
         effort: reasoningLevel,
-        exclude: reasoningLevel === 'none',
-        ...(reasoningLevel === 'none' ? { max_tokens: 0 } : {})
+        exclude: reasoningLevel === 'none'
     };
 
     body.temperature = temperature;

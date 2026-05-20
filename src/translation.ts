@@ -3797,7 +3797,8 @@ async function buildQuickQuestionMessage(
     previousQA: Array<{question: string; answer: string}> = [],
     messageText?: string,
     translationText?: string,
-    translationInstructions?: string
+    translationInstructions?: string,
+    translationTags?: TranslationTag[]
 ): Promise<string> {
     const background = await getBackground();
 
@@ -3827,8 +3828,19 @@ async function buildQuickQuestionMessage(
         }
     }
 
-    if (translationInstructions) {
-        message += `<REFERENCE_TRANSLATION_INSTRUCTIONS>${translationInstructions}</REFERENCE_TRANSLATION_INSTRUCTIONS>\n\n`;
+    if (translationInstructions || (translationTags && translationTags.length > 0)) {
+        let refBlock = '';
+        if (translationInstructions) {
+            refBlock += translationInstructions;
+        }
+        if (translationTags && translationTags.length > 0) {
+            if (refBlock) refBlock += '\n\n';
+            refBlock += 'The following inline tags may be used in the translation to indicate register/formality:\n';
+            refBlock += translationTags.map(function(tag) {
+                return `- ${tag.openTag}...${tag.closeTag}: ${tag.guidance}`;
+            }).join('\n');
+        }
+        message += `<REFERENCE_TRANSLATION_INSTRUCTIONS>${refBlock}</REFERENCE_TRANSLATION_INSTRUCTIONS>\n\n`;
     }
 
     if (previousQA.length > 0) {
@@ -4013,6 +4025,7 @@ function showQuickQuestionModal(options?: {
 
             const reasoningLevel = getQuickQuestionReasoningToUse(session);
             const translationInstructions = session?.translationInstructions ?? '';
+            const translationTags = session?.translationTags;
             const effectivePrompt = options?.systemPrompt ?? QUICK_QUESTION_DRAFT_PROMPT;
             const systemPrompt = effectivePrompt
                 .replace(/\[LANGUAGE\]/g, myLangName)
@@ -4021,7 +4034,8 @@ function showQuickQuestionModal(options?: {
                 question, sourceText, intentText, myLangName, dialogHistory,
                 isMessageQuestion ? sourceText : undefined,
                 options?.translationText,
-                translationInstructions
+                translationInstructions,
+                translationTags
             );
 
             const abortHandle = streamSendChatMessage(
