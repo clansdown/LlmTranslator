@@ -16,8 +16,10 @@ export const LANGUAGES: LanguageOption[] = [
     { id: "spanish", name: "Spanish" },
     { id: "french", name: "French" },
     { id: "german", name: "German" },
+    { id: "greek", name: "Greek" },
     { id: "arabic", name: "Arabic" },
     { id: "portuguese", name: "Portuguese" },
+    { id: "polish", name: "Polish" },
     { id: "russian", name: "Russian" },
     { id: "hindi", name: "Hindi" },
     { id: "italian", name: "Italian" }
