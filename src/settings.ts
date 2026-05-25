@@ -9,6 +9,7 @@ import * as translation from './translation';
 import { saveApiKey } from './main';
 import { LANGUAGES } from './languages';
 import { getDefaultTags } from './defaultTranslationTags';
+import { readCloudPreference, writeCloudPreference } from './opfs';
 import * as cloudSync from './cloudSync';
 import { showBackgroundUpdateModal } from './backgroundUpdate';
 import { STATE } from './state';
@@ -125,6 +126,7 @@ interface SettingsReferences {
     contextsListContainer: HTMLDivElement;
     sessionContextChipsContainer: HTMLDivElement;
     sessionContextDropdown: HTMLDivElement;
+    deviceNameInput: HTMLInputElement;
 }
 
 let refs: SettingsReferences | null = null;
@@ -266,7 +268,8 @@ function openSettingsModal(): void {
             contextCancelButton: settingsModalElement.querySelector('#settings-context-cancel-btn') as HTMLButtonElement,
             contextsListContainer: settingsModalElement.querySelector('#settings-contexts-list') as HTMLDivElement,
             sessionContextChipsContainer: settingsModalElement.querySelector('#settings-session-context-chips') as HTMLDivElement,
-            sessionContextDropdown: settingsModalElement.querySelector('#settings-session-context-dropdown') as HTMLDivElement
+            sessionContextDropdown: settingsModalElement.querySelector('#settings-session-context-dropdown') as HTMLDivElement,
+            deviceNameInput: settingsModalElement.querySelector('#settings-device-name') as HTMLInputElement
         };
 
         setupEventListeners();
@@ -543,6 +546,8 @@ async function populateSettingsForm(): Promise<void> {
     populateDefaultMyLanguageDropdown();
     await populateDefaultModelDropdowns();
     populateModelsTab();
+    const savedDeviceName = await readCloudPreference('deviceName');
+    if (refs) refs.deviceNameInput.value = savedDeviceName ?? '';
     populateCloudSyncSettings();
     populateLanguageSelect();
     await loadLanguageInstructions();
@@ -1509,6 +1514,10 @@ async function saveSettings(): Promise<void> {
 
     await saveLanguageInstructions();
     await saveContextDefinitions();
+
+    if (refs) {
+        await writeCloudPreference('deviceName', refs.deviceNameInput.value);
+    }
 
     settingsModalInstance.hide();
 }

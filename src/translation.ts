@@ -10,7 +10,7 @@ import * as ui from './ui';
 import { LANGUAGES } from './languages';
 import { INPUT_SYSTEM_PROMPT, OUTPUT_SYSTEM_PROMPT, INPUT_INSTRUCTIONS, OUTPUT_INSTRUCTIONS, LITERAL_RETRANSLATION_PROMPT, OUTPUT_LITERAL_RETRANSLATION_PROMPT, QUESTION_SYSTEM_PROMPT, WORD_DEFINITIONS_PROMPT, INTERPRETATION_PROMPT, QUICK_QUESTION_DRAFT_PROMPT, QUICK_QUESTION_MESSAGE_PROMPT, QUICK_QUESTION_TRANSLATION_PROMPT } from './prompts';
 import { renderMarkdown, normalizeForMarkdown } from './markdown';
-import { readLocalFile, writeLocalFile, deleteLocalFile } from './opfs';
+import { readLocalFile, writeLocalFile, deleteLocalFile, getDeviceId } from './opfs';
 import type { Translation, TranslationEntry, TranslationWordItem, WordItem, PunctItem, NewlineItem } from './types/translation';
 import type { StreamingAbortHandle, StreamCallbacks, StreamUsage } from './types/api';
 import type { Config } from './types/config';
@@ -57,6 +57,9 @@ const DRAFT_SAVE_DEBOUNCE_MS = 2000;
 
 /** Prevents multiple quick question modals from stacking */
 let quickQuestionModalOpen = false;
+
+/** Caches the first draft quick question text across modal dismissals */
+let cachedDraftQuickQuestion: string | null = null;
 
 /** Timeout handle for draft auto-save debounce */
 let draftSaveTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -500,8 +503,10 @@ export async function createSession(name?: string): Promise<string> {
 
     const now = Date.now();
 
+    const deviceId = await getDeviceId();
     const newSession: TranslationSession = {
         id: generateUuid(),
+        deviceId: deviceId,
         name: name ?? "New Conversation",
         model: null,
         theirLanguage: 'english',
@@ -685,7 +690,7 @@ export async function initializeDefaultSession(): Promise<void> {
  * @param {boolean} includeQuestions - Whether to include question/answer pairs in history
  * @returns {string} History section or empty string
  */
-function buildHistorySection(includeQuestions: boolean = true, sourcesOnly: boolean = false, respectQuestionToggle: boolean = true): string {
+async function buildHistorySection(includeQuestions: boolean = true, sourcesOnly: boolean = false, respectQuestionToggle: boolean = true): Promise<string> {
     const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
     const now = Date.now();
     const cutoff = now - SEVEN_DAYS_MS;
@@ -710,6 +715,20 @@ function buildHistorySection(includeQuestions: boolean = true, sourcesOnly: bool
 
     translationsWithinDays.sort(function(a, b) { return a.timestamp - b.timestamp; });
 
+    // Load session tags for stripping from output translations
+    let outputTags: TranslationTag[] = [];
+    try {
+        const session = await loadSession(currentSessionId);
+        if (session?.translationTags) outputTags = session.translationTags;
+    } catch {}
+
+    function stripIfNeeded(text: string, pill: string): string {
+        if (pill === 'output' && outputTags.length > 0) {
+            return stripTranslationTags(text, outputTags);
+        }
+        return text;
+    }
+
     let history = "<HISTORY>\n";
     for (const t of translationsWithinDays) {
         ensureEntries(t);
@@ -718,17 +737,17 @@ function buildHistorySection(includeQuestions: boolean = true, sourcesOnly: bool
         if (t.pill === 'input') {
             history += `<THEM>${entry.source}</THEM>\n`;
             if (!sourcesOnly) {
-                history += `<THEM>${entry.translation}</THEM>\n`;
+                history += `<THEM>${stripIfNeeded(entry.translation, 'output')}</THEM>\n`;
             }
         } else if (t.pill === 'output') {
             history += `<ME>${entry.source}</ME>\n`;
             if (!sourcesOnly) {
-                history += `<ME>${entry.translation}</ME>\n`;
+                history += `<ME>${stripIfNeeded(entry.translation, 'output')}</ME>\n`;
             }
         } else if (t.pill === 'question' && includeQuestions && (!respectQuestionToggle || t.includeInContext === true)) {
             history += `<ALREADY_ANSWERED>${entry.source}</ALREADY_ANSWERED>\n`;
             if (!sourcesOnly) {
-                history += `<AGENTANSWER>${entry.translation}</AGENTANSWER>\n`;
+                history += `<AGENTANSWER>${stripIfNeeded(entry.translation, 'question')}</AGENTANSWER>\n`;
             }
         }
     }
@@ -946,7 +965,10 @@ export function setupTranslateButtons(): void {
     if (quickQuestionBtn) {
         quickQuestionBtn.addEventListener('click', function() {
             if (quickQuestionModalOpen) return;
-            showQuickQuestionModal();
+            showQuickQuestionModal(cachedDraftQuickQuestion
+                ? { defaultQuestion: cachedDraftQuickQuestion }
+                : undefined
+            );
         });
     }
 
@@ -1148,7 +1170,7 @@ async function buildUserMessage(pill: 'input' | 'output' | 'question', sourceTex
         message += `<BACKGROUND>${background}</BACKGROUND>\n\n`;
     }
 
-    const history = buildHistorySection(pill !== 'input', false, true);
+    const history = await buildHistorySection(pill !== 'input', false, true);
     if (history) {
         message += history + "\n\n";
     }
@@ -1221,8 +1243,11 @@ export async function translate(mode: 'input' | 'output'): Promise<void> {
             ? (session?.interlocutorName ?? theirLang?.name ?? 'Foreign')
             : 'Me';
 
+        const deviceId = await getDeviceId();
+
         const translation: Translation = {
             id: generateUuid(),
+            deviceId: deviceId,
             pill: mode,
             entries: [{
                 source: sourceText,
@@ -1286,7 +1311,7 @@ async function buildQuestionMessage(questionText: string, myLanguage?: string): 
         message += `<BACKGROUND>${background}</BACKGROUND>\n\n`;
     }
 
-    const history = buildHistorySection(true, true, false);
+    const history = await buildHistorySection(true, true, false);
     if (history) {
         message += history + "\n\n";
     }
@@ -1342,8 +1367,10 @@ export async function askQuestion(): Promise<void> {
         const reasoningLevel = getQuestionReasoningToUse(session);
         console.log(`[askQuestion] Asking question with model: ${effectiveModel}, chars: ${questionText.length}`);
 
+        const deviceId = await getDeviceId();
         const translation: Translation = {
             id: generateUuid(),
+            deviceId: deviceId,
             pill: 'question',
             includeInContext: false,
             entries: [{
@@ -3575,7 +3602,11 @@ async function handleTranslateStreaming(
                     if (result.translation && /\S/.test(result.translation)) {
                         const activeEntry = translation.entries[translation.activeEntryIndex ?? 0];
                         if (activeEntry) {
-                            activeEntry.translation = result.translation;
+                            if (mode === 'output' && session?.translationTags && session.translationTags.length > 0) {
+                                activeEntry.translation = stripTranslationTags(result.translation, session.translationTags);
+                            } else {
+                                activeEntry.translation = result.translation;
+                            }
                         }
                         if (!options?.skipBackgroundTasks) {
                             regenerateIndependentSections(translation.id);
@@ -3834,7 +3865,7 @@ async function buildQuickQuestionMessage(
         message += `<BACKGROUND>${background}</BACKGROUND>\n\n`;
     }
 
-    const history = buildHistorySection(true, true, false);
+    const history = await buildHistorySection(true, true, false);
     if (history) {
         message += history + "\n\n";
     }
@@ -3910,15 +3941,17 @@ export async function appendTranslationFromSync(timestamp: number): Promise<void
     }
 }
 
-/**
- * Opens the quick question modal, wires up the streaming logic, and manages
- * the ephemeral Q&A lifecycle. Supports follow-up questions within the same
- * dialog session. Nothing is persisted when the modal is closed.
- * Accepts optional options for context (sourceText, intentText) and a
- * systemPrompt override (for input message quick questions).
- * @param {{ sourceText?: string; intentText?: string; systemPrompt?: string; defaultQuestion?: string; translationText?: string }} [options] - Context and prompt overrides
- * @returns {void}
- */
+    /**
+     * Shows a quick question modal for asking about a draft or message.
+     * Manages the ephemeral Q&A lifecycle. Supports follow-up questions within the same
+     * dialog session. Nothing is persisted when the modal is closed.
+     * Accepts optional options for context (sourceText, intentText) and a
+     * systemPrompt override (for input message quick questions).
+     * The first draft question text is cached in memory (cachedDraftQuickQuestion) so the
+     * next modal open pre-fills it. Follow-up questions in the same chain do NOT update the cache.
+     * @param {{ sourceText?: string; intentText?: string; systemPrompt?: string; defaultQuestion?: string; translationText?: string }} [options] - Context and prompt overrides
+     * @returns {void}
+     */
 function showQuickQuestionModal(options?: {
     sourceText?: string;
     intentText?: string;
@@ -4010,6 +4043,12 @@ function showQuickQuestionModal(options?: {
             hasAutoScrolledThisAnswer = false;
             const defaultQuestion = options?.defaultQuestion ?? "How's this?";
             const question = questionInput?.value.trim() || defaultQuestion;
+
+            // Cache the first draft question for next time
+            if (dialogHistory.length === 0 && !options?.sourceText && !options?.translationText) {
+                cachedDraftQuickQuestion = question;
+            }
+
             if (submitBtn) submitBtn.disabled = true;
             if (questionInput) questionInput.disabled = true;
             if (thinkingEl) thinkingEl.style.display = 'none';

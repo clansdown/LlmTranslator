@@ -29,6 +29,7 @@ export interface SyncFileInfo {
 export interface SyncConflict {
     path: string;
     localContent: string;
+    remoteContent?: string;
     remoteEtag: string;
     remoteLastModified: string;
 }

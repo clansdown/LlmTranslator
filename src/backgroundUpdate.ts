@@ -357,9 +357,31 @@ export function showBackgroundUpdateModal(sessionId: string): void {
         ]);
 
         const allItems: Translation[] = [...inputItems, ...outputItems, ...questionItems];
+
         allItems.sort(function(a: Translation, b: Translation): number { return a.timestamp - b.timestamp; });
 
         const recentItems: Translation[] = allItems.slice(-MAX_HISTORY_MESSAGES);
+
+        // Load session tags for stripping
+        let outputTags: import('./types/translationTag').TranslationTag[] = [];
+        try {
+            const session = await loadSession(sessionIdLocal);
+            if (session?.translationTags) outputTags = session.translationTags;
+        } catch {}
+
+        function stripIfNeeded(text: string, pill: string): string {
+            if (pill === 'output' && outputTags.length > 0) {
+                let cleaned = text;
+                for (const tag of outputTags) {
+                    const openEscaped = tag.openTag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                    const closeEscaped = tag.closeTag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                    cleaned = cleaned.replace(new RegExp(openEscaped, 'g'), '');
+                    cleaned = cleaned.replace(new RegExp(closeEscaped, 'g'), '');
+                }
+                return cleaned;
+            }
+            return text;
+        }
 
         let history: string = '<HISTORY>\n';
         for (const t of recentItems) {
@@ -370,17 +392,17 @@ export function showBackgroundUpdateModal(sessionId: string): void {
             if (t.pill === 'input') {
                 history += '<THEM>' + entry.source + '</THEM>\n';
                 if (entry.translation) {
-                    history += '<THEM_TRANSLATION>' + entry.translation + '</THEM_TRANSLATION>\n';
+                    history += '<THEM_TRANSLATION>' + stripIfNeeded(entry.translation, 'output') + '</THEM_TRANSLATION>\n';
                 }
             } else if (t.pill === 'output') {
                 history += '<ME>' + entry.source + '</ME>\n';
                 if (entry.translation) {
-                    history += '<ME_TRANSLATION>' + entry.translation + '</ME_TRANSLATION>\n';
+                    history += '<ME_TRANSLATION>' + stripIfNeeded(entry.translation, 'output') + '</ME_TRANSLATION>\n';
                 }
             } else if (t.pill === 'question') {
                 history += '<ALREADY_ANSWERED>' + entry.source + '</ALREADY_ANSWERED>\n';
                 if (entry.translation) {
-                    history += '<AGENTANSWER>' + entry.translation + '</AGENTANSWER>\n';
+                    history += '<AGENTANSWER>' + stripIfNeeded(entry.translation, 'question') + '</AGENTANSWER>\n';
                 }
             }
         }

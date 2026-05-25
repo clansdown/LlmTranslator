@@ -336,3 +336,28 @@ export async function walkOpfsDirectory(dir: FileSystemDirectoryHandle, prefix: 
 
     return files;
 }
+
+/**
+ * Gets or creates a persistent device identifier for this browser/computer.
+ * Stored in /cloud/preferences/ so it's shared across all FindForge apps.
+ * Never synced to the cloud.
+ * @returns {Promise<string>} Unique device ID
+ */
+export async function getDeviceId(): Promise<string> {
+    const existing = await readCloudPreference('deviceId');
+    if (existing) return existing;
+    const id = crypto.randomUUID();
+    await writeCloudPreference('deviceId', id);
+    return id;
+}
+
+/**
+ * Gets the human-readable device name for this browser/computer.
+ * Stored in /cloud/preferences/ so it's shared across all FindForge apps.
+ * Never synced to the cloud. Returns empty string if not set.
+ * @returns {Promise<string>} Device name or empty string
+ */
+export async function getDeviceName(): Promise<string> {
+    const existing = await readCloudPreference('deviceName');
+    return existing ?? '';
+}

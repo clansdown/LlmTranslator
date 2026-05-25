@@ -6,6 +6,7 @@ export type ReasoningLevel = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'x
 
 export interface TranslationSession {
     id: string;
+    deviceId?: string;
     name: string;
     model: string | null;
     theirLanguage: string;

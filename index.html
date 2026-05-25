@@ -723,6 +723,10 @@
                                         <label for="settings-default-my-language" class="form-label">Default My Language</label>
                                         <select id="settings-default-my-language" class="form-select"></select>
                                     </div>
+                                    <div class="col">
+                                        <label for="settings-device-name" class="form-label">Device Name</label>
+                                        <input type="text" id="settings-device-name" class="form-control" placeholder="e.g. My Laptop, Office Desktop">
+                                    </div>
                                 </div>
                                 <hr>
                                 <h6>New Conversation Defaults</h6>
@@ -1245,6 +1249,37 @@
                         <div class="modal-footer">
                             <button type="button" class="btn btn-primary sync-conflict-confirm-btn" data-bs-dismiss="modal">Confirm Resolutions</button>
                         </div>
+                    </div>
+                </div>
+            </div>
+        </template>
+
+        <!-- sync-conflict-item-template: A single conflict row showing local vs cloud content -->
+        <template id="sync-conflict-item-template">
+            <div class="sync-conflict-item mb-3 border rounded p-2">
+                <div class="small text-muted mb-1">
+                    <span class="sync-conflict-path"></span> <span class="sync-conflict-type badge bg-secondary ms-1"></span>
+                </div>
+                <div class="row g-2">
+                    <div class="col-6 border-end">
+                        <div class="small fw-bold text-success">Local <span class="sync-conflict-local-when badge bg-light text-dark"></span></div>
+                        <div class="small text-muted sync-conflict-local-device"></div>
+                        <div class="mt-1 sync-conflict-local-preview small"></div>
+                    </div>
+                    <div class="col-6">
+                        <div class="small fw-bold text-primary">Cloud <span class="sync-conflict-cloud-when badge bg-light text-dark"></span></div>
+                        <div class="small text-muted sync-conflict-cloud-device"></div>
+                        <div class="mt-1 sync-conflict-cloud-preview small"></div>
+                    </div>
+                </div>
+                <div class="mt-2">
+                    <div class="form-check form-check-inline">
+                        <input class="form-check-input sync-conflict-choice-local" type="radio" name="conflict-radio" value="local" checked>
+                        <label class="form-check-label sync-conflict-keep-local-label">Keep Local</label>
+                    </div>
+                    <div class="form-check form-check-inline">
+                        <input class="form-check-input sync-conflict-choice-cloud" type="radio" name="conflict-radio" value="cloud">
+                        <label class="form-check-label sync-conflict-download-cloud-label">Download Cloud</label>
                     </div>
                 </div>
             </div>

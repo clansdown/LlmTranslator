@@ -84,6 +84,7 @@ export interface TranslationEntry {
  */
 export interface Translation {
     id: string;
+    deviceId?: string;
     pill: 'input' | 'output' | 'question';
     entries: TranslationEntry[];
     activeEntryIndex: number;

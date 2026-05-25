@@ -6,7 +6,7 @@
 
 import { Modal } from 'bootstrap';
 import { getClerkToken, isSignedIn, isClerkEnabled } from './auth';
-import { getOPFSHandle, ensureDirectory, readCloudPreference, writeCloudPreference, readLocalFile, writeLocalFile, deleteLocalFile, walkOpfsDirectory, getCredentialsHandle } from './opfs';
+import { getOPFSHandle, ensureDirectory, readCloudPreference, writeCloudPreference, readLocalFile, writeLocalFile, deleteLocalFile, walkOpfsDirectory, getCredentialsHandle, getDeviceId, getDeviceName } from './opfs';
 import { STATE } from './state';
 import * as ui from './ui';
 import type { SyncFileInfo, SyncConflict, SyncDeletion, SyncActions, SyncManifest, WorkerErrorResponse, SyncJournalEntry } from './types/cloudSync';
@@ -791,7 +791,21 @@ async function executeDeletions(deletions: SyncDeletion[], onSuccess?: (deleted:
 }
 
 /**
- * Shows a per-file sync conflict resolution modal with local/remote timestamps.
+ * Returns the first N words of text, with ellipsis if truncated
+ * @param {string} text - Input text
+ * @param {number} n - Number of words
+ * @returns {string} Truncated text
+ */
+function firstNWords(text: string, n: number): string {
+    if (!text) return '';
+    const words = text.split(/\s+/).filter(Boolean);
+    if (words.length <= n) return text;
+    return words.slice(0, n).join(' ') + '...';
+}
+
+/**
+ * Shows a per-file sync conflict resolution modal with content previews.
+ * Loads remote content for each conflict before displaying.
  * @param {SyncConflict[]} conflicts - Files with changes on both sides
  * @param {Map<string, { content: string | null; hash: string; mtime: number }>} localManifest - Local files with metadata
  * @param {Map<string, SyncFileInfo>} remoteMap - Remote files with metadata
@@ -803,7 +817,8 @@ export async function showConflictModal(
     remoteMap: Map<string, SyncFileInfo>
 ): Promise<Map<string, 'local' | 'remote'>> {
     const template = document.getElementById('sync-conflict-modal-template') as HTMLTemplateElement | null;
-    if (!template) {
+    const itemTemplate = document.getElementById('sync-conflict-item-template') as HTMLTemplateElement | null;
+    if (!template || !itemTemplate) {
         const resolutions = new Map<string, 'local' | 'remote'>();
         for (const conflict of conflicts) {
             const choice = confirm(
@@ -817,6 +832,8 @@ export async function showConflictModal(
         return resolutions;
     }
 
+    const deviceName = await getDeviceName();
+
     return new Promise(function(resolve) {
         const clone = template.content.cloneNode(true) as DocumentFragment;
         const modalEl = clone.querySelector('.modal') as HTMLElement;
@@ -824,59 +841,117 @@ export async function showConflictModal(
         const confirmBtn = clone.querySelector('.sync-conflict-confirm-btn') as HTMLButtonElement;
 
         for (const conflict of conflicts) {
+            const itemClone = itemTemplate.content.cloneNode(true) as DocumentFragment;
+            const itemEl = itemClone.firstElementChild as HTMLElement;
+
             const localMtime = localManifest.get(conflict.path)?.mtime;
-            const remoteMtime = remoteMap.get(conflict.path)?.lastModified;
+            const remoteMtimeStr = remoteMap.get(conflict.path)?.lastModified;
 
-            const li = document.createElement('div');
-            li.className = 'list-group-item';
+            // Determine file type and extract preview
+            let fileType = 'file';
+            let localSource = '';
+            let localTranslation = '';
+            let localPill = '';
+            let remoteSource = '';
+            let remoteTranslation = '';
+            let remotePill = '';
+            let remoteDevice = '';
 
-            const pathStrong = document.createElement('strong');
-            pathStrong.textContent = conflict.path;
-            li.appendChild(pathStrong);
+            if (conflict.path.includes('/translations/')) {
+                fileType = 'translation';
+                try {
+                    const localData = JSON.parse(conflict.localContent) as { pill?: string; entries?: Array<{ source?: string; translation?: string }>; deviceId?: string };
+                    localPill = localData.pill ?? '';
+                    localSource = localData.entries?.[0]?.source ?? '';
+                    localTranslation = localData.entries?.[0]?.translation ?? '';
+                } catch {}
+                if (conflict.remoteContent) {
+                    try {
+                        const remoteData = JSON.parse(conflict.remoteContent) as { pill?: string; entries?: Array<{ source?: string; translation?: string }>; deviceId?: string };
+                        remotePill = remoteData.pill ?? '';
+                        remoteSource = remoteData.entries?.[0]?.source ?? '';
+                        remoteTranslation = remoteData.entries?.[0]?.translation ?? '';
+                        remoteDevice = remoteData.deviceId ?? '';
+                    } catch {}
+                }
+            } else if (conflict.path.includes('/session.json')) {
+                fileType = 'session';
+                try {
+                    const localData = JSON.parse(conflict.localContent) as { name?: string };
+                    localSource = localData.name ?? '';
+                } catch {}
+                if (conflict.remoteContent) {
+                    try {
+                        const remoteData = JSON.parse(conflict.remoteContent) as { name?: string; deviceId?: string };
+                        remoteSource = remoteData.name ?? '';
+                        remoteDevice = remoteData.deviceId ?? '';
+                    } catch {}
+                }
+            } else if (conflict.path.startsWith('preferences/')) {
+                fileType = 'preference';
+                localSource = conflict.localContent.length > 50 ? conflict.localContent.substring(0, 50) + '...' : conflict.localContent;
+                if (conflict.remoteContent) {
+                    remoteSource = conflict.remoteContent.length > 50 ? conflict.remoteContent.substring(0, 50) + '...' : conflict.remoteContent;
+                }
+            }
 
-            const timeDiv = document.createElement('div');
-            timeDiv.className = 'text-muted small mb-2';
-            timeDiv.textContent = 'Local: ' + (localMtime ? new Date(localMtime).toLocaleString() : 'unknown') +
-                ' — Remote: ' + (remoteMtime ? new Date(remoteMtime).toLocaleString() : 'unknown');
-            li.appendChild(timeDiv);
+            const localWhen = localMtime ? timeAgo(localMtime) : 'unknown';
+            const remoteWhen = remoteMtimeStr ? timeAgo(new Date(remoteMtimeStr).getTime()) : 'unknown';
 
-            const btnGroup = document.createElement('div');
-            btnGroup.className = 'btn-group btn-group-sm conflict-btn-group';
-            btnGroup.setAttribute('role', 'group');
-            btnGroup.setAttribute('aria-label', 'Conflict resolution for ' + conflict.path);
+            // Build path display and file type badge
+            const pathEl = itemEl.querySelector('.sync-conflict-path') as HTMLElement;
+            const typeEl = itemEl.querySelector('.sync-conflict-type') as HTMLElement;
+            if (pathEl) pathEl.textContent = conflict.path;
+            if (typeEl) typeEl.textContent = fileType;
 
-            const localRadio = document.createElement('input');
-            localRadio.type = 'radio';
-            localRadio.className = 'btn-check';
-            localRadio.name = 'conflict-' + conflict.path;
-            localRadio.id = 'conflict-local-' + conflict.path;
-            localRadio.value = 'local';
-            localRadio.checked = true;
+            // Local pane
+            const localWhenEl = itemEl.querySelector('.sync-conflict-local-when') as HTMLElement;
+            const localDeviceEl = itemEl.querySelector('.sync-conflict-local-device') as HTMLElement;
+            const localPreviewEl = itemEl.querySelector('.sync-conflict-local-preview') as HTMLElement;
+            if (localWhenEl) localWhenEl.textContent = localWhen;
+            if (localDeviceEl) localDeviceEl.textContent = deviceName ? 'Device: ' + deviceName : '';
+            if (localPreviewEl) {
+                if (fileType === 'translation') {
+                    const parts: string[] = [];
+                    if (localPill) parts.push('Type: ' + localPill);
+                    if (localSource) parts.push('Source: ' + firstNWords(localSource, 10));
+                    if (localTranslation) parts.push('Translation: ' + firstNWords(localTranslation, 10));
+                    localPreviewEl.textContent = parts.join('\n');
+                } else if (fileType === 'session') {
+                    localPreviewEl.textContent = 'Session: ' + (localSource || '(unnamed)');
+                } else {
+                    localPreviewEl.textContent = localSource || '(empty)';
+                }
+            }
 
-            const localLabel = document.createElement('label');
-            localLabel.className = 'btn btn-outline-primary';
-            localLabel.htmlFor = localRadio.id;
-            localLabel.textContent = 'Keep Local';
+            // Cloud pane
+            const cloudWhenEl = itemEl.querySelector('.sync-conflict-cloud-when') as HTMLElement;
+            const cloudDeviceEl = itemEl.querySelector('.sync-conflict-cloud-device') as HTMLElement;
+            const cloudPreviewEl = itemEl.querySelector('.sync-conflict-cloud-preview') as HTMLElement;
+            if (cloudWhenEl) cloudWhenEl.textContent = remoteWhen;
+            if (cloudDeviceEl) cloudDeviceEl.textContent = remoteDevice ? 'Device: ' + remoteDevice.slice(0, 8) : '';
+            if (cloudPreviewEl) {
+                if (fileType === 'translation') {
+                    const parts: string[] = [];
+                    if (remotePill) parts.push('Type: ' + remotePill);
+                    if (remoteSource) parts.push('Source: ' + firstNWords(remoteSource, 10));
+                    if (remoteTranslation) parts.push('Translation: ' + firstNWords(remoteTranslation, 10));
+                    cloudPreviewEl.textContent = parts.join('\n');
+                } else if (fileType === 'session') {
+                    cloudPreviewEl.textContent = 'Session: ' + (remoteSource || '(unnamed)');
+                } else {
+                    cloudPreviewEl.textContent = remoteSource || '(no remote content)';
+                }
+            }
 
-            const remoteRadio = document.createElement('input');
-            remoteRadio.type = 'radio';
-            remoteRadio.className = 'btn-check';
-            remoteRadio.name = 'conflict-' + conflict.path;
-            remoteRadio.id = 'conflict-remote-' + conflict.path;
-            remoteRadio.value = 'remote';
+            // Wire radio buttons with unique name
+            const radioName = 'conflict-' + conflict.path.replace(/[^a-zA-Z0-9]/g, '_');
+            const radioLocal = itemEl.querySelector('.sync-conflict-choice-local') as HTMLInputElement | null;
+            const radioCloud = itemEl.querySelector('.sync-conflict-choice-cloud') as HTMLInputElement | null;
+            if (radioLocal) { radioLocal.name = radioName; radioLocal.checked = true; }
+            if (radioCloud) { radioCloud.name = radioName; }
 
-            const remoteLabel = document.createElement('label');
-            remoteLabel.className = 'btn btn-outline-secondary';
-            remoteLabel.htmlFor = remoteRadio.id;
-            remoteLabel.textContent = 'Download Remote';
-
-            btnGroup.appendChild(localRadio);
-            btnGroup.appendChild(localLabel);
-            btnGroup.appendChild(remoteRadio);
-            btnGroup.appendChild(remoteLabel);
-            li.appendChild(btnGroup);
-
-            listEl.appendChild(li);
+            listEl.appendChild(itemClone);
         }
 
         document.body.appendChild(clone);
@@ -888,7 +963,8 @@ export async function showConflictModal(
 
             const resolutions = new Map<string, 'local' | 'remote'>();
             for (const conflict of conflicts) {
-                const localRadioEl = document.getElementById('conflict-local-' + conflict.path) as HTMLInputElement | null;
+                const radioName = 'conflict-' + conflict.path.replace(/[^a-zA-Z0-9]/g, '_');
+                const localRadioEl = document.querySelector('input[name="' + radioName + '"][value="local"]') as HTMLInputElement | null;
                 resolutions.set(conflict.path, localRadioEl?.checked ? 'local' : 'remote');
             }
             resolve(resolutions);
@@ -905,6 +981,23 @@ export async function showConflictModal(
 
         modal.show();
     });
+}
+
+/**
+ * Converts a timestamp to a human-readable "time ago" string
+ * @param {number} timestamp - Milliseconds since epoch
+ * @returns {string} Human-readable relative time
+ */
+function timeAgo(timestamp: number): string {
+    const diff = Date.now() - timestamp;
+    const seconds = Math.floor(diff / 1000);
+    if (seconds < 60) return 'just now';
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return minutes + 'm ago';
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return hours + 'h ago';
+    const days = Math.floor(hours / 24);
+    return days + 'd ago';
 }
 
 /**
@@ -1314,6 +1407,16 @@ async function syncFromCloudInternal(options?: { forceRemoteWins?: boolean }): P
                 actions.downloads.push(conflict.path);
             }
         } else {
+            // Load remote content for display in conflict modal
+            for (const conflict of actions.conflicts) {
+                if (!conflict.path.endsWith('.png')) {
+                    try {
+                        conflict.remoteContent = await downloadFile(conflict.path) as string;
+                    } catch {
+                        // Remote content not available — show what we can
+                    }
+                }
+            }
             const resolutions = await showConflictModal(actions.conflicts, localManifest, remoteMap);
             for (const conflict of actions.conflicts) {
                 const choice = resolutions.get(conflict.path) ?? 'local';
