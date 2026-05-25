@@ -147,6 +147,8 @@ interface StreamingState {
     accumulatedReasoning: string;
     lastRenderedBreakIndex: number;
     translationComplete: boolean;
+    sectionsComplete: boolean;
+    milestoneSaved: number;
     backgroundTasksTriggered: boolean;
 }
 
@@ -2449,7 +2451,7 @@ export async function regenerateInterpretation(translationId: string): Promise<v
                     iRefs.regenerateInterpretationBtn.style.display = 'none';
                 }
             },
-            onDone: function(fullText: string, fullReasoning: string, generationId: string | null): void {
+            onDone: function(fullText: string, fullReasoning: string, generationId: string | null, usage?: StreamUsage): void {
                 interpretationAbortMap.delete(translation);
                 entry.interpretation = fullText;
                 entry.interpretationPending = false;
@@ -2457,8 +2459,15 @@ export async function regenerateInterpretation(translationId: string): Promise<v
                 if (iRefs?.interpretationThinkingEl) {
                     iRefs.interpretationThinkingEl.style.display = 'none';
                 }
-                if (generationId) {
-                    storeGenerationInfo(generationId, config!.openRouterApiKey!, entry);
+                if (usage && entry) {
+                    entry.usage = {
+                        promptTokens: usage.prompt_tokens,
+                        completionTokens: usage.completion_tokens,
+                        totalTokens: usage.total_tokens
+                    };
+                }
+                if (generationId && entry) {
+                    entry.generationId = generationId;
                 }
                 syncTopLevelFromActive(translation);
                 saveSessionTranslation(currentSessionId, translation);
@@ -2556,11 +2565,8 @@ export async function regenerateIndependentSections(translationId: string): Prom
                 const wordText = translation.pill === 'input'
                     ? entry.source
                     : entry.translation;
-                const { xml: wordXml, generationId: wordGenerationId } = await fetchWordDefinitions(wordDefModel, getWordDefReasoningToUse(session), wordText, myLangName);
+                const { xml: wordXml } = await fetchWordDefinitions(wordDefModel, getWordDefReasoningToUse(session), wordText, myLangName);
                 entry.wordDefinitions = wordXml;
-
-                // Fetch generation info after 1s delay
-                storeGenerationInfo(wordGenerationId, config!.openRouterApiKey!, entry);
 
                 entry.wordData = parseWordDefinitions(wordXml);
                 console.log('[wordDefinitions] Parsed', entry.wordData.length, 'word items');
@@ -2612,7 +2618,7 @@ export async function regenerateIndependentSections(translationId: string): Prom
                         iRefs.regenerateInterpretationBtn.style.display = 'none';
                     }
                 },
-                onDone: function(fullText: string, fullReasoning: string, generationId: string | null): void {
+                onDone: function(fullText: string, fullReasoning: string, generationId: string | null, usage?: StreamUsage): void {
                     interpretationAbortMap.delete(translation);
                     entry.interpretation = fullText;
                     entry.interpretationPending = false;
@@ -2620,8 +2626,15 @@ export async function regenerateIndependentSections(translationId: string): Prom
                     if (iRefs?.interpretationThinkingEl) {
                         iRefs.interpretationThinkingEl.style.display = 'none';
                     }
-                    if (generationId) {
-                        storeGenerationInfo(generationId, config!.openRouterApiKey!, entry);
+                    if (usage && entry) {
+                        entry.usage = {
+                            promptTokens: usage.prompt_tokens,
+                            completionTokens: usage.completion_tokens,
+                            totalTokens: usage.total_tokens
+                        };
+                    }
+                    if (generationId && entry) {
+                        entry.generationId = generationId;
                     }
                     syncTopLevelFromActive(translation);
                     saveSessionTranslation(currentSessionId, translation);
@@ -3163,52 +3176,6 @@ function hideTagPopup(): void {
 
 // ===== Streaming Orchestration Functions =====
 
-/**
- * Fetches generation info from OpenRouter after a 1-second delay.
- * Required because OpenRouter's generation info endpoint needs time to propagate.
- * @param {string} apiKey - OpenRouter API key
- * @param {string} generationId - Generation ID from the API response
- * @returns {Promise<import('./types/api').GenerationInfo | null>} Generation info or null on failure
- */
-async function fetchGenerationInfoWithDelay(apiKey: string, generationId: string): Promise<import('./types/api').GenerationInfo | null> {
-    await new Promise(function(resolve) { return setTimeout(resolve, 3000); });
-    try {
-        const { getGenerationInfo } = await import('./openrouter');
-        const info = await getGenerationInfo(apiKey, generationId);
-        console.log('[GenerationInfo] ID:', generationId, 'Tokens:', info.usage, 'Cost:', info.cost);
-        return info;
-    } catch (error) {
-        console.error('[GenerationInfo] Failed for', generationId, ':', error);
-        return null;
-    }
-}
-
-/**
- * Stores generation info (usage tokens, cost) on a TranslationEntry.
- * Only stores if generationId is provided and entry exists.
- * @param {string | null} generationId - OpenRouter generation ID
- * @param {string} apiKey - OpenRouter API key
- * @param {import('./types/translation').TranslationEntry | null | undefined} entry - Entry to store info on
- * @returns {Promise<void>}
- */
-async function storeGenerationInfo(
-    generationId: string | null,
-    apiKey: string,
-    entry: TranslationEntry | null | undefined
-): Promise<void> {
-    if (!generationId || !entry) return;
-    const genInfo = await fetchGenerationInfoWithDelay(apiKey, generationId);
-    if (genInfo) {
-        entry.generationId = generationId;
-        entry.usage = {
-            promptTokens: genInfo.usage?.prompt_tokens,
-            completionTokens: genInfo.usage?.completion_tokens,
-            totalTokens: genInfo.usage?.total_tokens
-        };
-        entry.cost = genInfo.cost;
-    }
-}
-
 // ===== Literal Retranslation Streaming =====
 
 /**
@@ -3303,9 +3270,15 @@ function handleLiteralRetranslationStreaming(
             onDone: function(fullText: string, fullReasoning: string, generationId: string | null, usage?: StreamUsage): void {
                 literalStreamingStateMap.delete(translation);
 
-                // Fetch generation info after 1s delay
-                if (generationId) {
-                    storeGenerationInfo(generationId, config!.openRouterApiKey!, entry);
+                if (usage && entry) {
+                    entry.usage = {
+                        promptTokens: usage.prompt_tokens,
+                        completionTokens: usage.completion_tokens,
+                        totalTokens: usage.total_tokens
+                    };
+                }
+                if (generationId && entry) {
+                    entry.generationId = generationId;
                 }
 
                 entry.literalRetranslation = fullText;
@@ -3435,11 +3408,8 @@ async function startBackgroundTasksAfterStreaming(
         tasks.push((async () => {
             try {
                 console.log('[wordDefinitions] Starting word definitions with model:', wordDefModel);
-                const { xml: wordXml, generationId: wordGenerationId } = await fetchWordDefinitions(wordDefModel, getWordDefReasoningToUse(session), translationText, myLangName);
+                const { xml: wordXml } = await fetchWordDefinitions(wordDefModel, getWordDefReasoningToUse(session), translationText, myLangName);
                 translation.entries[0].wordDefinitions = wordXml;
-
-                // Fetch generation info after 1s delay
-                storeGenerationInfo(wordGenerationId, config!.openRouterApiKey!, translation.entries[0]);
 
                 translation.entries[0].wordData = parseWordDefinitions(wordXml);
                 console.log('[wordDefinitions] Parsed', translation.entries[0].wordData.length, 'word items');
@@ -3462,7 +3432,7 @@ async function startBackgroundTasksAfterStreaming(
             try {
                 const message = await buildInterpretationMessage(translation);
                 console.log('[interpretation] Starting interpretation with model:', interpModel);
-                const { content: interpretationResult, generationId } = await sendChatMessage(
+                const { content: interpretationResult } = await sendChatMessage(
                     config!.openRouterApiKey!,
                     message,
                     INTERPRETATION_PROMPT,
@@ -3471,9 +3441,6 @@ async function startBackgroundTasksAfterStreaming(
                     config!.temperature
                 );
                 translation.entries[0].interpretation = interpretationResult;
-
-                // Fetch generation info after 1s delay
-                storeGenerationInfo(generationId, config!.openRouterApiKey!, translation.entries[0]);
 
                 translation.entries[0].interpretationPending = false;
                 syncTopLevelFromActive(translation);
@@ -3613,6 +3580,39 @@ async function handleTranslateStreaming(
                         }
                     }
                 }
+
+                // Detect when explanation or nuances sections finish
+                if (!streamState.sectionsComplete && (text.includes('</EXPLANATION>') || text.includes('</NUANCES>'))) {
+                    streamState.sectionsComplete = true;
+                }
+
+                // Save to OPFS at each milestone
+                const shouldSave = (streamState.translationComplete && !(streamState.milestoneSaved & 1))
+                    || (streamState.sectionsComplete && !(streamState.milestoneSaved & 2));
+
+                if (shouldSave) {
+                    const partialResult = extractStructuredResult(text);
+                    const activeEntry = translation.entries[translation.activeEntryIndex ?? 0];
+                    if (activeEntry) {
+                        if (partialResult.translation) {
+                            if (mode === 'output' && session?.translationTags && session.translationTags.length > 0) {
+                                activeEntry.translation = stripTranslationTags(partialResult.translation, session.translationTags);
+                            } else {
+                                activeEntry.translation = partialResult.translation;
+                            }
+                        }
+                        if (partialResult.explanation) activeEntry.explanation = partialResult.explanation;
+                        if (partialResult.nuances) activeEntry.nuances = partialResult.nuances;
+                    }
+                    syncTopLevelFromActive(translation);
+
+                    let milestoneBit = 0;
+                    if (streamState.translationComplete) milestoneBit |= 1;
+                    if (streamState.sectionsComplete) milestoneBit |= 2;
+                    streamState.milestoneSaved = milestoneBit;
+
+                    saveSessionTranslation(currentSessionId, translation);
+                }
             },
             onDone: function(fullText: string, fullReasoning: string, generationId: string | null, usage?: StreamUsage): void {
                 const streamState = streamingStateMap.get(translation);
@@ -3736,6 +3736,8 @@ async function handleTranslateStreaming(
         accumulatedReasoning: '',
         lastRenderedBreakIndex: 0,
         translationComplete: false,
+        sectionsComplete: false,
+        milestoneSaved: 0,
         backgroundTasksTriggered: false
     });
 }
@@ -3782,9 +3784,16 @@ async function handleQuestionStreaming(
             onDone: function(fullText: string, fullReasoning: string, generationId: string | null, usage?: StreamUsage): void {
                 streamingStateMap.delete(translation);
 
-                // Fetch generation info after 1s delay (fire-and-forget)
-                if (generationId) {
-                    storeGenerationInfo(generationId, config!.openRouterApiKey!, translation.entries[0]);
+                const qEntry = translation.entries[0];
+                if (usage && qEntry) {
+                    qEntry.usage = {
+                        promptTokens: usage.prompt_tokens,
+                        completionTokens: usage.completion_tokens,
+                        totalTokens: usage.total_tokens
+                    };
+                }
+                if (generationId && qEntry) {
+                    qEntry.generationId = generationId;
                 }
 
                 translation.entries[0].translation = fullText;
@@ -3827,6 +3836,8 @@ async function handleQuestionStreaming(
         accumulatedReasoning: '',
         lastRenderedBreakIndex: 0,
         translationComplete: false,
+        sectionsComplete: false,
+        milestoneSaved: 0,
         backgroundTasksTriggered: false
     });
 }

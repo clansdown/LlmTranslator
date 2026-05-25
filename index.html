@@ -652,7 +652,7 @@
 
     <!-- settings-modal-template: Large modal for application settings -->
     <template id="settings-modal-template">
-        <div class="modal fade" tabindex="-1" aria-labelledby="settings-modal-title">
+        <div class="modal fade" tabindex="-1" aria-labelledby="settings-modal-title" data-bs-focus="false">
             <div class="modal-dialog modal-xl">
                 <div class="modal-content">
                     <div class="modal-header">
@@ -1123,7 +1123,7 @@
 
         <!-- auth-modal-template: Bootstrap modal for Clerk sign-in/sign-up -->
         <template id="auth-modal-template">
-            <div class="modal fade" tabindex="-1" aria-hidden="true">
+            <div class="modal fade" tabindex="-1" aria-hidden="true" data-bs-focus="false">
                 <div class="modal-dialog modal-sm modal-dialog-centered">
                     <div class="modal-content">
                         <div class="modal-body" id="auth-modal-body"></div>
@@ -1134,7 +1134,7 @@
 
         <!-- quick-question-modal-template: Modal for asking a quick question about the current draft -->
         <template id="quick-question-modal-template">
-            <div class="modal fade" tabindex="-1" role="dialog" aria-labelledby="quick-question-modal-title" aria-hidden="true">
+            <div class="modal fade" tabindex="-1" role="dialog" aria-labelledby="quick-question-modal-title" aria-hidden="true" data-bs-focus="false">
                 <div class="modal-dialog modal-lg">
                     <div class="modal-content">
                         <div class="modal-header">
@@ -1167,7 +1167,7 @@
 
         <!-- sync-deletion-modal-template: Modal for confirming deletions during sync -->
         <template id="sync-deletion-modal-template">
-            <div class="modal fade" tabindex="-1">
+            <div class="modal fade" tabindex="-1" data-bs-focus="false">
                 <div class="modal-dialog">
                     <div class="modal-content">
                         <div class="modal-header">
@@ -1189,7 +1189,7 @@
 
         <!-- initial-sync-modal-template: Modal shown on first-time cloud sync for new devices -->
         <template id="initial-sync-modal-template">
-            <div class="modal fade" tabindex="-1" aria-labelledby="initial-sync-modal-title" aria-hidden="true">
+            <div class="modal fade" tabindex="-1" aria-labelledby="initial-sync-modal-title" aria-hidden="true" data-bs-focus="false">
                 <div class="modal-dialog modal-dialog-centered">
                     <div class="modal-content">
                         <div class="modal-header">
@@ -1213,7 +1213,7 @@
 
         <!-- resync-choice-modal-template: Modal for choosing priority during complete re-sync -->
         <template id="resync-choice-modal-template">
-            <div class="modal fade" tabindex="-1" aria-hidden="true">
+            <div class="modal fade" tabindex="-1" aria-hidden="true" data-bs-focus="false">
                 <div class="modal-dialog modal-dialog-centered">
                     <div class="modal-content">
                         <div class="modal-header">
@@ -1235,7 +1235,7 @@
 
         <!-- sync-conflict-modal-template: Modal for resolving sync conflicts per-file -->
         <template id="sync-conflict-modal-template">
-            <div class="modal fade" tabindex="-1">
+            <div class="modal fade" tabindex="-1" data-bs-focus="false">
                 <div class="modal-dialog modal-lg">
                     <div class="modal-content">
                         <div class="modal-header">

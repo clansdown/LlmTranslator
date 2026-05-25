@@ -1,6 +1,6 @@
 /**
  * Service Worker for LlmTranslator PWA
- * - JS/CSS: cache-first (instant load from cache, hash-busted on deploy)
+ * - JS/CSS: network-first with cache:no-cache (forces ETag validation on every load)
  * - HTML: network-first with cache:no-cache (forces ETag validation on every load)
  * - Images: network-first (offline fallback)
  */
@@ -48,7 +48,7 @@ self.addEventListener('fetch', function(event) {
     }
 
     if (url.pathname.endsWith('.js') || url.pathname.endsWith('.css')) {
-        event.respondWith(cacheFirst(event.request));
+        event.respondWith(networkFirst(event.request, STATIC_CACHE, event));
     } else if (event.request.mode === 'navigate' || url.pathname === '/' || url.pathname.endsWith('.html')) {
         event.respondWith(networkFirst(event.request, DYNAMIC_CACHE, event));
     } else if (url.pathname.match(/\.(png|jpg|jpeg|svg|ico)$/)) {
@@ -76,7 +76,7 @@ function cacheFirst(request) {
 }
 
 function networkFirst(request, cacheName, fetchEvent) {
-    const fetchOptions = (fetchEvent.request.mode === 'navigate' || request.url.endsWith('.html'))
+    const fetchOptions = (fetchEvent.request.mode === 'navigate' || request.url.endsWith('.html') || request.url.endsWith('.js') || request.url.endsWith('.css'))
         ? { cache: 'no-cache' }
         : {};
     return fetch(request, fetchOptions).then(function(response) {

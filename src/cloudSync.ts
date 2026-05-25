@@ -5,7 +5,7 @@
  */
 
 import { Modal } from 'bootstrap';
-import { getClerkToken, isSignedIn, isClerkEnabled } from './auth';
+import { getClerkToken, isSignedIn, isClerkEnabled, getUserId } from './auth';
 import { getOPFSHandle, ensureDirectory, readCloudPreference, writeCloudPreference, readLocalFile, writeLocalFile, deleteLocalFile, walkOpfsDirectory, getCredentialsHandle, getDeviceId, getDeviceName } from './opfs';
 import { STATE } from './state';
 import * as ui from './ui';
@@ -271,6 +271,8 @@ export async function uploadFile(path: string, content: string | Blob): Promise<
     const requestPath = path.startsWith('credentials/') ? path.slice('credentials/'.length) : path;
     const url = WORKER_BASE_URL + '/' + cloudPrefix + encodeURIComponent(requestPath);
 
+    console.log('[cloudSync] uploadFile URL:', url, 'path:', path, 'user:', getUserId() ?? '(anon)');
+
     let body: BodyInit;
     let contentType: string;
 
@@ -287,6 +289,12 @@ export async function uploadFile(path: string, content: string | Blob): Promise<
         headers: { 'Content-Type': contentType },
         body: body
     });
+    console.log('[cloudSync] uploadFile response:', response.status, response.statusText,
+        'etag:', response.headers.get('ETag'), 'for:', path);
+    if (!response.ok) {
+        const errorBody = await response.text().catch(function() { return '(failed to read body)'; });
+        console.error('[cloudSync] uploadFile error', response.status, 'body:', errorBody);
+    }
     return (response.headers.get('ETag') ?? '').replace(/^"/, '').replace(/"$/, '');
 }
 
@@ -327,6 +335,7 @@ export async function deleteRemoteFile(path: string): Promise<void> {
  */
 export async function uploadCloudState(lastUpdateTime: string): Promise<void> {
     const content = JSON.stringify({ lastUpdateTime: lastUpdateTime });
+    console.log('[cloudSync] uploadCloudState:', lastUpdateTime, 'user:', getUserId() ?? '(anon)');
     await uploadFile(CLOUD_STATE_PATH, content);
 }
 
@@ -1330,7 +1339,7 @@ async function syncToCloudInternal(): Promise<void> {
                 localMtime: fileEntry.mtime,
                 remoteMtime: new Date().toUTCString()
             };
-            console.log('[cloudSync] Uploaded:', path);
+            console.log('[cloudSync] Uploaded:', path, 'etag:', etag, 'user:', getUserId() ?? '(anon)');
             lastSuccessfulId = Math.max(lastSuccessfulId, entry.id);
         }
     }
@@ -1549,10 +1558,28 @@ async function syncReset(): Promise<void> {
         await saveCloudSyncState();
 
         // Reset journal checkpoint so all files are re-synced
-        const { resetCheckpoint } = await import('./syncJournal');
+        const { resetCheckpoint, recordWrite } = await import('./syncJournal');
         await resetCheckpoint();
 
         console.log('[cloudSync] Complete re-sync (local priority) triggered');
+        console.log('[cloudSync] User ID:', getUserId() ?? '(anon)');
+
+        // Walk all local OPFS files and mark them as dirty for upload
+        const appRoot = await getOPFSHandle();
+        const allFiles = await walkOpfsDirectory(appRoot, '');
+        let fileCount = 0;
+        const skipPrefixes = ['sync/', 'drafts/'];
+        for (const filePath of allFiles) {
+            if (skipPrefixes.some(function(p) { return filePath.startsWith(p); })) continue;
+            const fileEntry = await readLocalFileWithMtime(filePath);
+            if (!fileEntry) continue;
+            const raw = fileEntry.content ?? fileEntry.bytes!;
+            const hash = computeHash(raw);
+            await recordWrite(filePath, hash);
+            fileCount++;
+        }
+        console.log('[cloudSync] Re-sync marked ' + fileCount + ' files for upload');
+
         await syncToCloudInternal();
     });
 }
@@ -1576,6 +1603,7 @@ async function syncResetThenPull(): Promise<void> {
         await resetCheckpoint();
 
         console.log('[cloudSync] Complete re-sync (cloud priority) triggered');
+        console.log('[cloudSync] User ID:', getUserId() ?? '(anon)');
         await syncFromCloudInternal({ forceRemoteWins: true });
     });
 }

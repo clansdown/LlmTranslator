@@ -79,6 +79,14 @@ export function isSignedIn(): boolean {
 }
 
 /**
+ * Returns the current Clerk user ID, or null if not signed in
+ * @returns {string | null}
+ */
+export function getUserId(): string | null {
+    return clerkInstance?.user?.id ?? null;
+}
+
+/**
  * Mounts a Clerk sign-in or sign-up component into a container element
  * @param {HTMLElement} element - Container element
  * @param {'signIn' | 'signUp'} mode - Which component to mount
