@@ -429,6 +429,7 @@ export async function setCurrentSession(sessionId: string): Promise<void> {
     }
 
     currentSessionId = sessionId;
+    cachedDraftQuickQuestion = null;
     currentLiteralModel = getLiteralModelToUse(session);
     currentInterpretationModel = getInterpretationModelToUse(session);
     await savePreference('currentSession', sessionId);
@@ -1198,6 +1199,7 @@ let isTranslatingOrAsking = false;
  */
 export async function translate(mode: 'input' | 'output'): Promise<void> {
     if (isTranslatingOrAsking) return;
+    cachedDraftQuickQuestion = null;
     isTranslatingOrAsking = true;
     try {
         if (!config) {
@@ -3986,6 +3988,10 @@ function showQuickQuestionModal(options?: {
     const thinkingContentEl = modalEl.querySelector('.thinking-content') as HTMLElement | null;
     const historyEl = modalEl.querySelector('.quick-question-history') as HTMLElement | null;
     const historyItemTemplate = document.getElementById('quick-question-history-item-template') as HTMLTemplateElement | null;
+
+    if (options?.defaultQuestion && questionInput) {
+        questionInput.value = options.defaultQuestion;
+    }
 
     const modal = new Modal(modalEl);
 
