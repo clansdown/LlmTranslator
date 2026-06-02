@@ -1448,11 +1448,11 @@ function setupToggleHandler(refs: TranslationDomRefs, translation: Translation):
             const isCollapsed = refs.sectionsArea!.classList.contains('translation-sections-collapsed');
             if (isCollapsed) {
                 refs.sectionsArea!.classList.remove('translation-sections-collapsed');
-                refs.toggleSectionsBtn!.textContent = '▼';
+                refs.toggleSectionsBtn!.textContent = '▲';
                 translation.sectionsCollapsed = false;
             } else {
                 refs.sectionsArea!.classList.add('translation-sections-collapsed');
-                refs.toggleSectionsBtn!.textContent = '▶';
+                refs.toggleSectionsBtn!.textContent = '▼';
                 translation.sectionsCollapsed = true;
             }
             saveSessionTranslation(currentSessionId, translation);
@@ -1984,10 +1984,10 @@ function updateTranslationItemContent(translation: Translation, refs: Translatio
         if (refs.sectionsArea && refs.toggleSectionsBtn) {
             if (translation.sectionsCollapsed) {
                 refs.sectionsArea.classList.add('translation-sections-collapsed');
-                refs.toggleSectionsBtn.textContent = '▶';
+                refs.toggleSectionsBtn.textContent = '▼';
             } else {
                 refs.sectionsArea.classList.remove('translation-sections-collapsed');
-                refs.toggleSectionsBtn.textContent = '▼';
+                refs.toggleSectionsBtn.textContent = '▲';
             }
         }
     } else if (translation.status === 'error') {
@@ -2086,10 +2086,10 @@ function updateTranslationItemContent(translation: Translation, refs: Translatio
         if (refs.sectionsArea && refs.toggleSectionsBtn) {
             if (translation.sectionsCollapsed) {
                 refs.sectionsArea.classList.add('translation-sections-collapsed');
-                refs.toggleSectionsBtn.textContent = '▶';
+                refs.toggleSectionsBtn.textContent = '▼';
             } else {
                 refs.sectionsArea.classList.remove('translation-sections-collapsed');
-                refs.toggleSectionsBtn.textContent = '▼';
+                refs.toggleSectionsBtn.textContent = '▲';
             }
         }
     }
