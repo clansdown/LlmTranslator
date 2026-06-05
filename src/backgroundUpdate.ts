@@ -158,8 +158,8 @@ export function showBackgroundUpdateModal(sessionId: string): void {
      * @returns {AnalysisResult} Parsed result
      */
     function parseAnalysisResult(text: string): AnalysisResult {
-        const changesMatch = text.match(/<PROPOSED_CHANGES>([\s\S]*?)<\/PROPOSED_CHANGES>/i);
-        const additionsMatch = text.match(/<PROPOSED_ADDITIONS>([\s\S]*?)<\/PROPOSED_ADDITIONS>/i);
+        const changesMatch = text.match(/<proposed_changes>([\s\S]*?)<\/proposed_changes>/i);
+        const additionsMatch = text.match(/<proposed_additions>([\s\S]*?)<\/proposed_additions>/i);
 
         const changes = changesMatch ? changesMatch[1].trim() : '';
         const additions = additionsMatch ? additionsMatch[1].trim() : '';
@@ -344,6 +344,12 @@ export function showBackgroundUpdateModal(sessionId: string): void {
         modal.hide();
     }
 
+    function formatTimestamp(ts: number): string {
+        const d = new Date(ts);
+        const pad = (n: number) => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+
     /**
      * Builds conversation history for analysis with both source and translation
      * @param {string} sessionId - Session ID
@@ -383,30 +389,31 @@ export function showBackgroundUpdateModal(sessionId: string): void {
             return text;
         }
 
-        let history: string = '<HISTORY>\n';
+        let history: string = '<history>\n';
         for (const t of recentItems) {
             if (!t.entries || t.entries.length === 0) continue;
             const entry = t.entries[t.activeEntryIndex ?? 0];
             if (!entry) continue;
 
+            const ts = formatTimestamp(t.timestamp);
             if (t.pill === 'input') {
-                history += '<THEM>' + entry.source + '</THEM>\n';
+                history += '<them ts="' + ts + '">' + entry.source + '</them>\n';
                 if (entry.translation) {
-                    history += '<THEM_TRANSLATION>' + stripIfNeeded(entry.translation, 'output') + '</THEM_TRANSLATION>\n';
+                    history += '<them_translation ts="' + ts + '">' + stripIfNeeded(entry.translation, 'output') + '</them_translation>\n';
                 }
             } else if (t.pill === 'output') {
-                history += '<ME>' + entry.source + '</ME>\n';
+                history += '<me ts="' + ts + '">' + entry.source + '</me>\n';
                 if (entry.translation) {
-                    history += '<ME_TRANSLATION>' + stripIfNeeded(entry.translation, 'output') + '</ME_TRANSLATION>\n';
+                    history += '<me_translation ts="' + ts + '">' + stripIfNeeded(entry.translation, 'output') + '</me_translation>\n';
                 }
             } else if (t.pill === 'question') {
-                history += '<ALREADY_ANSWERED>' + entry.source + '</ALREADY_ANSWERED>\n';
+                history += '<already_answered ts="' + ts + '">' + entry.source + '</already_answered>\n';
                 if (entry.translation) {
-                    history += '<AGENTANSWER>' + stripIfNeeded(entry.translation, 'question') + '</AGENTANSWER>\n';
+                    history += '<agentanswer ts="' + ts + '">' + stripIfNeeded(entry.translation, 'question') + '</agentanswer>\n';
                 }
             }
         }
-        history += '</HISTORY>';
+        history += '</history>';
 
         return history;
     }
@@ -432,7 +439,7 @@ export function showBackgroundUpdateModal(sessionId: string): void {
         oldBackground = session?.background ?? '';
         const history: string = await buildAnalysisHistory(sessionId);
 
-        const userMessage: string = '<BACKGROUND>\n' + oldBackground + '\n</BACKGROUND>\n\n' + history;
+        const userMessage: string = '<background>\n' + oldBackground + '\n</background>\n\n' + history;
 
         if (loadingEl) loadingEl.style.display = 'none';
 

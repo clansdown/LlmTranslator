@@ -160,23 +160,23 @@ const streamingStateMap: WeakMap<Translation, StreamingState> = new WeakMap();
 
 /**
  * Extracts only the TRANSLATION portion of text for display during streaming.
- * Once </TRANSLATION> is seen, the translation is complete and non-translation
+ * Once </translation> is seen, the translation is complete and non-translation
  * content (explanation, nuances) should not be shown in the target area.
  * @param {string} text - Raw accumulated streaming text
  * @returns {{ displayText: string; isComplete: boolean }}
  */
 function extractTranslationForDisplay(text: string): { displayText: string; isComplete: boolean } {
-    const openIdx = text.indexOf('<TRANSLATION>');
-    const closeIdx = text.indexOf('</TRANSLATION>');
+    const openIdx = text.indexOf('<translation>');
+    const closeIdx = text.indexOf('</translation>');
 
     if (openIdx !== -1 && closeIdx !== -1) {
         return {
-            displayText: text.substring(openIdx + '<TRANSLATION>'.length, closeIdx),
+            displayText: text.substring(openIdx + '<translation>'.length, closeIdx),
             isComplete: true
         };
     } else if (openIdx !== -1) {
         return {
-            displayText: text.substring(openIdx + '<TRANSLATION>'.length),
+            displayText: text.substring(openIdx + '<translation>'.length),
             isComplete: false
         };
     } else {
@@ -688,6 +688,17 @@ export async function initializeDefaultSession(): Promise<void> {
 
 
 /**
+ * Formats a timestamp as local date/time string for inclusion in XML tags
+ * @param {number} ts - Timestamp in milliseconds
+ * @returns {string} Formatted string like "2025-06-02 14:30"
+ */
+function formatTimestamp(ts: number): string {
+    const d = new Date(ts);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/**
  * Builds the history section for the user message
  * Returns history from the last 7 days with activity
  * @param {boolean} includeQuestions - Whether to include question/answer pairs in history
@@ -732,29 +743,30 @@ async function buildHistorySection(includeQuestions: boolean = true, sourcesOnly
         return text;
     }
 
-    let history = "<HISTORY>\n";
+    let history = "<history>\n";
     for (const t of translationsWithinDays) {
         ensureEntries(t);
         const entry = t.entries[t.activeEntryIndex ?? 0];
         if (!entry) continue;
+        const ts = formatTimestamp(t.timestamp);
         if (t.pill === 'input') {
-            history += `<THEM>${entry.source}</THEM>\n`;
+            history += `<them ts="${ts}">${entry.source}</them>\n`;
             if (!sourcesOnly) {
-                history += `<THEM>${stripIfNeeded(entry.translation, 'output')}</THEM>\n`;
+                history += `<them ts="${ts}">${stripIfNeeded(entry.translation, 'output')}</them>\n`;
             }
         } else if (t.pill === 'output') {
-            history += `<ME>${entry.source}</ME>\n`;
+            history += `<me ts="${ts}">${entry.source}</me>\n`;
             if (!sourcesOnly) {
-                history += `<ME>${stripIfNeeded(entry.translation, 'output')}</ME>\n`;
+                history += `<me ts="${ts}">${stripIfNeeded(entry.translation, 'output')}</me>\n`;
             }
         } else if (t.pill === 'question' && includeQuestions && (!respectQuestionToggle || t.includeInContext === true)) {
-            history += `<ALREADY_ANSWERED>${entry.source}</ALREADY_ANSWERED>\n`;
+            history += `<already_answered ts="${ts}">${entry.source}</already_answered>\n`;
             if (!sourcesOnly) {
-                history += `<AGENTANSWER>${stripIfNeeded(entry.translation, 'question')}</AGENTANSWER>\n`;
+                history += `<agentanswer ts="${ts}">${stripIfNeeded(entry.translation, 'question')}</agentanswer>\n`;
             }
         }
     }
-    history += "</HISTORY>";
+    history += "</history>";
     return history;
 }
 
@@ -890,20 +902,21 @@ function buildInterpretationHistory(): string {
         translationsForHistory.push(...dayTranslations);
     }
 
-    let history = "<HISTORY>\n";
+    let history = "<history>\n";
     for (const t of translationsForHistory) {
         ensureEntries(t);
         const entry = t.entries[t.activeEntryIndex ?? 0];
         if (!entry) continue;
+        const ts = formatTimestamp(t.timestamp);
         if (t.pill === 'input') {
-            history += `<THEM>${entry.source}</THEM>\n`;
-            history += `<THEM>${entry.translation}</THEM>\n`;
+            history += `<them ts="${ts}">${entry.source}</them>\n`;
+            history += `<them ts="${ts}">${entry.translation}</them>\n`;
         } else if (t.pill === 'output') {
-            history += `<ME>${entry.source}</ME>\n`;
-            history += `<ME>${entry.translation}</ME>\n`;
+            history += `<me ts="${ts}">${entry.source}</me>\n`;
+            history += `<me ts="${ts}">${entry.translation}</me>\n`;
         }
     }
-    history += "</HISTORY>";
+    history += "</history>";
     return history;
 }
 
@@ -921,7 +934,7 @@ async function buildInterpretationMessage(translation: Translation): Promise<str
     let message = "";
 
     if (background.trim()) {
-        message += `<BACKGROUND>${background}</BACKGROUND>\n\n`;
+        message += `<background>${background}</background>\n\n`;
     }
 
     const history = buildInterpretationHistory();
@@ -931,8 +944,9 @@ async function buildInterpretationMessage(translation: Translation): Promise<str
 
     const entry = translation.entries?.[translation.activeEntryIndex ?? 0];
     const translationText = entry?.translation ?? (translation as any).translation ?? '';
-    message += `<INTERPRET>${translationText}</INTERPRET>\n\n`;
-    message += `<INSTRUCTIONS>Explain how the listener will understand this message — both text and subtext — given their linguistic and cultural context. Write your explanation in ${myLangName}.</INSTRUCTIONS>`;
+    message += `<current_time val="${formatTimestamp(Date.now())}"/>\n\n`;
+    message += `<interpret>${translationText}</interpret>\n\n`;
+    message += `<instructions>Explain how the listener will understand this message — both text and subtext — given their linguistic and cultural context. Write your explanation in ${myLangName}.</instructions>`;
 
     return message;
 }
@@ -1170,7 +1184,7 @@ async function buildUserMessage(pill: 'input' | 'output' | 'question', sourceTex
     let message = "";
 
     if (background.trim()) {
-        message += `<BACKGROUND>${background}</BACKGROUND>\n\n`;
+        message += `<background>${background}</background>\n\n`;
     }
 
     const history = await buildHistorySection(pill !== 'input', false, true);
@@ -1178,8 +1192,9 @@ async function buildUserMessage(pill: 'input' | 'output' | 'question', sourceTex
         message += history + "\n\n";
     }
 
-    message += `<TRANSLATE>${sourceText}</TRANSLATE>\n\n`;
-    message += `<INSTRUCTIONS>${instructions}</INSTRUCTIONS>`;
+    message += `<current_time val="${formatTimestamp(Date.now())}"/>\n\n`;
+    message += `<translate>${sourceText}</translate>\n\n`;
+    message += `<instructions>${instructions}</instructions>`;
 
     return message;
 }
@@ -1312,7 +1327,7 @@ async function buildQuestionMessage(questionText: string, myLanguage?: string): 
     let message = "";
 
     if (background.trim()) {
-        message += `<BACKGROUND>${background}</BACKGROUND>\n\n`;
+        message += `<background>${background}</background>\n\n`;
     }
 
     const history = await buildHistorySection(true, true, false);
@@ -1320,9 +1335,10 @@ async function buildQuestionMessage(questionText: string, myLanguage?: string): 
         message += history + "\n\n";
     }
 
-    message += `<QUESTION>${questionText}</QUESTION>\n\n`;
+    message += `<current_time val="${formatTimestamp(Date.now())}"/>\n\n`;
+    message += `<question>${questionText}</question>\n\n`;
     const langInstruction = myLanguage ? ` Write your answer in ${myLanguage}.` : '';
-    message += `<INSTRUCTIONS>Answer the user's question clearly and helpfully.${langInstruction}</INSTRUCTIONS>`;
+    message += `<instructions>Answer the user's question clearly and helpfully.${langInstruction}</instructions>`;
 
     return message;
 }
@@ -2707,13 +2723,13 @@ function parseWordDefinitions(xml: string): TranslationWordItem[] {
 
     console.log('[wordDefinitions] Parsing XML, raw length:', xml.length, 'first 300 chars:', xml.substring(0, 300));
 
-    const itemRegex = /<ITEM><WORD>([\s\S]*?)<\/WORD><DEF>([\s\S]*?)<\/DEF><EXP>([\s\S]*?)<\/EXP><\/ITEM>/g;
-    const nonItemParts = xml.split(/(<ITEM>[\s\S]*?<\/ITEM>)/);
+    const itemRegex = /<item><word>([\s\S]*?)<\/word><def>([\s\S]*?)<\/def><exp>([\s\S]*?)<\/exp><\/item>/g;
+    const nonItemParts = xml.split(/(<item>[\s\S]*?<\/item>)/);
 
     console.log('[wordDefinitions] Split into', nonItemParts.length, 'parts');
 
     for (const part of nonItemParts) {
-        if (/^<ITEM>/.test(part)) {
+        if (/^<item>/.test(part)) {
             const match = itemRegex.exec(part);
             if (match) {
                 items.push({
@@ -2727,7 +2743,7 @@ function parseWordDefinitions(xml: string): TranslationWordItem[] {
             }
             itemRegex.lastIndex = 0;
         } else {
-            const punctRegex = /<P>([\s\S]*?)<\/P>/g;
+            const punctRegex = /<p>([\s\S]*?)<\/p>/g;
             let punctMatch;
             while ((punctMatch = punctRegex.exec(part)) !== null) {
                 items.push({
@@ -2735,7 +2751,7 @@ function parseWordDefinitions(xml: string): TranslationWordItem[] {
                     text: punctMatch[1]
                 });
             }
-            const nlRegex = /<NL\s*\/>/g;
+            const nlRegex = /<nl\s*\/>/g;
             let nlMatch;
             while ((nlMatch = nlRegex.exec(part)) !== null) {
                 items.push({
@@ -2917,7 +2933,7 @@ function setupStreamingDisplay(refs: TranslationDomRefs, translation: Translatio
  * Updates the streaming display with new accumulated text and reasoning content.
  * Shows reasoning (thinking) content while main text hasn't arrived yet.
  * Renders completed paragraphs as markdown, shows current paragraph as raw text.
- * Only the text within <TRANSLATION> tags is displayed; explanation and nuances
+ * Only the text within <translation> tags is displayed; explanation and nuances
  * content is excluded from the target area during streaming.
  * @param {TranslationDomRefs} refs - Captured DOM references
  * @param {StreamingState} streamingState - Current streaming state for this translation
@@ -3523,10 +3539,10 @@ async function handleTranslateStreaming(
             ? `General ${theirLangName} translation notes:\n${langInstructions}\n\n`
             : '';
         const translationInstructionsBlock = (translationInstructions || langInstructions)
-            ? `The following are instructions on how the translation should be styled and presented:\n<TRANSLATIONINSTRUCTIONS>${langInstructionsBlock}${translationInstructions}</TRANSLATIONINSTRUCTIONS>`
+            ? `The following are instructions on how the translation should be styled and presented:\n<translationinstructions>${langInstructionsBlock}${translationInstructions}</translationinstructions>`
             : '';
         const intentBlock = intent
-            ? `The following is guidance on the intent of the text to be translated:\n<INTENT>${intent}</INTENT>`
+            ? `The following is guidance on the intent of the text to be translated:\n<intent>${intent}</intent>`
             : '';
         instructions = OUTPUT_INSTRUCTIONS.replace(/\[TRANSLATION_INSTRUCTIONS_BLOCK\]/g, translationInstructionsBlock);
         instructions = instructions.replace(/\[INTENT_BLOCK\]/g, intentBlock);
@@ -3554,11 +3570,11 @@ async function handleTranslateStreaming(
                 streamState.accumulatedReasoning = reasoning;
                 updateStreamingContent(refs!, streamState, text, reasoning);
 
-                // Fallback: if </TRANSLATION> is missing but next section has started
+                // Fallback: if </translation> is missing but next section has started
                 if (!streamState.translationComplete) {
-                    const openIdx = text.indexOf('<TRANSLATION>');
-                    const explanationIdx = text.indexOf('<EXPLANATION>');
-                    const nuancesIdx = text.indexOf('<NUANCES>');
+                    const openIdx = text.indexOf('<translation>');
+                    const explanationIdx = text.indexOf('<explanation>');
+                    const nuancesIdx = text.indexOf('<nuances>');
                     if (openIdx !== -1 && ((explanationIdx > openIdx) || (nuancesIdx > openIdx))) {
                         streamState.translationComplete = true;
                     }
@@ -3584,7 +3600,7 @@ async function handleTranslateStreaming(
                 }
 
                 // Detect when explanation or nuances sections finish
-                if (!streamState.sectionsComplete && (text.includes('</EXPLANATION>') || text.includes('</NUANCES>'))) {
+                if (!streamState.sectionsComplete && (text.includes('</explanation>') || text.includes('</nuances>'))) {
                     streamState.sectionsComplete = true;
                 }
 
@@ -3712,7 +3728,7 @@ async function handleTranslateStreaming(
                 refreshBalance();
 
                 // Trigger dependent API calls (literal retranslation, word definitions, interpretation)
-                // Skip if already triggered early from onChunk when </TRANSLATION> was detected
+                // Skip if already triggered early from onChunk when </translation> was detected
                 if (!options?.skipBackgroundTasks && !backgroundTasksAlreadyTriggered) {
                     regenerateIndependentSections(translation.id);
                 }
@@ -3875,7 +3891,7 @@ async function buildQuickQuestionMessage(
     let message = "";
 
     if (background.trim()) {
-        message += `<BACKGROUND>${background}</BACKGROUND>\n\n`;
+        message += `<background>${background}</background>\n\n`;
     }
 
     const history = await buildHistorySection(true, true, false);
@@ -3884,17 +3900,17 @@ async function buildQuickQuestionMessage(
     }
 
     if (translationText) {
-        message += `<SOURCE_TEXT>${sourceText}</SOURCE_TEXT>\n`;
+        message += `<source_text>${sourceText}</source_text>\n`;
         if (intentText) {
-            message += `<INTENT>${intentText}</INTENT>\n`;
+            message += `<intent>${intentText}</intent>\n`;
         }
-        message += `<TRANSLATION>${translationText}</TRANSLATION>\n`;
+        message += `<translation>${translationText}</translation>\n`;
     } else if (messageText) {
-        message += `<CURRENT_MESSAGE>${messageText}</CURRENT_MESSAGE>\n`;
+        message += `<current_message>${messageText}</current_message>\n`;
     } else {
-        message += `<DRAFT_TEXT>${sourceText}</DRAFT_TEXT>\n`;
+        message += `<draft_text>${sourceText}</draft_text>\n`;
         if (intentText) {
-            message += `<INTENT>${intentText}</INTENT>\n`;
+            message += `<intent>${intentText}</intent>\n`;
         }
     }
 
@@ -3914,19 +3930,20 @@ async function buildQuickQuestionMessage(
                 return `- ${tag.openTag}...${tag.closeTag}: ${tag.guidance}`;
             }).join('\n');
         }
-        message += `<REFERENCE_TRANSLATION_INSTRUCTIONS>${refBlock}</REFERENCE_TRANSLATION_INSTRUCTIONS>\n\n`;
+        message += `<reference_translation_instructions>${refBlock}</reference_translation_instructions>\n\n`;
     }
 
     if (previousQA.length > 0) {
-        message += "<PREVIOUS_QA>\n";
+        message += "<previous_qa>\n";
         for (const qa of previousQA) {
             message += `Q: ${qa.question}\nA: ${qa.answer}\n\n`;
         }
-        message += "</PREVIOUS_QA>\n\n";
+        message += "</previous_qa>\n\n";
     }
 
-    message += `<CURRENT_QUESTION>${questionText}</CURRENT_QUESTION>\n\n`;
-    message += `<INSTRUCTIONS>Answer in ${myLanguage}.</INSTRUCTIONS>`;
+    message += `<current_time val="${formatTimestamp(Date.now())}"/>\n\n`;
+    message += `<current_question>${questionText}</current_question>\n\n`;
+    message += `<instructions>Answer in ${myLanguage}.</instructions>`;
 
     return message;
 }

@@ -726,9 +726,9 @@ export async function translateStructured(
 
     return {
         result: {
-            translation: parseTag(content, 'TRANSLATION'),
-            explanation: parseTag(content, 'EXPLANATION'),
-            nuances: parseTag(content, 'NUANCES'),
+            translation: parseTag(content, 'translation'),
+            explanation: parseTag(content, 'explanation'),
+            nuances: parseTag(content, 'nuances'),
             reasoning: reasoning,
             reasoningDetails: reasoningDetails
         },
