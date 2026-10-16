@@ -4,6 +4,11 @@ import path from 'path';
 
 export default defineConfig({
     base: './',
+    resolve: {
+        alias: {
+            '@': path.resolve('src')
+        }
+    },
     build: {
         target: 'es2020',
         minify: 'esbuild',

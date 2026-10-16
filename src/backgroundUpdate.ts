@@ -7,6 +7,7 @@ import { streamSendChatMessage } from './openrouter';
 import { listSessionTranslations, loadSession, saveSession } from './storage';
 import { BACKGROUND_UPDATE_SYSTEM_PROMPT, BACKGROUND_MERGE_SYSTEM_PROMPT } from './prompts';
 import { getModelName } from './translation';
+import { formatTimestamp, stripIfNeeded } from './core/translation';
 import { Modal } from 'bootstrap';
 import type { Config } from './types/config';
 import type { Translation } from './types/translation';
@@ -344,12 +345,6 @@ export function showBackgroundUpdateModal(sessionId: string): void {
         modal.hide();
     }
 
-    function formatTimestamp(ts: number): string {
-        const d = new Date(ts);
-        const pad = (n: number) => String(n).padStart(2, '0');
-        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-    }
-
     /**
      * Builds conversation history for analysis with both source and translation
      * @param {string} sessionId - Session ID
@@ -375,20 +370,6 @@ export function showBackgroundUpdateModal(sessionId: string): void {
             if (session?.translationTags) outputTags = session.translationTags;
         } catch {}
 
-        function stripIfNeeded(text: string, pill: string): string {
-            if (pill === 'output' && outputTags.length > 0) {
-                let cleaned = text;
-                for (const tag of outputTags) {
-                    const openEscaped = tag.openTag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                    const closeEscaped = tag.closeTag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                    cleaned = cleaned.replace(new RegExp(openEscaped, 'g'), '');
-                    cleaned = cleaned.replace(new RegExp(closeEscaped, 'g'), '');
-                }
-                return cleaned;
-            }
-            return text;
-        }
-
         let history: string = '<history>\n';
         for (const t of recentItems) {
             if (!t.entries || t.entries.length === 0) continue;
@@ -399,17 +380,17 @@ export function showBackgroundUpdateModal(sessionId: string): void {
             if (t.pill === 'input') {
                 history += '<them ts="' + ts + '">' + entry.source + '</them>\n';
                 if (entry.translation) {
-                    history += '<them_translation ts="' + ts + '">' + stripIfNeeded(entry.translation, 'output') + '</them_translation>\n';
+                    history += '<them_translation ts="' + ts + '">' + stripIfNeeded(entry.translation, 'output', outputTags) + '</them_translation>\n';
                 }
             } else if (t.pill === 'output') {
                 history += '<me ts="' + ts + '">' + entry.source + '</me>\n';
                 if (entry.translation) {
-                    history += '<me_translation ts="' + ts + '">' + stripIfNeeded(entry.translation, 'output') + '</me_translation>\n';
+                    history += '<me_translation ts="' + ts + '">' + stripIfNeeded(entry.translation, 'output', outputTags) + '</me_translation>\n';
                 }
             } else if (t.pill === 'question') {
                 history += '<already_answered ts="' + ts + '">' + entry.source + '</already_answered>\n';
                 if (entry.translation) {
-                    history += '<agentanswer ts="' + ts + '">' + stripIfNeeded(entry.translation, 'question') + '</agentanswer>\n';
+                    history += '<agentanswer ts="' + ts + '">' + stripIfNeeded(entry.translation, 'question', outputTags) + '</agentanswer>\n';
                 }
             }
         }

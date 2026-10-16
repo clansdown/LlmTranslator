@@ -16,6 +16,7 @@ import type { StreamingAbortHandle, StreamCallbacks, StreamUsage } from './types
 import type { Config } from './types/config';
 import type { TranslationTag } from './types/translationTag';
 import type { TranslationSession, ReasoningLevel } from './types/session';
+import { formatTimestamp, extractStructuredResult, stripTranslationTags, parseWordDefinitions, ensureEntries, stripIfNeeded } from './core/translation';
 import { Modal } from 'bootstrap';
 
 /**
@@ -688,17 +689,6 @@ export async function initializeDefaultSession(): Promise<void> {
 
 
 /**
- * Formats a timestamp as local date/time string for inclusion in XML tags
- * @param {number} ts - Timestamp in milliseconds
- * @returns {string} Formatted string like "2025-06-02 14:30"
- */
-function formatTimestamp(ts: number): string {
-    const d = new Date(ts);
-    const pad = (n: number) => String(n).padStart(2, '0');
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-/**
  * Builds the history section for the user message
  * Returns history from the last 7 days with activity
  * @param {boolean} includeQuestions - Whether to include question/answer pairs in history
@@ -736,13 +726,6 @@ async function buildHistorySection(includeQuestions: boolean = true, sourcesOnly
         if (session?.translationTags) outputTags = session.translationTags;
     } catch {}
 
-    function stripIfNeeded(text: string, pill: string): string {
-        if (pill === 'output' && outputTags.length > 0) {
-            return stripTranslationTags(text, outputTags);
-        }
-        return text;
-    }
-
     let history = "<history>\n";
     for (const t of translationsWithinDays) {
         ensureEntries(t);
@@ -752,17 +735,17 @@ async function buildHistorySection(includeQuestions: boolean = true, sourcesOnly
         if (t.pill === 'input') {
             history += `<them ts="${ts}">${entry.source}</them>\n`;
             if (!sourcesOnly) {
-                history += `<them ts="${ts}">${stripIfNeeded(entry.translation, 'output')}</them>\n`;
+                history += `<them ts="${ts}">${stripIfNeeded(entry.translation, 'output', outputTags)}</them>\n`;
             }
         } else if (t.pill === 'output') {
             history += `<me ts="${ts}">${entry.source}</me>\n`;
             if (!sourcesOnly) {
-                history += `<me ts="${ts}">${stripIfNeeded(entry.translation, 'output')}</me>\n`;
+                history += `<me ts="${ts}">${stripIfNeeded(entry.translation, 'output', outputTags)}</me>\n`;
             }
         } else if (t.pill === 'question' && includeQuestions && (!respectQuestionToggle || t.includeInContext === true)) {
             history += `<already_answered ts="${ts}">${entry.source}</already_answered>\n`;
             if (!sourcesOnly) {
-                history += `<agentanswer ts="${ts}">${stripIfNeeded(entry.translation, 'question')}</agentanswer>\n`;
+                history += `<agentanswer ts="${ts}">${stripIfNeeded(entry.translation, 'question', outputTags)}</agentanswer>\n`;
             }
         }
     }
@@ -779,42 +762,6 @@ async function buildHistorySection(includeQuestions: boolean = true, sourcesOnly
 function getModelShortName(fullName: string): string {
     const idx = fullName.indexOf(': ');
     return idx >= 0 ? fullName.substring(idx + 2) : fullName;
-}
-
-/**
- * Ensures a translation has entries[] populated (for backward compatibility from old saves)
- * If entries is missing or empty, constructs entries[0] from top-level fields
- * @param {Translation} translation - Translation object to check
- * @returns {void}
- */
-function ensureEntries(translation: Translation): void {
-    if (translation.entries && translation.entries.length > 0) {
-        return;
-    }
-    /** @type {TranslationEntry} */
-    const entry: TranslationEntry = {
-        source: (translation as any).source ?? '',
-        intent: (translation as any).intent ?? '',
-        model: (translation as any).model ?? '',
-        modelName: (translation as any).modelName ?? '',
-        prompt: (translation as any).prompt ?? '',
-        promptContent: (translation as any).promptContent ?? '',
-        translation: (translation as any).translation ?? '',
-        explanation: (translation as any).explanation ?? '',
-        nuances: (translation as any).nuances ?? '',
-        reasoning: (translation as any).reasoning ?? '',
-        reasoningDetails: (translation as any).reasoningDetails ?? '',
-        literalRetranslation: (translation as any).literalRetranslation,
-        literalPending: (translation as any).literalPending,
-        wordDefinitions: (translation as any).wordDefinitions,
-        wordData: (translation as any).wordData,
-        wordPending: (translation as any).wordPending,
-        interpretation: (translation as any).interpretation,
-        interpretationPending: (translation as any).interpretationPending
-    };
-    translation.entries = [entry];
-    translation.activeEntryIndex = 0;
-    translation.includeInContext = (translation as any).includeInContext ?? false;
 }
 
 /**
@@ -2709,63 +2656,6 @@ async function fetchWordDefinitions(model: string, reasoning: string, text: stri
 }
 
 /**
- * Parses the XML word definitions response into structured data
- * @param {string} xml - Raw XML from the API
- * @returns {TranslationWordItem[]} Parsed word items
- */
-function parseWordDefinitions(xml: string): TranslationWordItem[] {
-    /** @type {TranslationWordItem[]} */
-    const items: TranslationWordItem[] = [];
-
-    xml = xml.replace(/```[\s\S]*?```/g, function(m) {
-        return m.replace(/```\w*\n?/, '').replace(/\n?```/, '');
-    });
-
-    console.log('[wordDefinitions] Parsing XML, raw length:', xml.length, 'first 300 chars:', xml.substring(0, 300));
-
-    const itemRegex = /<item><word>([\s\S]*?)<\/word><def>([\s\S]*?)<\/def><exp>([\s\S]*?)<\/exp><\/item>/g;
-    const nonItemParts = xml.split(/(<item>[\s\S]*?<\/item>)/);
-
-    console.log('[wordDefinitions] Split into', nonItemParts.length, 'parts');
-
-    for (const part of nonItemParts) {
-        if (/^<item>/.test(part)) {
-            const match = itemRegex.exec(part);
-            if (match) {
-                items.push({
-                    type: 'word',
-                    word: match[1].trim(),
-                    def: match[2].trim(),
-                    exp: match[3].trim()
-                });
-            } else {
-                console.log('[wordDefinitions] ITEM regex failed on part:', part.substring(0, 200));
-            }
-            itemRegex.lastIndex = 0;
-        } else {
-            const punctRegex = /<p>([\s\S]*?)<\/p>/g;
-            let punctMatch;
-            while ((punctMatch = punctRegex.exec(part)) !== null) {
-                items.push({
-                    type: 'punct',
-                    text: punctMatch[1]
-                });
-            }
-            const nlRegex = /<nl\s*\/>/g;
-            let nlMatch;
-            while ((nlMatch = nlRegex.exec(part)) !== null) {
-                items.push({
-                    type: 'nl'
-                });
-            }
-        }
-    }
-
-    console.log('[wordDefinitions] Parse complete, total items:', items.length);
-    return items;
-}
-
-/**
  * Singleton word popup element
  * @type {HTMLElement | null}
  */
@@ -3022,26 +2912,6 @@ function teardownStreamingDisplay(refs: TranslationDomRefs): void {
     }
 }
 
-/**
- * Extracts a structured TranslationResult from raw text by parsing XML tags.
- * Falls back to using the full text as translation if no TRANSLATION tag is found.
- * @param {string} rawText - Raw response text with XML tags
- * @returns {{translation: string, explanation: string, nuances: string}}
- */
-function extractStructuredResult(rawText: string): { translation: string; explanation: string; nuances: string } {
-    const result = {
-        translation: parseTag(rawText, 'TRANSLATION'),
-        explanation: parseTag(rawText, 'EXPLANATION'),
-        nuances: parseTag(rawText, 'NUANCES')
-    };
-
-    if (!result.translation) {
-        result.translation = rawText;
-    }
-
-    return result;
-}
-
 // ===== Translation Tag Helpers =====
 
 /**
@@ -3064,24 +2934,6 @@ function buildTagInstructionsBlock(tags: TranslationTag[] | undefined, sourceTex
     }).join('\n');
 
     return `You may encounter the following inline tags in the source text. Use them as guidance for that portion only, then remove the tags from your output:\n${tagList}`;
-}
-
-/**
- * Strips recognized translation tags from translated text
- * Only strips well-formed opening and closing tags independently
- * @param {string} text - Translation text potentially containing tags
- * @param {TranslationTag[]} tags - Defined tags to strip
- * @returns {string} Text with tags removed
- */
-function stripTranslationTags(text: string, tags: TranslationTag[]): string {
-    let cleaned = text;
-    for (const tag of tags) {
-        const openEscaped = tag.openTag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const closeEscaped = tag.closeTag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        cleaned = cleaned.replace(new RegExp(openEscaped, 'g'), '');
-        cleaned = cleaned.replace(new RegExp(closeEscaped, 'g'), '');
-    }
-    return cleaned;
 }
 
 // ===== Text Selection Tag Popup =====
