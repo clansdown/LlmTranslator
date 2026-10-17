@@ -4,9 +4,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "npm run type-check && vite build && vite build --config vite.sw.config.ts",
     "preview": "vite preview",
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.sw.json"
   },
   "devDependencies": {
     "@types/bootstrap": "^5.2.10",

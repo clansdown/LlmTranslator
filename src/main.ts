@@ -4,11 +4,10 @@
 
 import { savePreference, getPreference, deletePreference } from './storage';
 import { fetchBalance, fetchZdrModels, setConfig as setOpenRouterConfig } from './openrouter';
-import { Modal } from 'bootstrap';
 import * as ui from './ui';
 import * as settings from './settings';
 import * as translation from './translation';
-import { initAuth, getClerk, mountAuthComponent, isSignedIn } from './auth';
+import { initAuthUi } from './authUi';
 import { initCloudSync, setSyncReloadCallback } from './cloudSync';
 import { setConfig as setBackgroundUpdateConfig } from './backgroundUpdate';
 import type { Config } from './types/config';
@@ -323,7 +322,7 @@ export async function init(): Promise<void> {
     }
 
     await loadApiKey();
-    await setupAuthButton();
+    await initAuthUi();
 
     setSyncReloadCallback(async function(changedPaths: string[]): Promise<void> {
         const currentId = translation.getCurrentSessionId();
@@ -379,52 +378,6 @@ export async function init(): Promise<void> {
     await initCloudSync();
 
     console.log("LLM Translator initialized");
-}
-
-/**
- * Sets up the optional Clerk auth button in the toolbar
- * @returns {Promise<void>}
- */
-async function setupAuthButton(): Promise<void> {
-    const authActive = await initAuth();
-    if (!authActive) return;
-
-    const clerk = getClerk()!;
-    const authBtn = document.getElementById('auth-btn') as HTMLButtonElement;
-    const hasLoggedIn = (await getPreference('clerkHasLoggedIn')) === 'true';
-
-    if (isSignedIn()) {
-        authBtn.innerHTML = '<i class="bi bi-box-arrow-right" title="Sign out"></i>';
-        await savePreference('clerkHasLoggedIn', 'true');
-    } else {
-        authBtn.textContent = hasLoggedIn ? 'Log in' : 'Create account';
-    }
-    authBtn.style.display = '';
-
-    const template = document.getElementById('auth-modal-template') as HTMLTemplateElement;
-    const clone = template.content.cloneNode(true) as DocumentFragment;
-    document.body.appendChild(clone);
-    const modalEl = document.body.querySelector('.modal.fade:last-child') as HTMLElement;
-    const modal = new Modal(modalEl as Element);
-    const modalBody = modalEl.querySelector('#auth-modal-body') as HTMLElement;
-
-    authBtn.addEventListener('click', async function() {
-        if (isSignedIn()) {
-            await clerk.signOut();
-            window.location.reload();
-        } else {
-            mountAuthComponent(modalBody, hasLoggedIn ? 'signIn' : 'signUp');
-            modal.show();
-        }
-    });
-
-    modalEl.addEventListener('hidden.bs.modal', async function() {
-        modalBody.innerHTML = '';
-        if (isSignedIn()) {
-            const { initCloudSync } = await import('./cloudSync');
-            await initCloudSync();
-        }
-    });
 }
 
 /**

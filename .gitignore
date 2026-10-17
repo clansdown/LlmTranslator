@@ -3,6 +3,9 @@ node_modules/
 dist/
 backblaze/
 
+# Dev-server service worker build output
+.dev-sw/
+
 # Local generation statistics
 .commit/
 .opencode/

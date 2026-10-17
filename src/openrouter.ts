@@ -15,7 +15,11 @@ import type {
 } from './types/api';
 import type { Config } from './types/config';
 import { DEBUG_API_CALLS } from './debug';
-import { streamChatCompletion as coreStreamChatCompletion, streamSendChatMessage as coreStreamSendChatMessage, streamTranslateStructured as coreStreamTranslateStructured, parseTag } from './core/openrouter';
+import { streamChatCompletion as coreStreamChatCompletion, streamSendChatMessage as coreStreamSendChatMessage, streamTranslateStructured as coreStreamTranslateStructured, parseTag, setDebugApiCalls } from './core/openrouter';
+import { isSwControlling, requestStream } from './swClient';
+
+// Bridge the page's debug setting into the context-agnostic core module.
+setDebugApiCalls(DEBUG_API_CALLS);
 
 export { parseTag };
 
@@ -832,7 +836,9 @@ export async function sendChatMessage(
 
 /**
  * Streams a chat completion from OpenRouter using Server-Sent Events.
- * Thin wrapper around core function that injects the module-level maxTokens config.
+ * Routes through the service worker when one is available (so the stream
+ * survives the page being backgrounded), otherwise falls back to the local
+ * core implementation. Injects the module-level maxTokens config.
  *
  * @param {string} apiKey - OpenRouter API key
  * @param {string} userMessage - User message content
@@ -852,11 +858,18 @@ export function streamChatCompletion(
     reasoningLevel: string = 'none',
     temperature: number = 0.2
 ): StreamingAbortHandle {
-    return coreStreamChatCompletion(apiKey, userMessage, systemPrompt, model, callbacks, reasoningLevel, temperature, config?.maxTokens ?? undefined);
+    const maxTokens: number | undefined = config?.maxTokens ?? undefined;
+
+    if (isSwControlling()) {
+        return requestStream({ apiKey, userMessage, systemPrompt, model, reasoningLevel, temperature, maxTokens }, callbacks);
+    }
+
+    return coreStreamChatCompletion(apiKey, userMessage, systemPrompt, model, callbacks, reasoningLevel, temperature, maxTokens);
 }
 
 /**
  * Streams a plain-text chat message from OpenRouter (for questions).
+ * Routes through the service worker when available.
  * @param {string} apiKey - OpenRouter API key
  * @param {string} userMessage - User message content
  * @param {string} systemPrompt - System prompt
@@ -875,11 +888,16 @@ export function streamSendChatMessage(
     reasoningLevel: string = 'none',
     temperature: number = 0.2
 ): StreamingAbortHandle {
+    if (isSwControlling()) {
+        return requestStream({ apiKey, userMessage, systemPrompt, model, reasoningLevel, temperature }, callbacks);
+    }
+
     return coreStreamSendChatMessage(apiKey, userMessage, systemPrompt, model, callbacks, reasoningLevel, temperature);
 }
 
 /**
  * Streams a structured translation from OpenRouter (for input/output translations).
+ * Routes through the service worker when available.
  * @param {string} apiKey - OpenRouter API key
  * @param {string} userMessage - User message content
  * @param {string} systemPrompt - System prompt
@@ -898,6 +916,10 @@ export function streamTranslateStructured(
     reasoningLevel: string = 'none',
     temperature: number = 0.2
 ): StreamingAbortHandle {
+    if (isSwControlling()) {
+        return requestStream({ apiKey, userMessage, systemPrompt, model, reasoningLevel, temperature }, callbacks);
+    }
+
     return coreStreamTranslateStructured(apiKey, userMessage, systemPrompt, model, callbacks, reasoningLevel, temperature);
 }
 

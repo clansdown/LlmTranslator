@@ -1,8 +1,28 @@
 import { Clerk } from '@clerk/clerk-js';
 
+/**
+ * Thrown when an authenticated request fails because the user's Clerk session
+ * is missing or has expired. Callers can use this to prompt for a re-login.
+ */
+export class AuthRequiredError extends Error {
+    /**
+     * @param {string} message - Human-readable failure reason
+     */
+    constructor(message: string) {
+        super(message);
+        this.name = 'AuthRequiredError';
+    }
+}
+
 /** @type {Clerk | null} */
 let clerkInstance: Clerk | null = null;
 let clerkEnabled = false;
+
+/** Listeners invoked when Clerk reports an auth-state change (registered before init). */
+const pendingAuthStateListeners: Array<() => void> = [];
+
+/** Listeners invoked when an API call reports that a session is required. */
+const authRequiredListeners: Array<() => void> = [];
 
 /**
  * Gets the current Clerk session token for API authentication
@@ -54,6 +74,13 @@ export async function initAuth(): Promise<boolean> {
         await clerk.load({ ui: { ClerkUI: (window as any).__internal_ClerkUICtor } });
         clerkInstance = clerk;
         clerkEnabled = true;
+
+        // Attach any auth-state listeners registered before initialization.
+        for (const listener of pendingAuthStateListeners) {
+            clerk.addListener(function() { listener(); });
+        }
+        pendingAuthStateListeners.length = 0;
+
         return true;
     } catch (e) {
         console.error('[auth] Clerk init failed:', e);
@@ -97,5 +124,57 @@ export function mountAuthComponent(element: HTMLElement, mode: 'signIn' | 'signU
         clerkInstance?.mountSignIn(element as HTMLDivElement);
     } else {
         clerkInstance?.mountSignUp(element as HTMLDivElement);
+    }
+}
+
+/**
+ * Signs the current user out, clearing any stale Clerk session.
+ * @returns {Promise<void>} Resolves once Clerk has signed out (best effort)
+ */
+export async function signOut(): Promise<void> {
+    if (!clerkInstance) return;
+    try {
+        await clerkInstance.signOut();
+    } catch (e) {
+        console.error('[auth] Sign out failed:', e);
+    }
+}
+
+/**
+ * Registers a listener that runs whenever Clerk reports an auth-state change.
+ * If Clerk is not initialized yet the listener is attached once it is.
+ * @param {() => void} listener - Callback to invoke on change
+ * @returns {void}
+ */
+export function onAuthStateChanged(listener: () => void): void {
+    if (clerkInstance) {
+        clerkInstance.addListener(function() { listener(); });
+        return;
+    }
+    pendingAuthStateListeners.push(listener);
+}
+
+/**
+ * Registers a listener that runs when an authenticated call reports that a
+ * session is required (missing or expired).
+ * @param {() => void} listener - Callback to invoke
+ * @returns {void}
+ */
+export function onAuthRequired(listener: () => void): void {
+    authRequiredListeners.push(listener);
+}
+
+/**
+ * Notifies listeners that a session is required. Called by modules that talk
+ * to authenticated APIs (e.g. cloud sync) when a request fails due to auth.
+ * @returns {void}
+ */
+export function notifyAuthRequired(): void {
+    for (const listener of authRequiredListeners) {
+        try {
+            listener();
+        } catch (e) {
+            console.error('[auth] onAuthRequired listener failed:', e);
+        }
     }
 }

@@ -575,6 +575,9 @@ function populateCloudSyncSettings(): void {
     if (STATE.cloudSync.isSyncing) {
         refs.cloudSyncStatusDiv.textContent = 'Syncing...';
         refs.cloudSyncNowButton.disabled = true;
+    } else if (STATE.cloudSync.needsReauth) {
+        refs.cloudSyncStatusDiv.textContent = 'Session expired — click Log in in the toolbar';
+        refs.cloudSyncNowButton.disabled = false;
     } else if (STATE.cloudSync.lastError) {
         refs.cloudSyncStatusDiv.textContent = 'Error: ' + STATE.cloudSync.lastError;
         refs.cloudSyncNowButton.disabled = false;

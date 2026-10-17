@@ -6,6 +6,29 @@ import type { StreamCallbacks, StreamingAbortHandle, StreamingChatCompletionChun
 
 const OPENROUTER_BASE_URL: string = "https://openrouter.ai/api/v1";
 
+/** When true, streaming calls log request/response diagnostics to the console. */
+let debugApiCalls: boolean = false;
+
+/**
+ * Enables or disables debug logging for the streaming calls in this module.
+ * Called by both the page and the service worker so the app's debug setting is
+ * shared across the boundary.
+ * @param {boolean} enabled - True to log streaming diagnostics
+ * @returns {void}
+ */
+export function setDebugApiCalls(enabled: boolean): void {
+    debugApiCalls = enabled;
+}
+
+/**
+ * Logs a diagnostic message when debug logging is enabled.
+ * @param {string} message - Message to log
+ * @returns {void}
+ */
+function debugLog(message: string): void {
+    if (debugApiCalls) { console.log(message); }
+}
+
 /**
  * Strips XML tags from a message and returns the first 60 characters of plain text
  * @param {string} text - The message text to trim
@@ -50,13 +73,6 @@ export function streamChatCompletion(
     temperature: number = 0.2,
     maxTokens?: number
 ): StreamingAbortHandle {
-    function debugLog(msg: string): void {
-        if ((typeof (globalThis as any).DEBUG_API_CALLS !== 'undefined' && (globalThis as any).DEBUG_API_CALLS)
-            || (typeof process !== 'undefined' && process.env?.DEBUG_API_CALLS)) {
-            console.log(msg);
-        }
-    }
-
     let aborted = false;
     const abortController = new AbortController();
 

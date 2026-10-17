@@ -71,6 +71,7 @@ export interface CloudSyncState {
     lastSyncTime: string | null;
     isSyncing: boolean;
     lastError: string | null;
+    needsReauth: boolean;
 }
 
 export interface ConversationViewState {

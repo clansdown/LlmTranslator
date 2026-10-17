@@ -451,3 +451,24 @@ The `/cloud/` directory is **never** synced to cloud storage.
 | `APP_PREFIX` | `src/storage.ts` | `'translate'` | OPFS namespace for this app |
 | `CLOUD_PREFIX` | `src/storage.ts` | `'cloud'` | Shared cross-tool namespace |
 | `CLOUD_PREFIX` | `src/cloudSync.ts` | `'translate/'` | Cloud storage path prefix |
+
+## 18. Service Worker
+
+The app offloads long-running streaming requests to a service worker so they
+survive the page being backgrounded. See
+[`docs/service-worker-architecture.md`](docs/service-worker-architecture.md) for
+the full design.
+
+Layer boundary (mirrored by `tsconfig.json` / `tsconfig.sw.json`):
+
+- `src/core/` — shared, DOM-free code runnable in **both** the page and the
+  worker. Must not import from `sw/` or any page-only module.
+- `src/sw/` — worker-only code, compiled with the `WebWorker` lib and excluded
+  from the DOM project. May import `core/` only.
+- `src/swClient.ts` — page-only client. May import `core/protocol.ts` and
+  `core/types.ts` only, never `sw/`.
+
+Build: `npm run build` runs the page build and then
+`vite build --config vite.sw.config.ts` to emit `dist/sw.js` at the app root
+(so the worker has app-wide scope). In dev, `build/serviceWorkerDevPlugin.ts`
+bundles the same config and serves it at `/sw.js`.

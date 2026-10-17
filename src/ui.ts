@@ -128,6 +128,11 @@ export function updateCloudSyncUI(): void {
         btn.textContent = '↻';
         btn.className = 'btn btn-outline-warning btn-sm';
         btn.disabled = true;
+    } else if (sync.needsReauth) {
+        btn.textContent = 'Log in';
+        btn.className = 'btn btn-outline-danger btn-sm';
+        btn.disabled = false;
+        btn.title = 'Session expired — log in again';
     } else if (sync.lastError) {
         btn.textContent = '!';
         btn.className = 'btn btn-outline-danger btn-sm';

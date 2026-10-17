@@ -5,7 +5,7 @@
  */
 
 import { Modal } from 'bootstrap';
-import { getClerkToken, isSignedIn, isClerkEnabled, getUserId } from './auth';
+import { getClerkToken, isSignedIn, isClerkEnabled, getUserId, AuthRequiredError, notifyAuthRequired } from './auth';
 import { getOPFSHandle, ensureDirectory, readCloudPreference, writeCloudPreference, readLocalFile, writeLocalFile, deleteLocalFile, walkOpfsDirectory, getCredentialsHandle, getDeviceId, getDeviceName } from './opfs';
 import { STATE } from './state';
 import * as ui from './ui';
@@ -16,7 +16,7 @@ const WORKER_BASE_URL = import.meta.env.DEV
     ? 'http://localhost:8787'
     : 'https://findforge-storage.chris-f57.workers.dev';
 const SYNC_INTERVAL_MS = 60 * 60 * 1000;
-export const ALLOW_CLOUD_DELETIONS = false;
+export const ALLOW_CLOUD_DELETIONS = true;
 export const CLOUD_PREFIX = 'translate/';
 const MANIFEST_PATH = 'preferences/syncManifest';
 const CLOUD_STATE_PATH = 'cloud-state.json';
@@ -86,10 +86,15 @@ async function withSyncLock(fn: () => Promise<void>): Promise<void> {
     try {
         await fn();
         STATE.cloudSync.lastError = null;
+        STATE.cloudSync.needsReauth = false;
     } catch (e) {
         const msg = e instanceof Error ? e.message : 'Unknown sync error';
         STATE.cloudSync.lastError = msg;
-        if (e instanceof TypeError) {
+        if (e instanceof AuthRequiredError) {
+            STATE.cloudSync.needsReauth = true;
+            console.warn('[cloudSync] Session expired or missing, sync aborted');
+            notifyAuthRequired();
+        } else if (e instanceof TypeError) {
             console.warn('[cloudSync] Worker unreachable, sync aborted');
         } else if (e instanceof Error && e.message.startsWith('Worker request failed:')) {
             console.warn('[cloudSync] Worker error, sync aborted:', msg);
@@ -127,6 +132,7 @@ async function getAuthToken(forceRefresh: boolean = false): Promise<string | nul
     const token = await getClerkToken(forceRefresh ? { skipCache: true } : undefined);
     if (!token) {
         console.warn('[cloudSync] No Clerk token available');
+        notifyAuthRequired();
         return null;
     }
 
@@ -149,7 +155,8 @@ async function getAuthToken(forceRefresh: boolean = false): Promise<string | nul
 async function fetchWithAuth(url: string, options: RequestInit = {}): Promise<Response> {
     const token = await getAuthToken();
     if (!token) {
-        throw new Error('No Clerk token available');
+        notifyAuthRequired();
+        throw new AuthRequiredError('Not signed in — please log in again');
     }
 
     /**
@@ -178,7 +185,8 @@ async function fetchWithAuth(url: string, options: RequestInit = {}): Promise<Re
     if (response.status === 401 && errorBody?.error === 'token_expired') {
         const freshToken = await getAuthToken(true);
         if (!freshToken) {
-            throw new Error('Clerk token refresh failed — unable to retry request');
+            notifyAuthRequired();
+            throw new AuthRequiredError('Session expired — please log in again');
         }
 
         const retryResponse = await doFetch(freshToken);
@@ -190,6 +198,10 @@ async function fetchWithAuth(url: string, options: RequestInit = {}): Promise<Re
             retryError = await retryResponse.json() as WorkerErrorResponse;
         } catch {
             // Not JSON
+        }
+        if (retryResponse.status === 401) {
+            notifyAuthRequired();
+            throw new AuthRequiredError('Session expired — please log in again');
         }
         throw new Error(
             'Worker request failed after token refresh: ' + retryResponse.status +
@@ -209,7 +221,8 @@ async function fetchWithAuth(url: string, options: RequestInit = {}): Promise<Re
 
     // Other 401 codes (token_invalid, auth_failed, token_not_active) — no retry
     if (response.status === 401) {
-        throw new Error(
+        notifyAuthRequired();
+        throw new AuthRequiredError(
             'Authentication failed (' + (errorBody?.error ?? 'unknown') + '): ' +
             (errorBody?.message ?? 'No details')
         );
@@ -1614,14 +1627,9 @@ async function syncResetThenPull(): Promise<void> {
  * @returns {Promise<void>}
  */
 export async function initCloudSync(): Promise<void> {
-    if (!isClerkEnabled() || !isSignedIn()) {
-        console.log('[cloudSync] Clerk not available or not signed in');
-        return;
-    }
-
-    console.log('[cloudSync] Initializing...');
-
-    // Load shared settings from /cloud/preferences/
+    // Load shared settings from /cloud/preferences/ first: they are OPFS-backed
+    // and readable without a session, so we can tell the user they need to log
+    // in again when sync is enabled but their session is gone.
     const sharedEnabled = await readCloudPreference('cloudSyncEnabled');
     if (sharedEnabled !== null) {
         STATE.cloudSync.enabled = sharedEnabled === 'true';
@@ -1630,6 +1638,19 @@ export async function initCloudSync(): Promise<void> {
     if (sharedDeleteRemote !== null) {
         STATE.cloudSync.deleteRemoteOnLocalDelete = sharedDeleteRemote === 'true';
     }
+
+    if (!isClerkEnabled() || !isSignedIn()) {
+        console.log('[cloudSync] Clerk not available or not signed in');
+        if (STATE.cloudSync.enabled && isClerkEnabled()) {
+            STATE.cloudSync.needsReauth = true;
+            notifyAuthRequired();
+        }
+        ui.updateCloudSyncUI();
+        return;
+    }
+
+    console.log('[cloudSync] Initializing...');
+    STATE.cloudSync.needsReauth = false;
 
     // Load per-app state from app-root preferences
     const savedState = await readLocalFile('preferences/cloudSync');

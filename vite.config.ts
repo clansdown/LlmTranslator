@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite';
 import fs from 'fs';
 import path from 'path';
+import { serviceWorkerDevPlugin } from './build/serviceWorkerDevPlugin';
 
 export default defineConfig({
     base: './',
@@ -26,6 +27,7 @@ export default defineConfig({
         }
     },
     plugins: [
+        serviceWorkerDevPlugin(),
         {
             name: 'exclude-clerk-key',
             closeBundle() {
@@ -38,6 +40,9 @@ export default defineConfig({
     ],
     server: {
         port: 8002,
-        strictPort: true
+        strictPort: true,
+        watch: {
+            ignored: ['**/.dev-sw/**']
+        }
     }
 });

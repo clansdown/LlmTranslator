@@ -26,7 +26,8 @@ export const STATE: AppState = {
         deleteRemoteOnLocalDelete: true,
         lastSyncTime: null,
         isSyncing: false,
-        lastError: null
+        lastError: null,
+        needsReauth: false
     },
     conversationView: {
         minRatingFilter: null,
