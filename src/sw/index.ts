@@ -9,7 +9,7 @@
  * the application root (`sw.js`), which gives it app-wide scope. See
  * `docs/service-worker-architecture.md`.
  */
-import { DEBUG_API_CALLS } from '@/debug';
+import { DEBUG_API_CALLS } from '@/core/debug';
 import { setDebugApiCalls } from '@/core/openrouter';
 import { installCaching } from './cache';
 import { installRouter } from './router';

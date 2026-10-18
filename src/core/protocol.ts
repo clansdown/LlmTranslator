@@ -8,6 +8,10 @@
  * with a `MessageChannel` port transferred in the port list. The worker replies
  * on that port with `SwResponse` messages correlated by `id`. Cancellation is
  * sent as a separate `SwAbortRequest` on the worker (no port needed).
+ *
+ * The worker posts a `SwStartedMessage` as soon as it begins a job, before any
+ * network work. That lets the page distinguish "the worker never picked the
+ * request up" from "the model has not produced output yet".
  */
 import type { StreamUsage } from './types';
 
@@ -42,6 +46,13 @@ export interface SwAbortRequest {
 /** Any request the page may send to the worker. */
 export type SwRequest = SwStreamChatRequest | SwAbortRequest;
 
+/** Acknowledgement posted by the worker as soon as it begins a stream job. */
+export interface SwStartedMessage {
+    channel: string;
+    kind: 'started';
+    id: string;
+}
+
 /** Incremental text/reasoning emitted during a stream. */
 export interface SwChunkMessage {
     channel: string;
@@ -71,4 +82,4 @@ export interface SwErrorMessage {
 }
 
 /** Any response the worker may send back to the page. */
-export type SwResponse = SwChunkMessage | SwDoneMessage | SwErrorMessage;
+export type SwResponse = SwStartedMessage | SwChunkMessage | SwDoneMessage | SwErrorMessage;

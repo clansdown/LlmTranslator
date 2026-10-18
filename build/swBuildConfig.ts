@@ -22,6 +22,16 @@ export interface SwBuildOptions {
 }
 
 /**
+ * Creates a build identifier used to version the worker's caches.
+ * A fresh id per build guarantees a byte-different `sw.js` and a new cache name,
+ * so every deploy re-installs the worker instead of serving a stale app shell.
+ * @returns {string} Build identifier
+ */
+function createBuildId(): string {
+    return Date.now().toString(36);
+}
+
+/**
  * Builds the Vite configuration used to bundle the service worker.
  * @param {SwBuildOptions} options - Output directory and dev/prod flag
  * @returns {UserConfig} Vite configuration for the worker bundle
@@ -35,7 +45,8 @@ export function createSwBuildConfig(options: SwBuildOptions): UserConfig {
             }
         },
         define: {
-            __SW_DEV__: JSON.stringify(options.dev)
+            __SW_DEV__: JSON.stringify(options.dev),
+            __SW_BUILD_ID__: JSON.stringify(createBuildId())
         },
         build: {
             outDir: options.outDir,

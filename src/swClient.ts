@@ -15,6 +15,12 @@ export interface SwStreamHandlers {
     onError: (error: Error) => void;
 }
 
+/** How long the worker has to acknowledge a request before it is treated as lost. */
+const SW_DISPATCH_TIMEOUT_MS: number = 10000;
+
+/** Maximum gap between messages before an in-flight stream is treated as dead. */
+const SW_INACTIVITY_TIMEOUT_MS: number = 120000;
+
 /**
  * Reports whether the current environment can use a service worker.
  * @returns {boolean} True when `navigator.serviceWorker` exists
@@ -60,6 +66,13 @@ function generateRequestId(): string {
 
 /**
  * Starts a streaming chat completion in the service worker.
+ *
+ * The stream is watched so a caller can never wait forever: the worker must
+ * acknowledge the request within `SW_DISPATCH_TIMEOUT_MS`, must keep sending
+ * messages within `SW_INACTIVITY_TIMEOUT_MS`, and must not be replaced mid-stream
+ * (which is detected via the worker's `statechange` and `controllerchange`).
+ * Any of those ends the stream with `handlers.onError`.
+ *
  * @param {SwStreamChatInput} input - Stream parameters
  * @param {SwStreamHandlers} handlers - Chunk/done/error callbacks
  * @returns {StreamingAbortHandle} Handle whose `abort()` cancels the stream
@@ -67,8 +80,11 @@ function generateRequestId(): string {
 export function requestStream(input: SwStreamChatInput, handlers: SwStreamHandlers): StreamingAbortHandle {
     const id: string = generateRequestId();
     let worker: ServiceWorker | null = null;
+    let port: MessagePort | null = null;
     let cancelled: boolean = false;
     let settled: boolean = false;
+    let dispatchTimer: number | null = null;
+    let inactivityTimer: number | null = null;
 
     /** Sends a cancellation request to the worker if it has been reached. */
     function sendAbort(): void {
@@ -77,38 +93,132 @@ export function requestStream(input: SwStreamChatInput, handlers: SwStreamHandle
         worker.postMessage(abortRequest);
     }
 
+    /** Clears the dispatch watchdog once the worker has acknowledged the request. */
+    function clearDispatchTimer(): void {
+        if (dispatchTimer !== null) { window.clearTimeout(dispatchTimer); dispatchTimer = null; }
+    }
+
+    /** Clears both watchdogs. */
+    function clearTimers(): void {
+        clearDispatchTimer();
+        if (inactivityTimer !== null) { window.clearTimeout(inactivityTimer); inactivityTimer = null; }
+    }
+
+    /** Stops watching the worker's lifecycle. */
+    function detachLifecycle(): void {
+        worker?.removeEventListener('statechange', onWorkerStateChange);
+        navigator.serviceWorker?.removeEventListener('controllerchange', onControllerChange);
+    }
+
+    /**
+     * Fails the stream exactly once, releasing timers, listeners and the port.
+     * @param {string} reason - Human-readable failure reason
+     * @returns {void}
+     */
+    function failStream(reason: string): void {
+        if (settled) { return; }
+        settled = true;
+        clearTimers();
+        detachLifecycle();
+        port?.close();
+        handlers.onError(new Error(reason));
+    }
+
+    /**
+     * Completes the stream exactly once, releasing timers, listeners and the port.
+     * @returns {void}
+     */
+    function completeStream(): void {
+        if (settled) { return; }
+        settled = true;
+        clearTimers();
+        detachLifecycle();
+        port?.close();
+    }
+
+    /**
+     * Starts the dispatch watchdog: the worker must acknowledge within the timeout.
+     * @returns {void}
+     */
+    function armDispatchTimer(): void {
+        clearDispatchTimer();
+        dispatchTimer = window.setTimeout(function() {
+            failStream('Service worker did not start the request');
+        }, SW_DISPATCH_TIMEOUT_MS);
+    }
+
+    /**
+     * Restarts the inactivity watchdog: the worker must keep sending messages.
+     * @returns {void}
+     */
+    function armInactivityTimer(): void {
+        if (inactivityTimer !== null) { window.clearTimeout(inactivityTimer); }
+        inactivityTimer = window.setTimeout(function() {
+            failStream('Service worker stopped responding');
+        }, SW_INACTIVITY_TIMEOUT_MS);
+    }
+
+    /**
+     * Fails the stream if the worker running it is replaced (e.g. by an update).
+     * @returns {void}
+     */
+    function onWorkerStateChange(): void {
+        if (worker && worker.state === 'redundant') {
+            failStream('Service worker was replaced');
+        }
+    }
+
+    /**
+     * Fails the stream if a different worker takes control mid-stream.
+     * @returns {void}
+     */
+    function onControllerChange(): void {
+        failStream('Service worker changed');
+    }
+
     /** Establishes the message channel and starts the stream in the worker. */
     async function start(): Promise<void> {
         const registration = await ensureSwReady();
-        const activeWorker = registration?.active ?? null;
-        if (!activeWorker) {
-            settled = true;
-            handlers.onError(new Error('Service worker is not available'));
+        // Dispatch to the worker actually controlling this page, matching the
+        // `isSwControlling()` gate used by callers.
+        const target: ServiceWorker | null = navigator.serviceWorker.controller ?? registration?.active ?? null;
+        if (!target) {
+            if (!cancelled) { failStream('Service worker is not available'); }
             return;
         }
-        worker = activeWorker;
+        worker = target;
         if (cancelled) {
             sendAbort();
             return;
         }
 
         const channel = new MessageChannel();
+        port = channel.port1;
         channel.port1.onmessage = (event: MessageEvent<SwResponse>) => {
             const message = event.data;
             if (!message || message.id !== id) { return; }
-            if (message.kind === 'chunk') {
+            if (message.kind === 'started') {
+                clearDispatchTimer();
+                armInactivityTimer();
+            } else if (message.kind === 'chunk') {
+                armInactivityTimer();
                 handlers.onChunk(message.text, message.reasoning);
             } else if (message.kind === 'done') {
-                settled = true;
+                completeStream();
                 handlers.onDone(message.text, message.reasoning, message.generationId, message.usage);
-                channel.port1.close();
             } else if (message.kind === 'error') {
-                settled = true;
-                handlers.onError(new Error(message.message));
-                channel.port1.close();
+                failStream(message.message);
             }
         };
+        channel.port1.onmessageerror = () => {
+            failStream('Service worker response could not be read');
+        };
         channel.port1.start();
+
+        // The worker running this job is dead if it becomes redundant or a
+        // different worker takes over, so treat those as terminal failures.
+        worker.addEventListener('statechange', onWorkerStateChange);
+        navigator.serviceWorker.addEventListener('controllerchange', onControllerChange);
 
         const request: SwStreamChatRequest = {
             channel: SW_CHANNEL,
@@ -122,16 +232,27 @@ export function requestStream(input: SwStreamChatInput, handlers: SwStreamHandle
             temperature: input.temperature,
             maxTokens: input.maxTokens
         };
-        activeWorker.postMessage(request, [channel.port2]);
+        try {
+            target.postMessage(request, [channel.port2]);
+        } catch (error) {
+            failStream('Failed to send request to service worker: ' + (error instanceof Error ? error.message : String(error)));
+            return;
+        }
+        armDispatchTimer();
     }
 
-    void start();
+    start().catch(function(error: unknown) {
+        failStream('Failed to start service worker request: ' + (error instanceof Error ? error.message : String(error)));
+    });
 
     return {
         abort: (): void => {
             if (cancelled || settled) { return; }
             cancelled = true;
             sendAbort();
+            clearTimers();
+            detachLifecycle();
+            port?.close();
         }
     };
 }

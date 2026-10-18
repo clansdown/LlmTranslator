@@ -45,11 +45,20 @@ export function handleStreamChat(request: SwStreamChatRequest, port: MessagePort
         port.postMessage(message);
     }
 
-    /** Clears the job and resolves the `waitUntil` promise exactly once. */
+    /**
+     * Clears the job and resolves the `waitUntil` promise exactly once.
+     * The port is deliberately left open: per spec `port.close()` discards
+     * queued-but-undelivered messages, which could drop the terminal message.
+     * The page closes its own end of the channel instead.
+     */
     function finish(): void {
         activeJobs.delete(request.id);
         settle();
     }
+
+    // Acknowledge the request before any network work so the page can tell
+    // "worker never started the job" apart from "no output from the model yet".
+    post({ channel: SW_CHANNEL, kind: 'started', id: request.id });
 
     const handle = streamChatCompletion(
         request.apiKey,

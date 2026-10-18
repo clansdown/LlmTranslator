@@ -1387,7 +1387,9 @@
 
         <script>
         if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('./sw.js');
+            navigator.serviceWorker.register('./sw.js').catch(function (error) {
+                console.error('[app] Service worker registration failed:', error);
+            });
         }
     </script>
     <script src="./clerk-key.js"></script>

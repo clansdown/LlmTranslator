@@ -30,6 +30,9 @@ export function installRouter(): void {
                 return;
             }
             event.waitUntil(handleStreamChat(request, port));
+            return;
         }
+
+        console.warn('[sw] Unhandled message kind:', (request as { kind: string }).kind);
     });
 }
