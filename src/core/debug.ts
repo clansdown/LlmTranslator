@@ -15,3 +15,6 @@ export const DEBUG_SESSIONS: boolean = false;
 
 /** Log OpenRouter API call diagnostics (page and worker). */
 export const DEBUG_API_CALLS: boolean = true;
+
+/** Log streaming chunk arrival and render timing (page only). */
+export const DEBUG_STREAM_RENDER: boolean = false;

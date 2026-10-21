@@ -4,11 +4,26 @@
  */
 
 import { translateStructured, sendChatMessage, streamSendChatMessage, streamTranslateStructured, parseTag } from './openrouter';
-import { getPreference, savePreference, listSessions, saveSession, loadSession, deleteSession as storageDeleteSession, getOrCreateDefaultSession, saveSessionTranslation, listSessionTranslations, deleteSessionTranslation, loadSessionTranslation } from './storage';
+import { getPreference, savePreference, listSessions, saveSession, loadSession, deleteSession as storageDeleteSession, getOrCreateDefaultSession, saveSessionTranslation, listSessionTranslationTimestamps, loadSessionTranslationsByTimestamp, deleteSessionTranslation, loadSessionTranslation } from './storage';
 import { DEBUG_TRANSLATIONS, DEBUG_SESSIONS } from './debug';
 import * as ui from './ui';
 import { LANGUAGES } from './languages';
-import { INPUT_SYSTEM_PROMPT, OUTPUT_SYSTEM_PROMPT, INPUT_INSTRUCTIONS, OUTPUT_INSTRUCTIONS, LITERAL_RETRANSLATION_PROMPT, OUTPUT_LITERAL_RETRANSLATION_PROMPT, QUESTION_SYSTEM_PROMPT, WORD_DEFINITIONS_PROMPT, INTERPRETATION_PROMPT, QUICK_QUESTION_DRAFT_PROMPT, QUICK_QUESTION_MESSAGE_PROMPT, QUICK_QUESTION_TRANSLATION_PROMPT } from './prompts';
+import {
+    INPUT_SYSTEM_PROMPT,
+    OUTPUT_SYSTEM_PROMPT,
+    INPUT_INSTRUCTIONS,
+    OUTPUT_INSTRUCTIONS,
+    LITERAL_RETRANSLATION_PROMPT,
+    OUTPUT_LITERAL_RETRANSLATION_PROMPT,
+    QUESTION_SYSTEM_PROMPT,
+    WORD_DEFINITIONS_PROMPT,
+    INTERPRETATION_PROMPT,
+    QUICK_QUESTION_DRAFT_PROMPT,
+    QUICK_QUESTION_MESSAGE_PROMPT,
+    QUICK_QUESTION_TRANSLATION_PROMPT,
+    QUICK_QUESTION_NOTE_PROMPT,
+    TIMESTAMP_NOTE
+} from './prompts';
 import { renderMarkdown, normalizeForMarkdown } from './markdown';
 import { readLocalFile, writeLocalFile, deleteLocalFile, getDeviceId } from './opfs';
 import type { Translation, TranslationEntry, TranslationWordItem, WordItem, PunctItem, NewlineItem } from './types/translation';
@@ -16,7 +31,9 @@ import type { StreamingAbortHandle, StreamCallbacks, StreamUsage } from './types
 import type { Config } from './types/config';
 import type { TranslationTag } from './types/translationTag';
 import type { TranslationSession, ReasoningLevel } from './types/session';
-import { formatTimestamp, extractStructuredResult, stripTranslationTags, parseWordDefinitions, ensureEntries, stripIfNeeded } from './core/translation';
+import { formatTimestamp, formatTimestampWithOffset, extractStructuredResult, stripTranslationTags, parseWordDefinitions, ensureEntries, stripIfNeeded } from './core/translation';
+import { getDayStart, groupTimestampsByDay, selectTimestampsInDays } from './historyWindow';
+import { scheduleStreamRender, cancelStreamRender } from './streamRender';
 import { Modal } from 'bootstrap';
 
 /**
@@ -59,8 +76,20 @@ const DRAFT_SAVE_DEBOUNCE_MS = 2000;
 /** Prevents multiple quick question modals from stacking */
 let quickQuestionModalOpen = false;
 
+/** Prevents multiple context-note modals from stacking */
+let contextNoteModalOpen = false;
+
 /** Caches the first draft quick question text across modal dismissals */
 let cachedDraftQuickQuestion: string | null = null;
+
+/** Caches the first question asked about a source message across modal dismissals */
+let cachedSourceQuickQuestion: string | null = null;
+
+/** Caches the first question asked about a translation across modal dismissals */
+let cachedTranslationQuickQuestion: string | null = null;
+
+/** Caches the first question asked about a context note across modal dismissals */
+let cachedContextQuickQuestion: string | null = null;
 
 /** Timeout handle for draft auto-save debounce */
 let draftSaveTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -70,6 +99,34 @@ let draftSaveTimeout: ReturnType<typeof setTimeout> | null = null;
  * @type {Translation[]}
  */
 let allTranslations: Translation[] = [];
+
+/**
+ * Number of active days loaded into the UI at a time.
+ * Must be at least as large as the largest context window (HISTORY_CONTEXT_DAYS)
+ * so that the context builders always see their whole window in allTranslations.
+ * Note that context-only days count towards the page but not towards the context
+ * window, so a page can contain fewer than HISTORY_CONTEXT_DAYS content days.
+ * Accepted because note-only days are rare in practice.
+ */
+const HISTORY_DAYS_PER_PAGE = 20;
+
+/** Extra viewport margin (px) that triggers loading the next page of history */
+const HISTORY_SCROLL_MARGIN = 200;
+
+/** All translation timestamps in the current session, newest first */
+let sessionTranslationTimestamps: number[] = [];
+
+/** Distinct active days (local midnight) in the current session, newest first */
+let sessionActiveDays: number[] = [];
+
+/** Day starts whose translations are currently loaded and rendered */
+let loadedHistoryDays = new Set<number>();
+
+/** Guards against overlapping "load older history" calls */
+let isLoadingOlderHistory = false;
+
+/** Observer that loads older history when the sentinel scrolls into view */
+let historyScrollObserver: IntersectionObserver | null = null;
 
 /**
  * Maps of model IDs to names for display
@@ -99,6 +156,8 @@ interface TranslationDomRefs {
     explanationEl: HTMLElement | null;
     nuancesEl: HTMLElement | null;
     interpretationEl: HTMLElement | null;
+    interpretationMarkdownEl: HTMLElement | null;
+    interpretationRawEl: HTMLElement | null;
     interpretationThinkingEl: HTMLElement | null;
     interpretationThinkingContentEl: HTMLElement | null;
     spinnerEl: HTMLElement | null;
@@ -127,6 +186,7 @@ interface TranslationDomRefs {
     editSource: HTMLTextAreaElement | null;
     editIntent: HTMLTextAreaElement | null;
     retranslateBtn: HTMLButtonElement | null;
+    addContextBtn: HTMLButtonElement | null;
     editToggleBtn: HTMLButtonElement | null;
     quickQuestionBtn: HTMLButtonElement | null;
     includeInContextToggle: HTMLInputElement | null;
@@ -213,6 +273,26 @@ const literalStreamingStateMap: WeakMap<Translation, LiteralStreamingState> = ne
  * @type {WeakMap<Translation, () => void>}
  */
 const interpretationAbortMap: WeakMap<Translation, () => void> = new WeakMap();
+
+/**
+ * Ephemeral streaming state for interpretation streaming.
+ * Interpretation output is plain markdown (no XML tags), so only the accumulated
+ * text and the offset already painted as markdown need tracking.
+ */
+interface InterpretationStreamingState {
+    accumulatedText: string;
+    /** Offset of the accumulated text already rendered as markdown. */
+    renderedUpTo: number;
+    /** True once the pane has been painted at least once for this stream. */
+    hasPainted: boolean;
+}
+
+/**
+ * Map from Translation objects to their interpretation streaming state.
+ * Used both for incremental rendering and as the stream's render-scheduler key.
+ * @type {WeakMap<Translation, InterpretationStreamingState>}
+ */
+const interpretationStreamingStateMap: WeakMap<Translation, InterpretationStreamingState> = new WeakMap();
 
 /**
  * Sets the model override dropdown with available models
@@ -404,6 +484,15 @@ export function getCurrentSessionId(): string {
 }
 
 /**
+ * Reads the current session's explicitly chosen model, if any
+ * @returns {Promise<string | null>} Session model id, or null when none is set
+ */
+export async function getCurrentSessionModel(): Promise<string | null> {
+    const session = await loadSession(currentSessionId);
+    return session?.model ?? null;
+}
+
+/**
  * Loads all sessions from storage
  * @returns {Promise<TranslationSession[]>} Array of sessions
  */
@@ -431,26 +520,114 @@ export async function setCurrentSession(sessionId: string): Promise<void> {
 
     currentSessionId = sessionId;
     cachedDraftQuickQuestion = null;
+    cachedSourceQuickQuestion = null;
+    cachedTranslationQuickQuestion = null;
+    cachedContextQuickQuestion = null;
     currentLiteralModel = getLiteralModelToUse(session);
     currentInterpretationModel = getInterpretationModelToUse(session);
     await savePreference('currentSession', sessionId);
 
     allTranslations = [];
     clearTranslationContainers();
+    await resetHistoryWindow(sessionId);
 
-    const MAX_HISTORY = 1000;
-    const inputItems = await listSessionTranslations(sessionId, 'input', MAX_HISTORY);
-    const outputItems = await listSessionTranslations(sessionId, 'output', MAX_HISTORY);
-    const questionItems = await listSessionTranslations(sessionId, 'question', MAX_HISTORY);
-    allTranslations = [...inputItems, ...outputItems, ...questionItems]
-        .sort(function(a, b) { return b.timestamp - a.timestamp; });
-
-    for (const t of allTranslations) {
-        ensureEntries(t);
+    if (config) {
+        if (session.model) {
+            config.selectedModel = session.model;
+        }
     }
 
-    // Fix up interrupted translations from potential previous crashes
-    for (const t of allTranslations) {
+    updateSessionSelector(sessionId);
+    await loadDrafts(sessionId);
+
+    if (DEBUG_SESSIONS) {
+        console.log(`[setCurrentSession] Switched to session ${sessionId}: ${session.name}`);
+    }
+}
+
+/**
+ * Resets the history window for a session and loads its first page.
+ * Enumerates the session's translation timestamps (a directory listing, no file
+ * reads), groups them into active days, then loads the most recent page.
+ * @param {string} sessionId - Session ID to load
+ * @returns {Promise<void>}
+ */
+async function resetHistoryWindow(sessionId: string): Promise<void> {
+    sessionTranslationTimestamps = await listSessionTranslationTimestamps(sessionId);
+    sessionActiveDays = groupTimestampsByDay(sessionTranslationTimestamps);
+    loadedHistoryDays = new Set<number>();
+    await loadNextHistoryPage();
+}
+
+/**
+ * Loads and renders the next page of active days, appending older history below
+ * the already-rendered items. Does nothing when every day is loaded or when a
+ * load is already in flight.
+ * @returns {Promise<boolean>} True when a page was loaded, false when there was nothing to do
+ */
+async function loadNextHistoryPage(): Promise<boolean> {
+    if (isLoadingOlderHistory) return false;
+
+    const remainingDays = sessionActiveDays.filter(function(day: number): boolean {
+        return !loadedHistoryDays.has(day);
+    });
+    if (remainingDays.length === 0) return false;
+
+    isLoadingOlderHistory = true;
+    try {
+        const sessionId = currentSessionId;
+        const days = remainingDays.slice(0, HISTORY_DAYS_PER_PAGE);
+        const timestamps = selectTimestampsInDays(sessionTranslationTimestamps, days);
+        const loaded = await loadSessionTranslationsByTimestamp(sessionId, timestamps);
+
+        // The session may have been switched while the files were loading
+        if (sessionId !== currentSessionId) return false;
+
+        for (const translation of loaded) {
+            ensureEntries(translation);
+        }
+        repairInterruptedTranslations(loaded);
+
+        const knownIds = new Set(allTranslations.map(function(t) { return t.id; }));
+        const additions = loaded.filter(function(t) { return !knownIds.has(t.id); });
+        allTranslations = allTranslations.concat(additions)
+            .sort(function(a, b) { return b.timestamp - a.timestamp; });
+
+        const container = document.getElementById('translations-container');
+        if (container) {
+            // Newer first, appended: the container runs newest at the top
+            const newestFirst = [...additions].sort(function(a, b) { return b.timestamp - a.timestamp; });
+            for (const translation of newestFirst) {
+                renderTranslationItem(container, translation, 'bottom');
+            }
+        }
+
+        for (const day of days) {
+            loadedHistoryDays.add(day);
+        }
+        return true;
+    } finally {
+        isLoadingOlderHistory = false;
+    }
+}
+
+/**
+ * Reports whether any active day has yet to be loaded
+ * @returns {boolean} True when older history remains to be loaded
+ */
+function hasRemainingHistoryDays(): boolean {
+    return sessionActiveDays.some(function(day: number): boolean {
+        return !loadedHistoryDays.has(day);
+    });
+}
+
+/**
+ * Repairs translations left mid-flight by a crash or reload
+ * @param {Translation[]} translations - Translations to repair
+ * @returns {void}
+ */
+function repairInterruptedTranslations(translations: Translation[]): void {
+    for (const t of translations) {
         const entry = t.entries[t.activeEntryIndex ?? 0];
         let needsSave = false;
         if (entry) {
@@ -474,26 +651,49 @@ export async function setCurrentSession(sessionId: string): Promise<void> {
             if (needsSave) {
                 syncTopLevelFromActive(t);
                 saveSessionTranslation(currentSessionId, t).catch(function(e: unknown) {
-                    console.error('[setCurrentSession] Failed to save fixed translation:', e);
+                    console.error('[repairInterruptedTranslations] Failed to save fixed translation:', e);
                 });
             }
         }
     }
+}
 
-    renderAllTranslations();
+/**
+ * Loads further history pages while the sentinel remains on screen.
+ * An IntersectionObserver only fires when the sentinel crosses into view, so a
+ * page too short to push the sentinel off screen must be followed up manually.
+ * @returns {Promise<void>}
+ */
+async function fillHistoryViewport(): Promise<void> {
+    const sentinel = document.getElementById('history-load-sentinel');
+    if (!sentinel) return;
 
-    if (config) {
-        if (session.model) {
-            config.selectedModel = session.model;
+    while (hasRemainingHistoryDays()) {
+        const top = sentinel.getBoundingClientRect().top;
+        if (top > window.innerHeight + HISTORY_SCROLL_MARGIN) return;
+        const loadedPage = await loadNextHistoryPage();
+        if (!loadedPage) return;
+    }
+}
+
+/**
+ * Wires the sentinel that loads older history as the user scrolls down
+ * @returns {void}
+ */
+export function setupHistoryAutoLoad(): void {
+    const sentinel = document.getElementById('history-load-sentinel');
+    if (!sentinel || historyScrollObserver) return;
+
+    historyScrollObserver = new IntersectionObserver(function(entries: IntersectionObserverEntry[]): void {
+        for (const entry of entries) {
+            if (!entry.isIntersecting) continue;
+            fillHistoryViewport().catch(function(e: unknown) {
+                console.error('[setupHistoryAutoLoad] Failed to load older history:', e);
+            });
         }
-    }
+    }, { rootMargin: HISTORY_SCROLL_MARGIN + 'px' });
 
-    updateSessionSelector(sessionId);
-    await loadDrafts(sessionId);
-
-    if (DEBUG_SESSIONS) {
-        console.log(`[setCurrentSession] Switched to session ${sessionId}: ${session.name}`);
-    }
+    historyScrollObserver.observe(sentinel);
 }
 
 /**
@@ -512,7 +712,7 @@ export async function createSession(name?: string): Promise<string> {
         id: generateUuid(),
         deviceId: deviceId,
         name: name ?? "New Conversation",
-        model: null,
+        model: config?.defaultModel ?? config?.selectedModel ?? null,
         theirLanguage: 'english',
         myLanguage: config?.defaultMyLanguage ?? 'english',
         background: "",
@@ -689,35 +889,57 @@ export async function initializeDefaultSession(): Promise<void> {
 
 
 /**
- * Builds the history section for the user message
- * Returns history from the last 7 days with activity
- * @param {boolean} includeQuestions - Whether to include question/answer pairs in history
- * @returns {string} History section or empty string
+ * Controls which conversation history is included in a user message
  */
-async function buildHistorySection(includeQuestions: boolean = true, sourcesOnly: boolean = false, respectQuestionToggle: boolean = true): Promise<string> {
-    const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
-    const now = Date.now();
-    const cutoff = now - SEVEN_DAYS_MS;
+type HistorySectionOptions = {
+    /** Number of most recent days with activity to include */
+    activeDayCount: number;
+    /** Whether to include question/answer pairs */
+    includeQuestions: boolean;
+    /**
+     * Which rendering of each message to include.
+     * 'sourceAndTranslation' includes both sides of every message;
+     * 'recipientView' includes only the text the other party actually received.
+     */
+    contentMode?: 'sourceAndTranslation' | 'recipientView';
+};
 
-    const activeDays = new Set<number>();
-    for (const t of allTranslations) {
-        if (t.status === 'complete' && t.timestamp >= cutoff) {
-            const dayStart = new Date(t.timestamp).setHours(0, 0, 0, 0);
-            activeDays.add(dayStart);
-        }
-    }
+/** Active days of history included in translation, question and quick question messages */
+const HISTORY_CONTEXT_DAYS = 7;
 
-    if (activeDays.size === 0) {
+/** Active days of history included in interpretation messages */
+const INTERPRETATION_CONTEXT_DAYS = 5;
+
+/**
+ * Builds the history section for the user message from the most recent active days.
+ * In 'recipientView' mode only the text the other party actually received is included:
+ * the foreign source of messages they sent, and the foreign translation of messages
+ * the user sent. Question/answer pairs are only included when the item is marked
+ * includeInContext.
+ * @param {HistorySectionOptions} options - Which history to include
+ * @returns {Promise<string>} History section or empty string
+ */
+async function buildHistorySection(options: HistorySectionOptions): Promise<string> {
+    const includeQuestions = options.includeQuestions;
+    const recipientView = options.contentMode === 'recipientView';
+
+    const complete = allTranslations.filter(function(t) { return t.status === 'complete'; });
+
+    // Only conversation content starts or extends the window. Context notes must
+    // not consume one of the counted days; they are still included when they fall
+    // after the window's start, so a back-dated note reaches retroactively.
+    const contentItems = complete.filter(function(t) { return t.pill !== 'context'; });
+    const contentDays = groupTimestampsByDay(contentItems.map(function(t) { return t.timestamp; }));
+    const windowDays = contentDays.slice(0, options.activeDayCount);
+
+    if (windowDays.length === 0) {
         return "";
     }
 
-    const translationsWithinDays = allTranslations.filter(function(t) {
-        if (t.status !== 'complete') return false;
-        const dayStart = new Date(t.timestamp).setHours(0, 0, 0, 0);
-        return activeDays.has(dayStart);
-    });
-
-    translationsWithinDays.sort(function(a, b) { return a.timestamp - b.timestamp; });
+    const cutoff = windowDays[windowDays.length - 1];
+    const translationsWithinDays = complete
+        .filter(function(t) { return t.timestamp >= cutoff; })
+        .sort(function(a, b) { return a.timestamp - b.timestamp; });
 
     // Load session tags for stripping from output translations
     let outputTags: TranslationTag[] = [];
@@ -734,19 +956,23 @@ async function buildHistorySection(includeQuestions: boolean = true, sourcesOnly
         const ts = formatTimestamp(t.timestamp);
         if (t.pill === 'input') {
             history += `<them ts="${ts}">${entry.source}</them>\n`;
-            if (!sourcesOnly) {
+            if (!recipientView) {
                 history += `<them ts="${ts}">${stripIfNeeded(entry.translation, 'output', outputTags)}</them>\n`;
             }
         } else if (t.pill === 'output') {
-            history += `<me ts="${ts}">${entry.source}</me>\n`;
-            if (!sourcesOnly) {
+            if (recipientView) {
+                history += `<me ts="${ts}">${stripIfNeeded(entry.translation, 'output', outputTags)}</me>\n`;
+            } else {
+                history += `<me ts="${ts}">${entry.source}</me>\n`;
                 history += `<me ts="${ts}">${stripIfNeeded(entry.translation, 'output', outputTags)}</me>\n`;
             }
-        } else if (t.pill === 'question' && includeQuestions && (!respectQuestionToggle || t.includeInContext === true)) {
+        } else if (t.pill === 'question' && includeQuestions && t.includeInContext === true) {
             history += `<already_answered ts="${ts}">${entry.source}</already_answered>\n`;
-            if (!sourcesOnly) {
-                history += `<agentanswer ts="${ts}">${stripIfNeeded(entry.translation, 'question', outputTags)}</agentanswer>\n`;
-            }
+            history += `<agentanswer ts="${ts}">${stripIfNeeded(entry.translation, 'question', outputTags)}</agentanswer>\n`;
+        } else if (t.pill === 'context') {
+            // Context notes are always included; they are background the user
+            // supplied deliberately, not something the other party said.
+            history += `<note ts="${ts}">${entry.source}</note>\n`;
         }
     }
     history += "</history>";
@@ -813,58 +1039,19 @@ export async function switchTranslationEntry(translationId: string, entryIndex: 
 }
 
 /**
- * Builds history section for interpretation - last 2 days with input/output translations
- * Excludes questions
- * @returns {string} History section or empty string
+ * Builds the interpretation system prompt with the session's language names filled in
+ * @param {TranslationSession | null} session - Active session, or null if unavailable
+ * @returns {string} System prompt with [LANGUAGE] and [TARGET_LANGUAGE] substituted
  */
-function buildInterpretationHistory(): string {
-    const TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000;
-    const now = Date.now();
-    const cutoff = now - TWO_DAYS_MS;
+function buildInterpretationSystemPrompt(session: TranslationSession | null): string {
+    const myLang = LANGUAGES.find(function(l) { return l.id === session?.myLanguage; });
+    const myLangName = myLang?.name ?? session?.myLanguage ?? 'the source language';
+    const theirLang = LANGUAGES.find(function(l) { return l.id === session?.theirLanguage; });
+    const theirLangName = theirLang?.name ?? session?.theirLanguage ?? 'the target language';
 
-    const dayMap = new Map<number, Translation[]>();
-    for (const t of allTranslations) {
-        if (t.status !== 'complete') continue;
-        if (t.pill === 'question') continue;
-        if (t.timestamp < cutoff) continue;
-        const dayStart = new Date(t.timestamp).setHours(0, 0, 0, 0);
-        if (!dayMap.has(dayStart)) {
-            dayMap.set(dayStart, []);
-        }
-        dayMap.get(dayStart)!.push(t);
-    }
-
-    if (dayMap.size === 0) {
-        return "";
-    }
-
-    const sortedDays = Array.from(dayMap.keys()).sort(function(a, b) { return b - a; });
-    const lastTwoDays = sortedDays.slice(0, 2);
-
-    /** @type {Translation[]} */
-    const translationsForHistory: Translation[] = [];
-    for (const day of lastTwoDays) {
-        const dayTranslations = dayMap.get(day) ?? [];
-        dayTranslations.sort(function(a, b) { return a.timestamp - b.timestamp; });
-        translationsForHistory.push(...dayTranslations);
-    }
-
-    let history = "<history>\n";
-    for (const t of translationsForHistory) {
-        ensureEntries(t);
-        const entry = t.entries[t.activeEntryIndex ?? 0];
-        if (!entry) continue;
-        const ts = formatTimestamp(t.timestamp);
-        if (t.pill === 'input') {
-            history += `<them ts="${ts}">${entry.source}</them>\n`;
-            history += `<them ts="${ts}">${entry.translation}</them>\n`;
-        } else if (t.pill === 'output') {
-            history += `<me ts="${ts}">${entry.source}</me>\n`;
-            history += `<me ts="${ts}">${entry.translation}</me>\n`;
-        }
-    }
-    history += "</history>";
-    return history;
+    return INTERPRETATION_PROMPT
+        .replace(/\[LANGUAGE\]/g, myLangName)
+        .replace(/\[TARGET_LANGUAGE\]/g, theirLangName);
 }
 
 /**
@@ -884,14 +1071,19 @@ async function buildInterpretationMessage(translation: Translation): Promise<str
         message += `<background>${background}</background>\n\n`;
     }
 
-    const history = buildInterpretationHistory();
+    const history = await buildHistorySection({
+        activeDayCount: INTERPRETATION_CONTEXT_DAYS,
+        includeQuestions: false,
+        contentMode: 'recipientView'
+    });
     if (history) {
         message += history + "\n\n";
     }
 
     const entry = translation.entries?.[translation.activeEntryIndex ?? 0];
     const translationText = entry?.translation ?? (translation as any).translation ?? '';
-    message += `<current_time val="${formatTimestamp(Date.now())}"/>\n\n`;
+    message += `<current_time val="${formatTimestampWithOffset(Date.now())}"/>\n`;
+    message += `(${TIMESTAMP_NOTE})\n\n`;
     message += `<interpret>${translationText}</interpret>\n\n`;
     message += `<instructions>Explain how the listener will understand this message — both text and subtext — given their linguistic and cultural context. Write your explanation in ${myLangName}.</instructions>`;
 
@@ -906,6 +1098,7 @@ export function setupTranslateButtons(): void {
     const translateBtn = document.getElementById("translate-btn");
     const askBtn = document.getElementById("ask-btn");
     const inputBtn = document.getElementById("input-btn");
+    const contextBtn = document.getElementById("context-btn");
 
     if (translateBtn) {
         translateBtn.addEventListener('click', function() {
@@ -925,12 +1118,18 @@ export function setupTranslateButtons(): void {
         });
     }
 
+    if (contextBtn) {
+        contextBtn.addEventListener('click', function() {
+            void showContextNoteModal();
+        });
+    }
+
     const quickQuestionBtn = document.getElementById('quick-question-btn');
     if (quickQuestionBtn) {
         quickQuestionBtn.addEventListener('click', function() {
             if (quickQuestionModalOpen) return;
             showQuickQuestionModal(cachedDraftQuickQuestion
-                ? { defaultQuestion: cachedDraftQuickQuestion }
+                ? { prefillQuestion: cachedDraftQuickQuestion }
                 : undefined
             );
         });
@@ -1102,6 +1301,7 @@ export function updateButtonStates(): void {
     const translateBtn = document.getElementById("translate-btn") as HTMLButtonElement | null;
     const askBtn = document.getElementById("ask-btn") as HTMLButtonElement | null;
     const inputBtn = document.getElementById("input-btn") as HTMLButtonElement | null;
+    const contextBtn = document.getElementById("context-btn") as HTMLButtonElement | null;
 
     const hasModel = config !== null && config.selectedModel !== null;
 
@@ -1115,6 +1315,11 @@ export function updateButtonStates(): void {
 
     if (inputBtn) {
         inputBtn.disabled = !hasModel;
+    }
+
+    // Context notes never reach the LLM, so they need no model
+    if (contextBtn) {
+        contextBtn.disabled = false;
     }
 }
 
@@ -1134,12 +1339,16 @@ async function buildUserMessage(pill: 'input' | 'output' | 'question', sourceTex
         message += `<background>${background}</background>\n\n`;
     }
 
-    const history = await buildHistorySection(pill !== 'input', false, true);
+    const history = await buildHistorySection({
+        activeDayCount: HISTORY_CONTEXT_DAYS,
+        includeQuestions: pill !== 'input'
+    });
     if (history) {
         message += history + "\n\n";
     }
 
-    message += `<current_time val="${formatTimestamp(Date.now())}"/>\n\n`;
+    message += `<current_time val="${formatTimestampWithOffset(Date.now())}"/>\n`;
+    message += `(${TIMESTAMP_NOTE})\n\n`;
     message += `<translate>${sourceText}</translate>\n\n`;
     message += `<instructions>${instructions}</instructions>`;
 
@@ -1277,12 +1486,16 @@ async function buildQuestionMessage(questionText: string, myLanguage?: string): 
         message += `<background>${background}</background>\n\n`;
     }
 
-    const history = await buildHistorySection(true, true, false);
+    const history = await buildHistorySection({
+        activeDayCount: HISTORY_CONTEXT_DAYS,
+        includeQuestions: true
+    });
     if (history) {
         message += history + "\n\n";
     }
 
-    message += `<current_time val="${formatTimestamp(Date.now())}"/>\n\n`;
+    message += `<current_time val="${formatTimestampWithOffset(Date.now())}"/>\n`;
+    message += `(${TIMESTAMP_NOTE})\n\n`;
     message += `<question>${questionText}</question>\n\n`;
     const langInstruction = myLanguage ? ` Write your answer in ${myLanguage}.` : '';
     message += `<instructions>Answer the user's question clearly and helpfully.${langInstruction}</instructions>`;
@@ -1382,6 +1595,370 @@ export async function askQuestion(): Promise<void> {
 }
 
 /**
+ * Formats a timestamp as the value expected by an `<input type="datetime-local">`.
+ * @param {number} timestamp - Milliseconds since the epoch
+ * @returns {string} Local date and time in YYYY-MM-DDTHH:mm form
+ */
+function formatDateTimeLocalValue(timestamp: number): string {
+    const date = new Date(timestamp);
+    const pad = function(value: number): string { return String(value).padStart(2, '0'); };
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+        + `T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+/**
+ * Opens the browser's native picker for a date/time input when it is available.
+ * `showPicker` requires user activation, so this must run from a click handler.
+ * @param {HTMLInputElement} input - Date/time input to open
+ * @returns {void}
+ */
+function openNativePicker(input: HTMLInputElement): void {
+    const pickerInput = input as HTMLInputElement & { showPicker?: () => void };
+    if (typeof pickerInput.showPicker === 'function') {
+        try {
+            pickerInput.showPicker();
+            return;
+        } catch {
+            // Unsupported or blocked — fall back to focusing the field
+        }
+    }
+    input.focus();
+}
+
+/**
+ * Restricts the context-note time picker to the range that is rendered in order.
+ * A note dated before the oldest loaded day could not be placed chronologically
+ * without disturbing the pages fetched afterwards. A seeded time may legitimately
+ * sit just before that day, so it lowers the bound.
+ * @param {HTMLInputElement} input - Date/time input to constrain
+ * @param {number} [extraMinimum] - Optional earliest time to allow
+ * @returns {void}
+ */
+function updateContextTimestampBounds(input: HTMLInputElement, extraMinimum?: number): void {
+    const oldestLoadedDay = loadedHistoryDays.size > 0
+        ? Math.min(...Array.from(loadedHistoryDays))
+        : Number.NEGATIVE_INFINITY;
+    const minimum = extraMinimum === undefined
+        ? oldestLoadedDay
+        : Math.min(oldestLoadedDay, extraMinimum);
+
+    if (!Number.isFinite(minimum)) {
+        input.removeAttribute('min');
+        return;
+    }
+    input.min = formatDateTimeLocalValue(minimum);
+}
+
+/**
+ * Returns the first millisecond at or after a requested time that is not already
+ * used by another item. The timestamp doubles as the storage file name, so a
+ * collision would overwrite an existing message.
+ * @param {number} timestamp - Requested timestamp
+ * @returns {number} Unused timestamp
+ */
+function ensureUniqueContextTimestamp(timestamp: number): number {
+    let candidate = timestamp;
+    while (sessionTranslationTimestamps.includes(candidate)) {
+        candidate += 1;
+    }
+    return candidate;
+}
+
+/**
+ * Resolves the timestamp a context note should use.
+ * @param {string} rawValue - Current value of the datetime-local input
+ * @param {string} seededValue - Value the input was seeded with
+ * @param {number} untouchedTimestamp - Time to use when the field was left alone
+ * @param {number} minimumTimestamp - Earliest time that may be used
+ * @returns {number} Validated, unused timestamp
+ * @throws {Error} When the value is invalid, in the future, or before the minimum
+ */
+function resolveContextNoteTimestamp(
+    rawValue: string,
+    seededValue: string,
+    untouchedTimestamp: number,
+    minimumTimestamp: number
+): number {
+    // An untouched field keeps full precision; an explicit edit is truncated to
+    // the minute by the input itself.
+    const timestamp = rawValue && rawValue !== seededValue
+        ? new Date(rawValue).getTime()
+        : untouchedTimestamp;
+
+    if (!Number.isFinite(timestamp)) {
+        throw new Error('Please choose a valid time');
+    }
+    if (timestamp > Date.now()) {
+        throw new Error('A context note cannot be dated in the future');
+    }
+    if (timestamp < minimumTimestamp) {
+        throw new Error('That time is older than the loaded history. Scroll down to load more first.');
+    }
+
+    return ensureUniqueContextTimestamp(timestamp);
+}
+
+/**
+ * Adds a context note to the current session without invoking an LLM.
+ * The note becomes part of the conversation history used by every later request.
+ * @param {string} text - Note text
+ * @param {number} timestamp - When the note takes effect; must already be validated and unique
+ * @returns {Promise<void>}
+ * @throws {Error} If the note cannot be persisted
+ */
+async function addContextNote(text: string, timestamp: number): Promise<void> {
+    // Reserve the timestamp before awaiting anything: callers check uniqueness
+    // synchronously, so waiting here would let a concurrent add pick the same
+    // millisecond and overwrite this note's file.
+    if (!sessionTranslationTimestamps.includes(timestamp)) {
+        sessionTranslationTimestamps.push(timestamp);
+        sessionTranslationTimestamps.sort(function(a, b) { return b - a; });
+        sessionActiveDays = groupTimestampsByDay(sessionTranslationTimestamps);
+    }
+    loadedHistoryDays.add(getDayStart(timestamp));
+
+    const deviceId = await getDeviceId();
+
+    const translation: Translation = {
+        id: generateUuid(),
+        deviceId: deviceId,
+        pill: 'context',
+        entries: [{
+            source: text,
+            intent: '',
+            model: '',
+            modelName: '',
+            prompt: 'Context',
+            promptContent: '',
+            translation: '',
+            explanation: '',
+            nuances: '',
+            reasoning: '',
+            reasoningDetails: '',
+            literalRetranslation: undefined,
+            literalPending: false,
+            wordDefinitions: undefined,
+            wordData: undefined,
+            wordPending: false,
+            interpretation: undefined,
+            interpretationPending: false
+        }],
+        activeEntryIndex: 0,
+        timestamp: timestamp,
+        status: 'complete',
+        error: null
+    };
+
+    allTranslations = allTranslations.concat([translation])
+        .sort(function(a, b) { return b.timestamp - a.timestamp; });
+
+    const container = document.getElementById('translations-container');
+    if (container) {
+        renderTranslationItem(container, translation, 'chronological');
+    }
+
+    await saveSessionTranslation(currentSessionId, translation);
+}
+
+/**
+ * Opens the modal used to add a context note, optionally back-dated.
+ * The modal keeps its own draft and never touches the composition or intent
+ * boxes, which belong to normal entry.
+ * @param {number} [seedTimestamp] - Time to seed the picker with; defaults to now
+ * @returns {Promise<void>}
+ */
+async function showContextNoteModal(seedTimestamp?: number): Promise<void> {
+    if (!currentSessionId) {
+        ui.displayError('Please select a conversation first');
+        return;
+    }
+    if (contextNoteModalOpen) return;
+
+    const template = document.getElementById('context-note-modal-template') as HTMLTemplateElement | null;
+    if (!template) return;
+
+    contextNoteModalOpen = true;
+
+    const clone = template.content.cloneNode(true) as DocumentFragment;
+    const modalEl = clone.firstElementChild as HTMLElement;
+    document.body.appendChild(clone);
+
+    const textInput = modalEl.querySelector('#context-note-text') as HTMLTextAreaElement | null;
+    const timestampInput = modalEl.querySelector('#context-note-timestamp') as HTMLInputElement | null;
+    const pickBtn = modalEl.querySelector('#context-note-pick-btn') as HTMLButtonElement | null;
+    const nowBtn = modalEl.querySelector('#context-note-now-btn') as HTMLButtonElement | null;
+    const addBtn = modalEl.querySelector('#context-note-add-btn') as HTMLButtonElement | null;
+
+    const draftPath = 'drafts/' + currentSessionId + '/context';
+
+    // Restore this modal's own draft; it is independent of the composition box
+    const savedDraft = await readLocalFile(draftPath);
+    if (textInput && savedDraft && savedDraft.trim()) {
+        textInput.value = savedDraft;
+    }
+
+    let draftSaveTimeout: number | null = null;
+    let noteSubmitted = false;
+
+    /**
+     * Writes the modal textarea to its draft file, removing the file when empty.
+     * @returns {void}
+     */
+    function saveContextDraft(): void {
+        const value = textInput?.value ?? '';
+        const write = value.trim()
+            ? writeLocalFile(draftPath, value)
+            : deleteLocalFile(draftPath);
+        write.catch(function(error: unknown) {
+            console.error('[context] Failed to save context draft:', error);
+        });
+    }
+
+    /**
+     * Debounces the context draft save while the user types.
+     * @returns {void}
+     */
+    function scheduleDraftSave(): void {
+        if (draftSaveTimeout !== null) {
+            clearTimeout(draftSaveTimeout);
+        }
+        draftSaveTimeout = window.setTimeout(function() {
+            draftSaveTimeout = null;
+            saveContextDraft();
+        }, DRAFT_SAVE_DEBOUNCE_MS);
+    }
+
+    if (textInput) {
+        textInput.addEventListener('input', scheduleDraftSave);
+    }
+
+    const seededTimestamp = seedTimestamp ?? Date.now();
+    const seededTimestampValue = formatDateTimeLocalValue(seededTimestamp);
+    if (timestampInput) {
+        timestampInput.value = seededTimestampValue;
+        updateContextTimestampBounds(timestampInput, seedTimestamp);
+    }
+
+    const modal = new Modal(modalEl);
+
+    modalEl.addEventListener('shown.bs.modal', function() {
+        textInput?.focus();
+    });
+
+    if (pickBtn && timestampInput) {
+        pickBtn.addEventListener('click', function() {
+            openNativePicker(timestampInput);
+        });
+    }
+
+    if (nowBtn && timestampInput) {
+        nowBtn.addEventListener('click', function() {
+            timestampInput.value = formatDateTimeLocalValue(Date.now());
+        });
+    }
+
+    if (addBtn) {
+        addBtn.addEventListener('click', function() {
+            const text = textInput?.value.trim() ?? '';
+            if (!text) {
+                ui.displayError('Please enter the context text');
+                return;
+            }
+
+            // A seeded time was chosen deliberately (just before a message editing
+            // session), so an untouched field must not fall back to now.
+            const oldestLoadedDay = loadedHistoryDays.size > 0
+                ? Math.min(...Array.from(loadedHistoryDays))
+                : Number.NEGATIVE_INFINITY;
+            const minimumTimestamp = seedTimestamp === undefined
+                ? oldestLoadedDay
+                : Math.min(oldestLoadedDay, seedTimestamp);
+
+            let timestamp: number;
+            try {
+                timestamp = resolveContextNoteTimestamp(
+                    timestampInput?.value ?? '',
+                    seededTimestampValue,
+                    seedTimestamp ?? Date.now(),
+                    minimumTimestamp
+                );
+            } catch (error) {
+                ui.displayError((error as Error).message);
+                return;
+            }
+
+            // The note consumes the draft: stop the pending save so the close
+            // handler cannot recreate the file we are about to delete.
+            if (draftSaveTimeout !== null) {
+                clearTimeout(draftSaveTimeout);
+                draftSaveTimeout = null;
+            }
+            noteSubmitted = true;
+            addBtn.disabled = true;
+
+            modal.hide();
+
+            addContextNote(text, timestamp).then(function() {
+                deleteLocalFile(draftPath).catch(function(error: unknown) {
+                    console.error('[context] Failed to clear context draft:', error);
+                });
+            }).catch(function(error: unknown) {
+                console.error('[context] Failed to add note:', error);
+                ui.displayError('Failed to save the context note');
+                // Keep the text as a draft so the user does not lose it
+                noteSubmitted = false;
+                writeLocalFile(draftPath, text).catch(function() {});
+            });
+        });
+    }
+
+    modalEl.addEventListener('hidden.bs.modal', function() {
+        if (draftSaveTimeout !== null) {
+            clearTimeout(draftSaveTimeout);
+            draftSaveTimeout = null;
+        }
+        // Cancelling keeps the draft; flush anything typed in the last debounce window
+        if (!noteSubmitted) {
+            saveContextDraft();
+        }
+        contextNoteModalOpen = false;
+        modalEl.remove();
+    });
+
+    modal.show();
+}
+
+/**
+ * Saves an edit to a context note in place.
+ * The timestamp is deliberately unchanged: editing a note must not move it in the
+ * conversation, unlike editing a message (which implies it was re-sent).
+ * @param {string} translationId - ID of the context note to update
+ * @returns {void}
+ */
+function saveContextEdit(translationId: string): void {
+    const translation = allTranslations.find(function(t) { return t.id === translationId; });
+    if (!translation || translation.pill !== 'context') return;
+
+    const refs = domRefsMap.get(translation);
+    if (!refs) return;
+
+    const newText = refs.editSource?.value.trim() ?? '';
+    if (!newText) {
+        ui.displayError('Context text cannot be empty');
+        return;
+    }
+
+    ensureEntries(translation);
+    const entry = translation.entries[translation.activeEntryIndex ?? 0];
+    if (!entry) return;
+
+    entry.source = newText;
+    if (refs.editArea) refs.editArea.style.display = 'none';
+    updateTranslationItem(translation);
+    saveSessionTranslation(currentSessionId, translation);
+}
+
+/**
  * Refreshes the account balance display
  * @returns {Promise<void>}
  */
@@ -1451,14 +2028,47 @@ function setupToggleHandler(refs: TranslationDomRefs, translation: Translation):
 }
 
 /**
+ * Maps a pill type to the ID of the template that renders it.
+ * @param {Translation['pill']} pill - Pill type of the item
+ * @returns {string} Template element ID
+ */
+function getItemTemplateId(pill: Translation['pill']): string {
+    if (pill === 'question') return 'question-item-template';
+    if (pill === 'input') return 'input-item-template';
+    if (pill === 'context') return 'context-item-template';
+    return 'translation-item-template';
+}
+
+/**
+ * Inserts an item at its chronological slot in the rendered list.
+ * The container runs newest at the top, so the item goes before the first older
+ * item, or is appended when it is the oldest rendered item.
+ * @param {HTMLElement} container - Container holding the rendered items
+ * @param {HTMLElement} element - Item element being inserted
+ * @param {Translation} translation - Translation the element renders
+ * @returns {void}
+ */
+function insertItemChronologically(container: HTMLElement, element: HTMLElement, translation: Translation): void {
+    const index = allTranslations.findIndex(function(t) { return t.id === translation.id; });
+    const nextOlder = index >= 0 ? allTranslations[index + 1] : undefined;
+    const anchor = nextOlder ? document.getElementById('translation-' + nextOlder.id) : null;
+    if (anchor) {
+        container.insertBefore(element, anchor);
+    } else {
+        container.appendChild(element);
+    }
+}
+
+/**
  * Renders a single translation item, creating or updating DOM element.
  * Captures all dynamic child element references once during creation and stores them
  * in domRefsMap for efficient subsequent updates.
  * @param {HTMLElement} container - Container element
  * @param {Translation} translation - Translation object
+ * @param {'top' | 'bottom' | 'chronological'} [insertPosition='top'] - Where a newly created item is inserted
  * @returns {void}
  */
-function renderTranslationItem(container: HTMLElement, translation: Translation): void {
+function renderTranslationItem(container: HTMLElement, translation: Translation, insertPosition: 'top' | 'bottom' | 'chronological' = 'top'): void {
     const elementId = 'translation-' + translation.id;
     let element = document.getElementById(elementId);
 
@@ -1471,11 +2081,8 @@ function renderTranslationItem(container: HTMLElement, translation: Translation)
     }
 
     if (!element) {
-        const template = translation.pill === 'question'
-            ? document.getElementById('question-item-template') as HTMLTemplateElement | null
-            : translation.pill === 'input'
-            ? document.getElementById('input-item-template') as HTMLTemplateElement | null
-            : document.getElementById('translation-item-template') as HTMLTemplateElement | null;
+        const templateId = getItemTemplateId(translation.pill);
+        const template = document.getElementById(templateId) as HTMLTemplateElement | null;
         if (!template) {
             return;
         }
@@ -1537,6 +2144,8 @@ function renderTranslationItem(container: HTMLElement, translation: Translation)
             explanationEl: element.querySelector('.translation-explanation') as HTMLElement | null,
             nuancesEl: element.querySelector('.translation-nuances') as HTMLElement | null,
             interpretationEl: element.querySelector('.translation-interpretation') as HTMLElement | null,
+            interpretationMarkdownEl: element.querySelector('.interpretation-markdown') as HTMLElement | null,
+            interpretationRawEl: element.querySelector('.interpretation-raw') as HTMLElement | null,
             interpretationThinkingEl: interpretationPane?.querySelector('.translation-thinking') as HTMLElement | null,
             interpretationThinkingContentEl: interpretationPane?.querySelector('.thinking-content') as HTMLElement | null,
             spinnerEl: element.querySelector('.translation-spinner') as HTMLElement | null,
@@ -1565,6 +2174,7 @@ function renderTranslationItem(container: HTMLElement, translation: Translation)
             editSource: element.querySelector('.translation-edit-source') as HTMLTextAreaElement | null,
             editIntent: element.querySelector('.translation-edit-intent') as HTMLTextAreaElement | null,
             retranslateBtn: element.querySelector('.retranslate-btn') as HTMLButtonElement | null,
+            addContextBtn: element.querySelector('.add-context-from-edit-btn') as HTMLButtonElement | null,
             editToggleBtn: element.querySelector('.edit-toggle-btn') as HTMLButtonElement | null,
             quickQuestionBtn: element.querySelector('.quick-question-btn') as HTMLButtonElement | null,
             includeInContextToggle: element.querySelector('.include-in-context-toggle') as HTMLInputElement | null
@@ -1585,6 +2195,15 @@ function renderTranslationItem(container: HTMLElement, translation: Translation)
             const translationId = translation.id;
             deleteBtn.addEventListener('click', function() {
                 deleteTranslation(translationId);
+            });
+        }
+
+        // Wire save button for context note edits
+        const saveContextBtn = element.querySelector('.save-context-btn') as HTMLButtonElement | null;
+        if (saveContextBtn) {
+            const translationId = translation.id;
+            saveContextBtn.addEventListener('click', function() {
+                saveContextEdit(translationId);
             });
         }
 
@@ -1670,6 +2289,15 @@ function renderTranslationItem(container: HTMLElement, translation: Translation)
             });
         }
 
+        // Wire add-context button in the edit area: seeds the note just before this message
+        if (refs.addContextBtn) {
+            const seedTimestamp = translation.timestamp - 1000;
+            refs.addContextBtn.addEventListener('click', function() {
+                if (refs.editArea) refs.editArea.style.display = 'none';
+                void showContextNoteModal(seedTimestamp);
+            });
+        }
+
         // Wire edit toggle button
         if (refs.editToggleBtn && refs.editArea) {
             refs.editToggleBtn.addEventListener('click', function() {
@@ -1696,15 +2324,17 @@ function renderTranslationItem(container: HTMLElement, translation: Translation)
                 const entry = t.entries[t.activeEntryIndex ?? 0];
                 const sourceText = entry?.source ?? (t as any).source ?? '';
                 showQuickQuestionModal({
+                    kind: 'sourceMessage',
                     sourceText: sourceText,
                     systemPrompt: QUICK_QUESTION_MESSAGE_PROMPT,
-                    defaultQuestion: 'What does this mean?'
+                    placeholderQuestion: 'What are the nuances of this message?',
+                    prefillQuestion: cachedSourceQuickQuestion ?? undefined
                 });
             });
         }
 
         // Wire quick question button on output (translation) items
-        if (refs.quickQuestionBtn && translation.pill !== 'input') {
+        if (refs.quickQuestionBtn && translation.pill === 'output') {
             const translationId = translation.id;
             refs.quickQuestionBtn.addEventListener('click', function() {
                 if (quickQuestionModalOpen) return;
@@ -1715,11 +2345,33 @@ function renderTranslationItem(container: HTMLElement, translation: Translation)
                 const sourceText = entry?.source ?? (t as any).source ?? '';
                 const targetText = entry?.translation ?? (t as any).translation ?? '';
                 showQuickQuestionModal({
+                    kind: 'translation',
                     sourceText: sourceText,
                     intentText: entry.intent ?? '',
                     translationText: targetText,
                     systemPrompt: QUICK_QUESTION_TRANSLATION_PROMPT,
-                    defaultQuestion: 'What does this mean?'
+                    placeholderQuestion: 'What are the nuances of this message?',
+                    prefillQuestion: cachedTranslationQuickQuestion ?? undefined
+                });
+            });
+        }
+
+        // Wire quick question button on context notes
+        if (refs.quickQuestionBtn && translation.pill === 'context') {
+            const translationId = translation.id;
+            refs.quickQuestionBtn.addEventListener('click', function() {
+                if (quickQuestionModalOpen) return;
+                const t = allTranslations.find(function(x) { return x.id === translationId; });
+                if (!t) return;
+                ensureEntries(t);
+                const entry = t.entries[t.activeEntryIndex ?? 0];
+                const noteText = entry?.source ?? (t as any).source ?? '';
+                showQuickQuestionModal({
+                    kind: 'contextNote',
+                    sourceText: noteText,
+                    systemPrompt: QUICK_QUESTION_NOTE_PROMPT,
+                    placeholderQuestion: 'What implications does this have?',
+                    prefillQuestion: cachedContextQuickQuestion ?? undefined
                 });
             });
         }
@@ -1780,7 +2432,13 @@ function renderTranslationItem(container: HTMLElement, translation: Translation)
             refs.retranslationTabsEl.style.display = 'none';
         }
 
-        container.insertBefore(element, container.firstChild);
+        if (insertPosition === 'bottom') {
+            container.appendChild(element);
+        } else if (insertPosition === 'chronological') {
+            insertItemChronologically(container, element, translation);
+        } else {
+            container.insertBefore(element, container.firstChild);
+        }
     }
 
     const refs = domRefsMap.get(translation);
@@ -1815,7 +2473,7 @@ function updateTranslationItem(translation: Translation): void {
 /**
  * Updates an existing translation item's dynamic fields in the DOM using captured DOM refs.
  * Does NOT create elements - use renderTranslationItem for that.
- * For streaming state, use setupStreamingDisplay/updateStreamingContent/teardownStreamingDisplay instead.
+ * For streaming state, use setupStreamingDisplay/computeStreamingDisplay/paintStreamingContent/teardownStreamingDisplay instead.
  * @param {Translation} translation - Translation object with updated data
  * @param {TranslationDomRefs} refs - Captured DOM references for this translation item
  * @returns {void}
@@ -1932,13 +2590,13 @@ function updateTranslationItemContent(translation: Translation, refs: Translatio
         }
         if (refs.interpretationEl) {
             if (entryInterpretationPending && !entryInterpretation) {
-                refs.interpretationEl.innerHTML = '<div class="spinner-border spinner-border-sm" role="status"></div><span style="margin-left: 0.5rem;">Interpreting...</span>';
+                paintInterpretationHtml(translation, refs, INTERPRETATION_SPINNER_HTML);
                 if (refs.regenerateInterpretationBtn) refs.regenerateInterpretationBtn.style.display = 'none';
             } else if (entryInterpretation) {
-                refs.interpretationEl.innerHTML = renderMarkdown(entryInterpretation);
+                paintInterpretationHtml(translation, refs, renderMarkdown(entryInterpretation));
                 if (refs.regenerateInterpretationBtn) refs.regenerateInterpretationBtn.style.display = currentInterpretationModel ? 'inline-block' : 'none';
             } else {
-                refs.interpretationEl.innerHTML = '';
+                paintInterpretationHtml(translation, refs, '');
                 if (refs.regenerateInterpretationBtn) refs.regenerateInterpretationBtn.style.display = currentInterpretationModel ? 'inline-block' : 'none';
             }
         }
@@ -2032,13 +2690,13 @@ function updateTranslationItemContent(translation: Translation, refs: Translatio
 
         if (refs.interpretationEl) {
             if (entryInterpretationPending && !entryInterpretation) {
-                refs.interpretationEl.innerHTML = '<div class="spinner-border spinner-border-sm" role="status"></div><span style="margin-left: 0.5rem;">Interpreting...</span>';
+                paintInterpretationHtml(translation, refs, INTERPRETATION_SPINNER_HTML);
                 if (refs.regenerateInterpretationBtn) refs.regenerateInterpretationBtn.style.display = 'none';
             } else if (entryInterpretation) {
-                refs.interpretationEl.innerHTML = renderMarkdown(entryInterpretation);
+                paintInterpretationHtml(translation, refs, renderMarkdown(entryInterpretation));
                 if (refs.regenerateInterpretationBtn) refs.regenerateInterpretationBtn.style.display = currentInterpretationModel ? 'inline-block' : 'none';
             } else {
-                refs.interpretationEl.innerHTML = '';
+                paintInterpretationHtml(translation, refs, '');
                 if (refs.regenerateInterpretationBtn) refs.regenerateInterpretationBtn.style.display = currentInterpretationModel ? 'inline-block' : 'none';
             }
         }
@@ -2110,6 +2768,11 @@ export async function retryTranslation(translationId: string): Promise<void> {
     const translation = allTranslations.find(function(t) { return t.id === translationId; });
 
     if (!translation) {
+        return;
+    }
+
+    // Only messages and questions have an LLM flow to retry
+    if (translation.pill !== 'input' && translation.pill !== 'output' && translation.pill !== 'question') {
         return;
     }
 
@@ -2191,7 +2854,13 @@ export async function deleteTranslation(translationId: string): Promise<void> {
     const idx = allTranslations.indexOf(translation);
     if (idx !== -1) allTranslations.splice(idx, 1);
 
+    const timestampIdx = sessionTranslationTimestamps.indexOf(translation.timestamp);
+    if (timestampIdx !== -1) sessionTranslationTimestamps.splice(timestampIdx, 1);
+
     await deleteSessionTranslation(currentSessionId, translation.timestamp);
+
+    // A deleted item may have been the only one on its day
+    sessionActiveDays = groupTimestampsByDay(sessionTranslationTimestamps);
 }
 
 /**
@@ -2332,8 +3001,8 @@ export async function retranslateFromEdit(translationId: string, newSource: stri
     syncTopLevelFromActive(translation);
     renderAllTranslations();
 
-    if (translation.pill === 'question') {
-        console.error('[retranslateFromEdit] Cannot retranslate a question');
+    if (translation.pill !== 'input' && translation.pill !== 'output') {
+        console.error('[retranslateFromEdit] Cannot retranslate this item type');
         return;
     }
     const mode = translation.pill;
@@ -2388,6 +3057,7 @@ export async function regenerateInterpretation(translationId: string): Promise<v
     if (!entry) return;
 
     abortExistingInterpretation(translation);
+    startInterpretationStreaming(translation);
     entry.interpretationPending = true;
     entry.interpretation = undefined;
     updateTranslationItem(translation);
@@ -2398,7 +3068,7 @@ export async function regenerateInterpretation(translationId: string): Promise<v
     const abortHandle = streamSendChatMessage(
         config!.openRouterApiKey!,
         message,
-        INTERPRETATION_PROMPT,
+        buildInterpretationSystemPrompt(session),
         interpModel,
         {
             onChunk: function(text: string, reasoning: string): void {
@@ -2409,15 +3079,19 @@ export async function regenerateInterpretation(translationId: string): Promise<v
                     iRefs.interpretationThinkingEl.style.display = '';
                     iRefs.interpretationThinkingContentEl.textContent = reasoning;
                 }
-                if (iRefs.interpretationEl) {
-                    iRefs.interpretationEl.innerHTML = renderMarkdown(entry.interpretation);
-                }
                 if (iRefs.regenerateInterpretationBtn) {
                     iRefs.regenerateInterpretationBtn.style.display = 'none';
                 }
+                const streamState = interpretationStreamingStateMap.get(translation);
+                if (!streamState) return;
+                streamState.accumulatedText = text;
+                scheduleStreamRender(streamState, function(): void {
+                    renderInterpretationStreaming(translation);
+                });
             },
             onDone: function(fullText: string, fullReasoning: string, generationId: string | null, usage?: StreamUsage): void {
                 interpretationAbortMap.delete(translation);
+                stopInterpretationStreaming(translation);
                 entry.interpretation = fullText;
                 entry.interpretationPending = false;
                 const iRefs = domRefsMap.get(translation);
@@ -2440,6 +3114,7 @@ export async function regenerateInterpretation(translationId: string): Promise<v
             },
             onError: function(error: Error): void {
                 interpretationAbortMap.delete(translation);
+                stopInterpretationStreaming(translation);
                 console.error('[regenerateInterpretation] Error:', error);
                 entry.interpretationPending = false;
                 entry.interpretation = undefined;
@@ -2556,6 +3231,7 @@ export async function regenerateIndependentSections(translationId: string): Prom
     const interpModel = getInterpretationModelToUse(session);
     if (interpModel && entry.translation) {
         abortExistingInterpretation(translation);
+        startInterpretationStreaming(translation);
         entry.interpretationPending = true;
         entry.interpretation = undefined;
         updateTranslationItem(translation);
@@ -2565,7 +3241,7 @@ export async function regenerateIndependentSections(translationId: string): Prom
         const abortHandle = streamSendChatMessage(
             config!.openRouterApiKey!,
             message,
-            INTERPRETATION_PROMPT,
+            buildInterpretationSystemPrompt(session),
             interpModel,
             {
                 onChunk: function(text: string, reasoning: string): void {
@@ -2576,15 +3252,19 @@ export async function regenerateIndependentSections(translationId: string): Prom
                         iRefs.interpretationThinkingEl.style.display = '';
                         iRefs.interpretationThinkingContentEl.textContent = reasoning;
                     }
-                    if (iRefs.interpretationEl) {
-                        iRefs.interpretationEl.innerHTML = renderMarkdown(entry.interpretation);
-                    }
                     if (iRefs.regenerateInterpretationBtn) {
                         iRefs.regenerateInterpretationBtn.style.display = 'none';
                     }
+                    const streamState = interpretationStreamingStateMap.get(translation);
+                    if (!streamState) return;
+                    streamState.accumulatedText = text;
+                    scheduleStreamRender(streamState, function(): void {
+                        renderInterpretationStreaming(translation);
+                    });
                 },
                 onDone: function(fullText: string, fullReasoning: string, generationId: string | null, usage?: StreamUsage): void {
                     interpretationAbortMap.delete(translation);
+                    stopInterpretationStreaming(translation);
                     entry.interpretation = fullText;
                     entry.interpretationPending = false;
                     const iRefs = domRefsMap.get(translation);
@@ -2607,6 +3287,7 @@ export async function regenerateIndependentSections(translationId: string): Prom
                 },
                 onError: function(error: Error): void {
                     interpretationAbortMap.delete(translation);
+                    stopInterpretationStreaming(translation);
                     console.error('[interpretation] Error:', error);
                     entry.interpretationPending = false;
                     entry.interpretation = undefined;
@@ -2809,7 +3490,7 @@ function setupStreamingDisplay(refs: TranslationDomRefs, translation: Translatio
 
     // Clear dependent sections from previous translations
     if (refs.literalEl) refs.literalEl.textContent = 'Awaiting translation...';
-    if (refs.interpretationEl) refs.interpretationEl.textContent = 'Awaiting translation...';
+    if (refs.interpretationEl) paintInterpretationHtml(translation, refs, 'Awaiting translation...');
     if (refs.wordsContent) refs.wordsContent.textContent = 'Awaiting translation...';
 
     // Update char count for streaming state
@@ -2820,32 +3501,73 @@ function setupStreamingDisplay(refs: TranslationDomRefs, translation: Translatio
 }
 
 /**
- * Updates the streaming display with new accumulated text and reasoning content.
+ * Display model derived from the accumulated streaming text.
+ * Computed on every chunk so stream state stays current, while the DOM writes are
+ * deferred to a frame by paintStreamingContent.
+ */
+interface StreamingDisplay {
+    hasReasoning: boolean;
+    hasText: boolean;
+    displayText: string;
+    isComplete: boolean;
+}
+
+/**
+ * Derives the display model for the accumulated streaming text.
+ * Updates the streaming state that other logic depends on (translationComplete)
+ * so callers observe it immediately rather than at the next paint.
+ * @param {StreamingState} streamingState - Current streaming state for this translation
+ * @param {string} text - Accumulated main content text
+ * @param {string} reasoning - Accumulated reasoning content text
+ * @returns {StreamingDisplay} The display model to paint
+ */
+function computeStreamingDisplay(streamingState: StreamingState, text: string, reasoning: string): StreamingDisplay {
+    const hasText = text.length > 0;
+
+    // Extract only the TRANSLATION portion for display — explanation and nuances
+    // are excluded from the target area during streaming
+    const extracted = hasText
+        ? extractTranslationForDisplay(text)
+        : { displayText: '', isComplete: false };
+
+    // Mark translation complete once we've seen the closing tag
+    if (extracted.isComplete) {
+        streamingState.translationComplete = true;
+    }
+
+    return {
+        hasReasoning: reasoning.length > 0,
+        hasText: hasText,
+        displayText: extracted.displayText,
+        isComplete: extracted.isComplete
+    };
+}
+
+/**
+ * Paints the streaming display with the latest accumulated text and reasoning content.
  * Shows reasoning (thinking) content while main text hasn't arrived yet.
  * Renders completed paragraphs as markdown, shows current paragraph as raw text.
  * Only the text within <translation> tags is displayed; explanation and nuances
  * content is excluded from the target area during streaming.
  * @param {TranslationDomRefs} refs - Captured DOM references
  * @param {StreamingState} streamingState - Current streaming state for this translation
- * @param {string} text - Accumulated main content text
+ * @param {StreamingDisplay} display - Display model from computeStreamingDisplay
  * @param {string} reasoning - Accumulated reasoning content text
  * @returns {void}
  */
-function updateStreamingContent(
+function paintStreamingContent(
     refs: TranslationDomRefs,
     streamingState: StreamingState,
-    text: string,
+    display: StreamingDisplay,
     reasoning: string
 ): void {
     // Hide spinner once any content starts arriving
-    const hasReasoning = reasoning.length > 0;
-    const hasText = text.length > 0;
     if (refs.spinnerEl) {
-        refs.spinnerEl.style.display = (hasReasoning || hasText) ? 'none' : 'block';
+        refs.spinnerEl.style.display = (display.hasReasoning || display.hasText) ? 'none' : 'block';
     }
 
     if (refs.thinkingEl) {
-        if (hasReasoning && !hasText) {
+        if (display.hasReasoning && !display.hasText) {
             refs.thinkingEl.style.display = '';
             if (refs.thinkingContentEl) {
                 refs.thinkingContentEl.textContent = reasoning;
@@ -2855,38 +3577,29 @@ function updateStreamingContent(
         }
     }
 
-    if (!hasText) return;
-
-    // Extract only the TRANSLATION portion for display — explanation and nuances
-    // are excluded from the target area during streaming
-    const { displayText, isComplete } = extractTranslationForDisplay(text);
-
-    // Mark translation complete once we've seen the closing tag
-    if (isComplete) {
-        streamingState.translationComplete = true;
-    }
+    if (!display.hasText) return;
 
     // Find the streaming structure inside target element
     const markdownEl = refs.targetEl?.querySelector('.streaming-markdown') as HTMLElement | null;
     const rawEl = refs.targetEl?.querySelector('.streaming-raw') as HTMLElement | null;
     if (!markdownEl || !rawEl) return;
 
-    if (isComplete) {
-        markdownEl.innerHTML = renderMarkdown(normalizeForMarkdown(displayText));
+    if (display.isComplete) {
+        markdownEl.innerHTML = renderMarkdown(normalizeForMarkdown(display.displayText));
         rawEl.textContent = '';
-        streamingState.lastRenderedBreakIndex = displayText.length;
+        streamingState.lastRenderedBreakIndex = display.displayText.length;
     } else {
         // Check if new paragraphs were completed since last render
-        const lastDoubleNewline = displayText.lastIndexOf('\n\n');
+        const lastDoubleNewline = display.displayText.lastIndexOf('\n\n');
 
         if (lastDoubleNewline !== -1 && lastDoubleNewline + 2 > streamingState.lastRenderedBreakIndex) {
-            const completedPart = displayText.substring(0, lastDoubleNewline + 2);
+            const completedPart = display.displayText.substring(0, lastDoubleNewline + 2);
             markdownEl.innerHTML = renderMarkdown(normalizeForMarkdown(completedPart));
             streamingState.lastRenderedBreakIndex = lastDoubleNewline + 2;
         }
 
         // Show current incomplete paragraph as raw text
-        const remainingText = displayText.substring(streamingState.lastRenderedBreakIndex);
+        const remainingText = display.displayText.substring(streamingState.lastRenderedBreakIndex);
         rawEl.textContent = remainingText;
     }
 }
@@ -3135,7 +3848,10 @@ function handleLiteralRetranslationStreaming(
                 const streamState = literalStreamingStateMap.get(translation);
                 if (!streamState) return;
                 streamState.accumulatedText = accumulatedText;
-                updateLiteralStreamingContent(refs!, accumulatedText);
+                scheduleStreamRender(streamState, function(): void {
+                    if (literalStreamingStateMap.get(translation) !== streamState) return;
+                    updateLiteralStreamingContent(refs!, accumulatedText);
+                });
             },
             onDone: function(fullText: string, fullReasoning: string, generationId: string | null, usage?: StreamUsage): void {
                 literalStreamingStateMap.delete(translation);
@@ -3188,6 +3904,7 @@ function abortExistingInterpretation(translation: Translation): void {
         abortFn();
         interpretationAbortMap.delete(translation);
     }
+    stopInterpretationStreaming(translation);
     ensureEntries(translation);
     const entry = translation.entries[translation.activeEntryIndex ?? 0];
     if (entry) {
@@ -3196,6 +3913,95 @@ function abortExistingInterpretation(translation: Translation): void {
     const iRefs = domRefsMap.get(translation);
     if (iRefs?.interpretationThinkingEl) {
         iRefs.interpretationThinkingEl.style.display = 'none';
+    }
+}
+
+/**
+ * Releases an interpretation stream's render-scheduler slot and render state.
+ * Must run before the final interpretation is written, otherwise a render that
+ * was still pending would repaint the pane with a partial transcript.
+ * @param {Translation} translation - Translation whose interpretation stream to stop
+ * @returns {void}
+ */
+function stopInterpretationStreaming(translation: Translation): void {
+    const state = interpretationStreamingStateMap.get(translation);
+    if (state) {
+        cancelStreamRender(state);
+    }
+    interpretationStreamingStateMap.delete(translation);
+}
+
+/**
+ * Begins tracking a new interpretation stream for a translation.
+ * @param {Translation} translation - Translation whose interpretation is streaming
+ * @returns {void}
+ */
+function startInterpretationStreaming(translation: Translation): void {
+    stopInterpretationStreaming(translation);
+    interpretationStreamingStateMap.set(translation, {
+        accumulatedText: '',
+        renderedUpTo: 0,
+        hasPainted: false
+    });
+}
+
+/**
+ * Paints the accumulated interpretation into the pane.
+ * Completed paragraphs are rendered as markdown and only the trailing incomplete
+ * paragraph is repainted as raw text, so the per-frame cost tracks the new text
+ * rather than the whole transcript.
+ * @param {Translation} translation - Translation whose interpretation is streaming
+ * @returns {void}
+ */
+function renderInterpretationStreaming(translation: Translation): void {
+    const state = interpretationStreamingStateMap.get(translation);
+    const refs = domRefsMap.get(translation);
+    if (!state || !refs?.interpretationMarkdownEl || !refs.interpretationRawEl) return;
+
+    const text = state.accumulatedText;
+    const lastDoubleNewline = text.lastIndexOf('\n\n');
+
+    if (lastDoubleNewline !== -1 && lastDoubleNewline + 2 > state.renderedUpTo) {
+        state.renderedUpTo = lastDoubleNewline + 2;
+        refs.interpretationMarkdownEl.innerHTML = renderMarkdown(text.substring(0, state.renderedUpTo));
+    } else if (!state.hasPainted) {
+        // Drop any placeholder left by the previous full render (the "Interpreting..."
+        // spinner) before the first streamed text appears.
+        refs.interpretationMarkdownEl.innerHTML = '';
+    }
+    state.hasPainted = true;
+
+    refs.interpretationRawEl.textContent = text.substring(state.renderedUpTo);
+}
+
+/** Placeholder shown in the interpretation pane while the interpretation streams. */
+const INTERPRETATION_SPINNER_HTML: string =
+    '<div class="spinner-border spinner-border-sm" role="status"></div>'
+    + '<span style="margin-left: 0.5rem;">Interpreting...</span>';
+
+/**
+ * Replaces the whole interpretation pane with fully-rendered HTML.
+ * Writes into the pane's markdown child rather than the pane itself, so the
+ * streaming child elements captured at template-clone time stay attached.
+ * Invalidates any in-flight stream's incremental boundary, so the next streamed
+ * frame repaints the pane instead of assuming it still holds completed paragraphs.
+ * @param {Translation} translation - Translation whose pane is being painted
+ * @param {TranslationDomRefs} refs - Captured DOM references
+ * @param {string} html - Sanitized HTML (or empty string) to show in the pane
+ * @returns {void}
+ */
+function paintInterpretationHtml(translation: Translation, refs: TranslationDomRefs, html: string): void {
+    if (refs.interpretationMarkdownEl) {
+        refs.interpretationMarkdownEl.innerHTML = html;
+    }
+    if (refs.interpretationRawEl) {
+        refs.interpretationRawEl.textContent = '';
+    }
+
+    const state = interpretationStreamingStateMap.get(translation);
+    if (state) {
+        state.renderedUpTo = 0;
+        state.hasPainted = false;
     }
 }
 
@@ -3305,7 +4111,7 @@ async function startBackgroundTasksAfterStreaming(
                 const { content: interpretationResult } = await sendChatMessage(
                     config!.openRouterApiKey!,
                     message,
-                    INTERPRETATION_PROMPT,
+                    buildInterpretationSystemPrompt(session),
                     interpModel,
                     getInterpretationReasoningToUse(session),
                     config!.temperature
@@ -3420,7 +4226,11 @@ async function handleTranslateStreaming(
                 if (!streamState) return;
                 streamState.accumulatedText = text;
                 streamState.accumulatedReasoning = reasoning;
-                updateStreamingContent(refs!, streamState, text, reasoning);
+                const display = computeStreamingDisplay(streamState, text, reasoning);
+                scheduleStreamRender(streamState, function(): void {
+                    if (streamingStateMap.get(translation) !== streamState) return;
+                    paintStreamingContent(refs!, streamState, display, reasoning);
+                });
 
                 // Fallback: if </translation> is missing but next section has started
                 if (!streamState.translationComplete) {
@@ -3649,7 +4459,11 @@ async function handleQuestionStreaming(
                 if (!streamState) return;
                 streamState.accumulatedText = text;
                 streamState.accumulatedReasoning = reasoning;
-                updateStreamingContent(refs!, streamState, text, reasoning);
+                const display = computeStreamingDisplay(streamState, text, reasoning);
+                scheduleStreamRender(streamState, function(): void {
+                    if (streamingStateMap.get(translation) !== streamState) return;
+                    paintStreamingContent(refs!, streamState, display, reasoning);
+                });
             },
             onDone: function(fullText: string, fullReasoning: string, generationId: string | null, usage?: StreamUsage): void {
                 streamingStateMap.delete(translation);
@@ -3746,7 +4560,10 @@ async function buildQuickQuestionMessage(
         message += `<background>${background}</background>\n\n`;
     }
 
-    const history = await buildHistorySection(true, true, false);
+    const history = await buildHistorySection({
+        activeDayCount: HISTORY_CONTEXT_DAYS,
+        includeQuestions: true
+    });
     if (history) {
         message += history + "\n\n";
     }
@@ -3793,7 +4610,8 @@ async function buildQuickQuestionMessage(
         message += "</previous_qa>\n\n";
     }
 
-    message += `<current_time val="${formatTimestamp(Date.now())}"/>\n\n`;
+    message += `<current_time val="${formatTimestampWithOffset(Date.now())}"/>\n`;
+    message += `(${TIMESTAMP_NOTE})\n\n`;
     message += `<current_question>${questionText}</current_question>\n\n`;
     message += `<instructions>Answer in ${myLanguage}.</instructions>`;
 
@@ -3804,7 +4622,9 @@ async function buildQuickQuestionMessage(
  * Appends a synced translation to the current session's UI by timestamp.
  * Loads the translation from OPFS, validates it's not already present,
  * and renders it into the translations container via the standard template flow.
- * Does nothing if the translation is already displayed or fails to load.
+ * The item is placed at its chronological position, which may be older than the
+ * currently loaded window. Does nothing if the translation is already displayed
+ * or fails to load.
  * @param {number} timestamp - Translation timestamp (milliseconds)
  * @returns {Promise<void>}
  */
@@ -3815,30 +4635,46 @@ export async function appendTranslationFromSync(timestamp: number): Promise<void
     if (allTranslations.some(function(t) { return t.id === translation.id; })) return;
 
     ensureEntries(translation);
-    allTranslations.push(translation);
+
+    // Keep the window's timestamp index and day buckets current
+    if (!sessionTranslationTimestamps.includes(timestamp)) {
+        sessionTranslationTimestamps.push(timestamp);
+        sessionTranslationTimestamps.sort(function(a, b) { return b - a; });
+        sessionActiveDays = groupTimestampsByDay(sessionTranslationTimestamps);
+    }
+    loadedHistoryDays.add(getDayStart(timestamp));
+
+    allTranslations = allTranslations.concat([translation])
+        .sort(function(a, b) { return b.timestamp - a.timestamp; });
 
     const container = document.getElementById('translations-container');
-    if (container) {
-        renderTranslationItem(container, translation);
-    }
+    if (!container) return;
+
+    renderTranslationItem(container, translation, 'chronological');
 }
+
+/** Which context a quick question is about */
+type QuickQuestionKind = 'draft' | 'sourceMessage' | 'translation' | 'contextNote';
 
     /**
      * Shows a quick question modal for asking about a draft or message.
      * Manages the ephemeral Q&A lifecycle. Supports follow-up questions within the same
      * dialog session. Nothing is persisted when the modal is closed.
-     * Accepts optional options for context (sourceText, intentText) and a
-     * systemPrompt override (for input message quick questions).
-     * The first draft question text is cached in memory (cachedDraftQuickQuestion) so the
-     * next modal open pre-fills it. Follow-up questions in the same chain do NOT update the cache.
-     * @param {{ sourceText?: string; intentText?: string; systemPrompt?: string; defaultQuestion?: string; translationText?: string }} [options] - Context and prompt overrides
+     * Accepts optional options for context (sourceText, intentText, translationText),
+     * a systemPrompt override, and the kind of context being asked about.
+     * The first question asked in each context (draft, source message, translation,
+     * context note) is cached in memory so the next modal open pre-fills it. Follow-up
+     * questions in the same chain do NOT update the cache.
+     * @param {{ kind?: QuickQuestionKind; sourceText?: string; intentText?: string; systemPrompt?: string; placeholderQuestion?: string; prefillQuestion?: string; translationText?: string }} [options] - Context and prompt overrides
      * @returns {void}
      */
 function showQuickQuestionModal(options?: {
+    kind?: QuickQuestionKind;
     sourceText?: string;
     intentText?: string;
     systemPrompt?: string;
-    defaultQuestion?: string;
+    placeholderQuestion?: string;
+    prefillQuestion?: string;
     translationText?: string;
 }): void {
     if (quickQuestionModalOpen) return;
@@ -3858,8 +4694,12 @@ function showQuickQuestionModal(options?: {
     const historyEl = modalEl.querySelector('.quick-question-history') as HTMLElement | null;
     const historyItemTemplate = document.getElementById('quick-question-history-item-template') as HTMLTemplateElement | null;
 
-    if (options?.defaultQuestion && questionInput) {
-        questionInput.value = options.defaultQuestion;
+    if (options?.placeholderQuestion && questionInput) {
+        questionInput.placeholder = options.placeholderQuestion;
+    }
+
+    if (options?.prefillQuestion && questionInput) {
+        questionInput.value = options.prefillQuestion;
     }
 
     const modal = new Modal(modalEl);
@@ -3927,12 +4767,20 @@ function showQuickQuestionModal(options?: {
     if (submitBtn) {
         submitBtn.addEventListener('click', async function() {
             hasAutoScrolledThisAnswer = false;
-            const defaultQuestion = options?.defaultQuestion ?? "How's this?";
-            const question = questionInput?.value.trim() || defaultQuestion;
+            const question = questionInput?.value.trim() || questionInput?.placeholder || "How's this?";
+            const kind: QuickQuestionKind = options?.kind ?? 'draft';
 
-            // Cache the first draft question for next time
-            if (dialogHistory.length === 0 && !options?.sourceText && !options?.translationText) {
-                cachedDraftQuickQuestion = question;
+            // Remember the first question asked in this context for next time
+            if (dialogHistory.length === 0) {
+                if (kind === 'translation') {
+                    cachedTranslationQuickQuestion = question;
+                } else if (kind === 'sourceMessage') {
+                    cachedSourceQuickQuestion = question;
+                } else if (kind === 'contextNote') {
+                    cachedContextQuickQuestion = question;
+                } else {
+                    cachedDraftQuickQuestion = question;
+                }
             }
 
             if (submitBtn) submitBtn.disabled = true;
@@ -3941,20 +4789,20 @@ function showQuickQuestionModal(options?: {
 
             currentAnswerEl = addHistoryItem(question, true);
 
-            // When options.sourceText is provided, use it directly as the source
-            // (for input message quick questions). When options.translationText is provided,
-            // both source and translation are used (for output message quick questions).
-            // Otherwise read from the global textareas (for draft quick questions).
-            const isTranslationQuestion = options?.translationText !== undefined;
-            const isMessageQuestion = !isTranslationQuestion && options?.sourceText !== undefined;
-            const sourceText = (isMessageQuestion || isTranslationQuestion) ? (options!.sourceText ?? '') : (document.getElementById('source-textarea') as HTMLTextAreaElement | null)?.value ?? '';
+            // The kind is explicit because a context note also carries sourceText,
+            // so "which option fields are present" is no longer a reliable signal.
+            const isTranslationQuestion = kind === 'translation';
+            const isMessageQuestion = kind === 'sourceMessage' || kind === 'contextNote';
+            const sourceText = (isMessageQuestion || isTranslationQuestion)
+                ? (options?.sourceText ?? '')
+                : (document.getElementById('source-textarea') as HTMLTextAreaElement | null)?.value ?? '';
             let intentText: string;
-            if (isMessageQuestion) {
-                intentText = '';
-            } else if (isTranslationQuestion) {
-                intentText = options!.intentText ?? '';
-            } else {
+            if (kind === 'translation') {
+                intentText = options?.intentText ?? '';
+            } else if (kind === 'draft') {
                 intentText = (document.getElementById('intent-textarea') as HTMLTextAreaElement | null)?.value ?? '';
+            } else {
+                intentText = '';
             }
 
             if (!config || !config.openRouterApiKey) {
@@ -4017,8 +4865,11 @@ function showQuickQuestionModal(options?: {
                             }
                         } else if (hasText) {
                             if (thinkingEl) thinkingEl.style.display = 'none';
-                            if (currentAnswerEl) {
-                                currentAnswerEl.innerHTML = renderMarkdown(text);
+                            const answerEl = currentAnswerEl;
+                            if (answerEl) {
+                                scheduleStreamRender(answerEl, function(): void {
+                                    answerEl.innerHTML = renderMarkdown(text);
+                                });
                             }
                         }
                     },
@@ -4026,6 +4877,7 @@ function showQuickQuestionModal(options?: {
                         abortQuickQuestion = null;
                         if (thinkingEl) thinkingEl.style.display = 'none';
                         if (currentAnswerEl) {
+                            cancelStreamRender(currentAnswerEl);
                             currentAnswerEl.innerHTML = renderMarkdown(fullText);
                         }
                         dialogHistory.push({question, answer: fullText});
@@ -4045,6 +4897,7 @@ function showQuickQuestionModal(options?: {
                         if (thinkingEl) thinkingEl.style.display = 'none';
                         console.error('[quickQuestion] Error:', error);
                         if (currentAnswerEl) {
+                            cancelStreamRender(currentAnswerEl);
                             currentAnswerEl.innerHTML = '<span class="text-danger">Error: ' + error.message + '</span>';
                         }
                         currentAnswerEl = null;

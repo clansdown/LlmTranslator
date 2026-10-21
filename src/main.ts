@@ -10,6 +10,7 @@ import * as translation from './translation';
 import { initAuthUi } from './authUi';
 import { initCloudSync, setSyncReloadCallback } from './cloudSync';
 import { setConfig as setBackgroundUpdateConfig } from './backgroundUpdate';
+import { resolveEffectiveModel } from './defaultModels';
 import type { Config } from './types/config';
 import type { ReasoningLevel } from './types/session';
 
@@ -20,6 +21,7 @@ import type { ReasoningLevel } from './types/session';
 const config: Config = {
     openRouterApiKey: null,
     selectedModel: null,
+    defaultModel: null,
     minPrice: null,
     maxPrice: null,
     defaultMyLanguage: 'english',
@@ -78,14 +80,22 @@ async function loadModels(): Promise<void> {
         translation.setModelNameMap(approvedModels);
         translation.setModelOverrideOptions(approvedModels);
 
-        const savedModelId = await getPreference("selectedModel");
-        if (savedModelId && approvedModels.some(function(m) { return m.id === savedModelId; })) {
-            config.selectedModel = savedModelId;
+        const resolution = resolveEffectiveModel({
+            sessionModel: await translation.getCurrentSessionModel(),
+            defaultModel: config.defaultModel,
+            available: approvedModels
+        });
+
+        if (resolution.model) {
+            config.selectedModel = resolution.model;
             translation.updateButtonStates();
-        } else if (approvedModels.length > 0) {
-            config.selectedModel = approvedModels[0].id;
-            savePreference("selectedModel", approvedModels[0].id).catch(function() {});
-            translation.updateButtonStates();
+        }
+
+        if (resolution.missingChoice) {
+            ui.displayNotice(
+                'Your selected model "' + translation.getModelName(resolution.missingChoice) +
+                '" is no longer available. Using "' + translation.getModelName(resolution.model ?? '') + '" instead.'
+            );
         }
 
         const savedQQModelId = await getPreference("defaultQuickQuestionModel");
@@ -239,6 +249,11 @@ async function loadSettings(): Promise<void> {
         config.defaultMyLanguage = defaultMyLanguage;
     }
 
+    const defaultModel = await getPreference("defaultModel");
+    if (defaultModel) {
+        config.defaultModel = defaultModel;
+    }
+
     const defaultQuestionModel = await getPreference("defaultQuestionModel");
     if (defaultQuestionModel) {
         config.defaultQuestionModel = defaultQuestionModel;
@@ -307,6 +322,7 @@ export async function init(): Promise<void> {
     translation.setupTranslateButtons();
     translation.setupTextareaKeyHandlers();
     translation.setupDraftAutoSave();
+    translation.setupHistoryAutoLoad();
     setupSessionSelectorHandler();
     setupNewSessionButtonHandler();
     settings.setConfig(config);

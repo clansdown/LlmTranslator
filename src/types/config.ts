@@ -10,6 +10,7 @@ import type { ReasoningLevel } from './session';
 export interface Config {
     openRouterApiKey: string | null;
     selectedModel: string | null;
+    defaultModel: string | null;
     minPrice: number | null;
     maxPrice: number | null;
     defaultMyLanguage: string;

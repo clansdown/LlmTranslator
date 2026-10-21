@@ -1071,13 +1071,86 @@ export async function saveSessionTranslation(sessionId: string, translation: Tra
 }
 
 /**
+ * Lists the timestamps of every translation file in a session without reading them.
+ * Translation files are named after their timestamp, so the directory listing alone
+ * is enough to enumerate them.
+ * @param {string} sessionId - Session ID
+ * @returns {Promise<number[]>} Timestamps in milliseconds, newest first
+ */
+export async function listSessionTranslationTimestamps(sessionId: string): Promise<number[]> {
+    try {
+        const sessionDir = await getSessionDirectory(sessionId);
+        const timestamps: number[] = [];
+
+        for await (const entry of (sessionDir as FileSystemDirectoryHandle & { values(): AsyncIterableIterator<FileSystemHandle> }).values()) {
+            if (entry.kind === "file" && entry.name.endsWith(".json")) {
+                const num = parseInt(entry.name.replace(".json", ""), 10);
+                if (!isNaN(num)) {
+                    timestamps.push(num);
+                }
+            }
+        }
+
+        timestamps.sort(function(a: number, b: number): number { return b - a; });
+
+        if (DEBUG_TRANSLATIONS) {
+            console.log(`[listSessionTranslationTimestamps] Found ${timestamps.length} files for session ${sessionId}`);
+        }
+
+        return timestamps;
+    } catch (e) {
+        if (DEBUG_TRANSLATIONS) {
+            console.error("[listSessionTranslationTimestamps] Error:", e);
+        }
+        return [];
+    }
+}
+
+/**
+ * Loads the translations stored under the given timestamps.
+ * Files that are missing or unparseable are skipped.
+ * @param {string} sessionId - Session ID
+ * @param {number[]} timestamps - Timestamps (milliseconds) of the files to read
+ * @returns {Promise<Translation[]>} Loaded translations, in the order supplied
+ */
+export async function loadSessionTranslationsByTimestamp(sessionId: string, timestamps: number[]): Promise<Translation[]> {
+    const translations: Translation[] = [];
+    try {
+        const sessionDir = await getSessionDirectory(sessionId);
+
+        for (const timestamp of timestamps) {
+            try {
+                const fileHandle = await sessionDir.getFileHandle(String(timestamp) + ".json");
+                const file = await fileHandle.getFile();
+                const content = await file.text();
+                const translation = JSON.parse(content) as Translation;
+                translations.push(translation);
+            } catch (e) {
+                if (DEBUG_TRANSLATIONS) {
+                    console.warn(`[loadSessionTranslationsByTimestamp] Skipping invalid translation file: ${timestamp}`);
+                }
+            }
+        }
+
+        if (DEBUG_TRANSLATIONS) {
+            console.log(`[loadSessionTranslationsByTimestamp] Loaded ${translations.length} translations for session ${sessionId}`);
+        }
+    } catch (e) {
+        if (DEBUG_TRANSLATIONS) {
+            console.error("[loadSessionTranslationsByTimestamp] Error:", e);
+        }
+    }
+    return translations;
+}
+
+/**
  * Lists translations for a specific session
  * @param {string} sessionId - Session ID
- * @param {'input' | 'output'} pill - Which pane to filter
+ * @param {'input' | 'output' | 'question' | 'context'} pill - Which item type to filter
  * @param {number} [limit=1000] - Maximum number of translations to load
  * @returns {Promise<Translation[]>} Array of translation objects sorted by timestamp (newest first)
  */
-export async function listSessionTranslations(sessionId: string, pill: 'input' | 'output' | 'question', limit: number = 1000): Promise<Translation[]> {
+export async function listSessionTranslations(sessionId: string, pill: 'input' | 'output' | 'question' | 'context', limit: number = 1000): Promise<Translation[]> {
     if (DEBUG_TRANSLATIONS) {
         console.log(`[listSessionTranslations] Loading ${pill} translations for session ${sessionId} (limit: ${limit})...`);
     }

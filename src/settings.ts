@@ -12,6 +12,7 @@ import { getDefaultTags } from './defaultTranslationTags';
 import { readCloudPreference, writeCloudPreference } from './opfs';
 import * as cloudSync from './cloudSync';
 import { showBackgroundUpdateModal } from './backgroundUpdate';
+import { resolveEffectiveModel } from './defaultModels';
 import { STATE } from './state';
 import type { Config } from './types/config';
 import type { VisionModel } from './types/api';
@@ -767,12 +768,23 @@ export async function saveApprovedModels(): Promise<void> {
     translation.setModelNameMap(approvedModels);
     translation.setModelOverrideOptions(approvedModels);
 
-    if (config.selectedModel && !approvedModels.some(function(m) { return m.id === config!.selectedModel; })) {
-        if (approvedModels.length > 0) {
-            config.selectedModel = approvedModels[0].id;
-            await storage.savePreference('selectedModel', config.selectedModel);
-            translation.updateButtonStates();
-        }
+    const resolution = resolveEffectiveModel({
+        sessionModel: await translation.getCurrentSessionModel(),
+        defaultModel: config.defaultModel,
+        available: approvedModels
+    });
+
+    if (resolution.model && resolution.model !== config.selectedModel) {
+        config.selectedModel = resolution.model;
+        await storage.savePreference('selectedModel', config.selectedModel);
+        translation.updateButtonStates();
+    }
+
+    if (resolution.missingChoice) {
+        ui.displayNotice(
+            'Your selected model "' + translation.getModelName(resolution.missingChoice) +
+            '" is no longer available. Using "' + translation.getModelName(resolution.model ?? '') + '" instead.'
+        );
     }
 }
 
@@ -1446,6 +1458,8 @@ async function saveSettings(): Promise<void> {
     const defaultQuestionReasoning = refs.defaultQuestionReasoningSelect.value;
     const defaultWordDefModel = refs.defaultWordDefModelSelect.value || null;
     const defaultWordDefReasoning = refs.defaultWordDefReasoningSelect.value;
+
+    config.defaultModel = defaultModel;
 
     await saveApprovedModels();
 

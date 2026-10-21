@@ -1,11 +1,12 @@
 /**
  * Main-thread client for the Translate service worker.
  *
- * This module belongs to the page layer: it may import from `core/`
- * (protocol/types) only, and must never import from `sw/`.
+ * This module belongs to the page layer: it may import from `core/` only, and
+ * must never import from `sw/`.
  */
 import { SW_CHANNEL } from './core/protocol';
 import type { SwAbortRequest, SwResponse, SwStreamChatInput, SwStreamChatRequest } from './core/protocol';
+import { DEBUG_STREAM_RENDER } from './core/debug';
 import type { StreamUsage, StreamingAbortHandle } from './types/api';
 
 /** Callbacks invoked as the worker streams a completion back to the page. */
@@ -85,6 +86,7 @@ export function requestStream(input: SwStreamChatInput, handlers: SwStreamHandle
     let settled: boolean = false;
     let dispatchTimer: number | null = null;
     let inactivityTimer: number | null = null;
+    let lastChunkAt: number = 0;
 
     /** Sends a cancellation request to the worker if it has been reached. */
     function sendAbort(): void {
@@ -200,8 +202,14 @@ export function requestStream(input: SwStreamChatInput, handlers: SwStreamHandle
             if (message.kind === 'started') {
                 clearDispatchTimer();
                 armInactivityTimer();
+                lastChunkAt = performance.now();
             } else if (message.kind === 'chunk') {
                 armInactivityTimer();
+                if (DEBUG_STREAM_RENDER) {
+                    const now = performance.now();
+                    console.log(`[swClient] chunk +${(now - lastChunkAt).toFixed(1)}ms (${message.text.length} chars)`);
+                    lastChunkAt = now;
+                }
                 handlers.onChunk(message.text, message.reasoning);
             } else if (message.kind === 'done') {
                 completeStream();

@@ -86,7 +86,8 @@
         .translation-literal p:last-child,
         .translation-explanation p:last-child,
         .translation-nuances p:last-child,
-        .translation-interpretation p:last-child {
+        .translation-interpretation p:last-child,
+        .translation-interpretation .interpretation-markdown p:last-child {
             margin-bottom: 0;
         }
 
@@ -238,6 +239,14 @@
             color: var(--bs-secondary-color);
         }
 
+        .translation-item.context-item {
+            border: 1px solid #5a4a7f;
+        }
+        .translation-item.context-item .translation-header {
+            background: #241f2f;
+            color: var(--bs-secondary-color);
+        }
+
         .translation-target table,
         .translation-source table {
             width: 100%;
@@ -373,6 +382,11 @@
                                                 Them
                                             </button>
                                         </div>
+                                        <div class="col text-end">
+                                            <button type="button" class="btn btn-secondary" id="context-btn" disabled>
+                                                Context
+                                            </button>
+                                        </div>
                                         <div class="col d-flex justify-content-end">
                                             <select class="form-select form-select-sm ms-2" id="model-override" aria-label="Override model" style="width: auto;">
                                                 <option value="">Default LLM</option>
@@ -390,6 +404,8 @@
                                     </div>
                                 </div>
                                 <div id="translations-container"></div>
+                                <!-- history-load-sentinel: scrolling this into view loads the next page of older history -->
+                                <div id="history-load-sentinel" class="text-center text-muted small py-2"></div>
                             </div>
                         </div>
                     </div>
@@ -417,7 +433,11 @@
             <div class="translation-edit-area px-3 py-2" style="display: none; background: var(--bs-tertiary-bg); border-bottom: 1px solid var(--bs-border-color);">
                 <textarea class="form-control form-control-sm translation-edit-source mb-1" rows="5" placeholder="Edit text..."></textarea>
                 <textarea class="form-control form-control-sm translation-edit-intent mb-1" rows="1" placeholder="Intent (e.g., be friendly, stern tone)..."></textarea>
-                <button type="button" class="btn btn-sm btn-primary retranslate-btn">Retranslate</button>
+                <div class="d-flex justify-content-between align-items-center">
+                    <button type="button" class="btn btn-sm btn-primary retranslate-btn">Retranslate</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary add-context-from-edit-btn"
+                            title="Add a context note just before this message">Add Context</button>
+                </div>
             </div>
             <div class="row px-3">
                 <div class="col text-justify translation-source p-2" style="border-bottom: 1px solid var(--bs-border-color);"></div>
@@ -493,7 +513,10 @@
                         <div class="translation-thinking" style="display: none;">
                             <div class="thinking-content"></div>
                         </div>
-                        <div class="translation-interpretation p-2 small text-justify"></div>
+                        <div class="translation-interpretation p-2 small text-justify">
+                            <div class="interpretation-markdown"></div>
+                            <span class="interpretation-raw"></span>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -649,6 +672,57 @@
                 <div class="d-flex align-items-center gap-2">
                     <div class="error-message flex-grow-1"></div>
                     <button type="button" class="btn btn-sm btn-outline-danger retry-btn">Retry</button>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <!-- context-item-template: Template for displaying a user-provided context note -->
+    <template id="context-item-template">
+        <div class="translation-item context-item w-75 ms-auto" style="border-radius: 0.375rem; margin-bottom: 1rem; overflow: hidden;">
+            <div class="row p-2 small translation-header">
+                <div class="col">
+                    <span class="translation-prompt">Context</span>
+                </div>
+                <div class="col text-end">
+                    <button type="button" class="btn btn-sm btn-outline-secondary quick-question-btn ms-2" title="Quick question">?</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary copy-source-btn ms-2" title="Copy">📋</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary edit-toggle-btn ms-2" title="Edit">✏️</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary delete-translation-btn ms-2" title="Delete message">✕</button>
+                </div>
+            </div>
+            <div class="translation-source p-2"></div>
+            <div class="translation-edit-area px-3 py-2" style="display: none; background: var(--bs-tertiary-bg); border-top: 1px solid var(--bs-border-color);">
+                <textarea class="form-control form-control-sm translation-edit-source mb-1" rows="4" placeholder="Edit context..."></textarea>
+                <button type="button" class="btn btn-sm btn-primary save-context-btn">Save</button>
+            </div>
+        </div>
+    </template>
+
+    <!-- context-note-modal-template: Modal for adding a context note, optionally back-dated -->
+    <template id="context-note-modal-template">
+        <div class="modal fade" tabindex="-1" role="dialog" aria-labelledby="context-note-modal-title" aria-hidden="true" data-bs-focus="false">
+            <div class="modal-dialog modal-lg">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="context-note-modal-title">Add Context</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <label class="form-label small" for="context-note-text">Context</label>
+                        <textarea class="form-control" id="context-note-text" rows="6" placeholder="Notes about the situation, the people involved, or other background..."></textarea>
+                        <label class="form-label small mt-3" for="context-note-timestamp">Time</label>
+                        <div class="input-group input-group-sm">
+                            <input type="datetime-local" class="form-control" id="context-note-timestamp" aria-label="Note time">
+                            <button type="button" class="btn btn-outline-secondary" id="context-note-pick-btn" title="Pick a date and time" aria-label="Pick a date and time">📅</button>
+                            <button type="button" class="btn btn-outline-secondary" id="context-note-now-btn" title="Use current time">Now</button>
+                        </div>
+                        <div class="form-text">Leave at the current time to add the note now, or choose an earlier time to place it back in the conversation.</div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="button" class="btn btn-primary" id="context-note-add-btn">Add</button>
+                    </div>
                 </div>
             </div>
         </div>

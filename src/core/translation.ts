@@ -17,6 +17,22 @@ export function formatTimestamp(ts: number): string {
 }
 
 /**
+ * Formats a timestamp as local date/time with the local UTC offset
+ * @param {number} ts - Timestamp in milliseconds
+ * @returns {string} Formatted string like "2025-06-02 14:30 +02:00"
+ */
+export function formatTimestampWithOffset(ts: number): string {
+    const d = new Date(ts);
+    // getTimezoneOffset returns minutes behind UTC, so negate it to get the offset
+    const offsetMinutes = -d.getTimezoneOffset();
+    const sign = offsetMinutes < 0 ? '-' : '+';
+    const absMinutes = Math.abs(offsetMinutes);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const offset = `${sign}${pad(Math.floor(absMinutes / 60))}:${pad(absMinutes % 60)}`;
+    return `${formatTimestamp(ts)} ${offset}`;
+}
+
+/**
  * Strips user-defined translation tags from text
  * @param {string} text - Text to strip tags from
  * @param {TranslationTag[]} tags - Tags to strip

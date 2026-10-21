@@ -240,7 +240,7 @@ export function showBackgroundUpdateModal(sessionId: string): void {
         }
 
         const session = await loadSession(sessionId);
-        const model = session?.questionModel ?? config?.defaultQuestionModel ?? session?.model;
+        const model = session?.questionModel ?? config?.defaultQuestionModel ?? session?.model ?? config?.selectedModel;
         if (!model) {
             showError('No model configured for this session');
             return;
@@ -351,13 +351,14 @@ export function showBackgroundUpdateModal(sessionId: string): void {
      * @returns {Promise<string>} Formatted history block
      */
     async function buildAnalysisHistory(sessionIdLocal: string): Promise<string> {
-        const [inputItems, outputItems, questionItems] = await Promise.all([
+        const [inputItems, outputItems, questionItems, contextItems] = await Promise.all([
             listSessionTranslations(sessionIdLocal, 'input', MAX_HISTORY_MESSAGES),
             listSessionTranslations(sessionIdLocal, 'output', MAX_HISTORY_MESSAGES),
-            listSessionTranslations(sessionIdLocal, 'question', MAX_HISTORY_MESSAGES)
+            listSessionTranslations(sessionIdLocal, 'question', MAX_HISTORY_MESSAGES),
+            listSessionTranslations(sessionIdLocal, 'context', MAX_HISTORY_MESSAGES)
         ]);
 
-        const allItems: Translation[] = [...inputItems, ...outputItems, ...questionItems];
+        const allItems: Translation[] = [...inputItems, ...outputItems, ...questionItems, ...contextItems];
 
         allItems.sort(function(a: Translation, b: Translation): number { return a.timestamp - b.timestamp; });
 
@@ -392,6 +393,8 @@ export function showBackgroundUpdateModal(sessionId: string): void {
                 if (entry.translation) {
                     history += '<agentanswer ts="' + ts + '">' + stripIfNeeded(entry.translation, 'question', outputTags) + '</agentanswer>\n';
                 }
+            } else if (t.pill === 'context') {
+                history += '<note ts="' + ts + '">' + entry.source + '</note>\n';
             }
         }
         history += '</history>';
@@ -410,7 +413,7 @@ export function showBackgroundUpdateModal(sessionId: string): void {
         }
 
         const session = await loadSession(sessionId);
-        const model = session?.questionModel ?? config?.defaultQuestionModel ?? session?.model;
+        const model = session?.questionModel ?? config?.defaultQuestionModel ?? session?.model ?? config?.selectedModel;
         if (!model) {
             showError('No model configured for this session');
             return;

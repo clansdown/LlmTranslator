@@ -7,4 +7,4 @@
  * page-only consumers.
  */
 
-export { DEBUG_TRANSLATIONS, DEBUG_SESSIONS, DEBUG_API_CALLS } from './core/debug';
+export { DEBUG_TRANSLATIONS, DEBUG_SESSIONS, DEBUG_API_CALLS, DEBUG_STREAM_RENDER } from './core/debug';

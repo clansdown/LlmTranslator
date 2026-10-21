@@ -25,6 +25,27 @@ export function displayError(message: string): void {
 }
 
 /**
+ * Displays a non-error notice using a warning Bootstrap alert
+ * @param {string} message - Notice message to display
+ * @returns {void}
+ */
+export function displayNotice(message: string): void {
+    const template = document.getElementById('error-alert-template') as HTMLTemplateElement | null;
+    if (!template) {
+        return;
+    }
+    const clone = template.content.cloneNode(true) as DocumentFragment;
+    const container = clone.firstElementChild as HTMLElement;
+    container.classList.remove('alert-danger');
+    container.classList.add('alert-warning');
+    const messageSpan = container.querySelector('.error-message');
+    if (messageSpan) {
+        messageSpan.textContent = message;
+    }
+    document.getElementById('error-container')?.appendChild(container);
+}
+
+/**
  * Updates the balance display in the toolbar
  * @param {string} credits - Formatted credits string
  * @returns {void}
