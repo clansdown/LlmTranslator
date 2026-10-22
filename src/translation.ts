@@ -18,6 +18,7 @@ import {
     QUESTION_SYSTEM_PROMPT,
     WORD_DEFINITIONS_PROMPT,
     INTERPRETATION_PROMPT,
+    INTERPRETATION_FOLLOWUP_PROMPT,
     QUICK_QUESTION_DRAFT_PROMPT,
     QUICK_QUESTION_MESSAGE_PROMPT,
     QUICK_QUESTION_TRANSLATION_PROMPT,
@@ -82,14 +83,8 @@ let contextNoteModalOpen = false;
 /** Caches the first draft quick question text across modal dismissals */
 let cachedDraftQuickQuestion: string | null = null;
 
-/** Caches the first question asked about a source message across modal dismissals */
-let cachedSourceQuickQuestion: string | null = null;
-
 /** Caches the first question asked about a translation across modal dismissals */
 let cachedTranslationQuickQuestion: string | null = null;
-
-/** Caches the first question asked about a context note across modal dismissals */
-let cachedContextQuickQuestion: string | null = null;
 
 /** Timeout handle for draft auto-save debounce */
 let draftSaveTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -160,6 +155,10 @@ interface TranslationDomRefs {
     interpretationRawEl: HTMLElement | null;
     interpretationThinkingEl: HTMLElement | null;
     interpretationThinkingContentEl: HTMLElement | null;
+    interpretationFollowupEl: HTMLElement | null;
+    interpretationFollowupHistoryEl: HTMLElement | null;
+    interpretationFollowupInputEl: HTMLTextAreaElement | null;
+    interpretationFollowupAskBtn: HTMLButtonElement | null;
     spinnerEl: HTMLElement | null;
     errorEl: HTMLElement | null;
     errorMessageEl: HTMLElement | null;
@@ -273,6 +272,13 @@ const literalStreamingStateMap: WeakMap<Translation, LiteralStreamingState> = ne
  * @type {WeakMap<Translation, () => void>}
  */
 const interpretationAbortMap: WeakMap<Translation, () => void> = new WeakMap();
+
+/**
+ * Map from Translation objects to their in-flight interpretation follow-up abort handles.
+ * Follow-ups are ephemeral: the handle only exists while an answer is streaming.
+ * @type {WeakMap<Translation, () => void>}
+ */
+const interpretationFollowupAbortMap: WeakMap<Translation, () => void> = new WeakMap();
 
 /**
  * Ephemeral streaming state for interpretation streaming.
@@ -520,9 +526,7 @@ export async function setCurrentSession(sessionId: string): Promise<void> {
 
     currentSessionId = sessionId;
     cachedDraftQuickQuestion = null;
-    cachedSourceQuickQuestion = null;
     cachedTranslationQuickQuestion = null;
-    cachedContextQuickQuestion = null;
     currentLiteralModel = getLiteralModelToUse(session);
     currentInterpretationModel = getInterpretationModelToUse(session);
     await savePreference('currentSession', sessionId);
@@ -1039,36 +1043,43 @@ export async function switchTranslationEntry(translationId: string, entryIndex: 
 }
 
 /**
- * Builds the interpretation system prompt with the session's language names filled in
+ * Fills the language placeholders in an interpretation-family system prompt.
  * @param {TranslationSession | null} session - Active session, or null if unavailable
- * @returns {string} System prompt with [LANGUAGE] and [TARGET_LANGUAGE] substituted
+ * @param {string} [template] - Prompt template containing [LANGUAGE] and [TARGET_LANGUAGE]
+ * @returns {string} Prompt with the language names substituted
  */
-function buildInterpretationSystemPrompt(session: TranslationSession | null): string {
+function buildInterpretationSystemPrompt(
+    session: TranslationSession | null,
+    template: string = INTERPRETATION_PROMPT
+): string {
     const myLang = LANGUAGES.find(function(l) { return l.id === session?.myLanguage; });
     const myLangName = myLang?.name ?? session?.myLanguage ?? 'the source language';
     const theirLang = LANGUAGES.find(function(l) { return l.id === session?.theirLanguage; });
     const theirLangName = theirLang?.name ?? session?.theirLanguage ?? 'the target language';
 
-    return INTERPRETATION_PROMPT
+    return template
         .replace(/\[LANGUAGE\]/g, myLangName)
         .replace(/\[TARGET_LANGUAGE\]/g, theirLangName);
 }
 
 /**
- * Builds the user message for interpretation
- * @param {Translation} translation - Translation to interpret
- * @returns {Promise<string>} Formatted message
+ * Builds the shared context blocks for an interpretation or an interpretation follow-up.
+ * The follow-up rebuilds this at ask time so it always reflects the current conversation.
+ * @param {Translation} translation - Translation being interpreted
+ * @returns {Promise<{ sections: string; myLanguageName: string }>} Context blocks and the user's language name
  */
-async function buildInterpretationMessage(translation: Translation): Promise<string> {
+async function buildInterpretationContext(
+    translation: Translation
+): Promise<{ sections: string; myLanguageName: string }> {
     const background = await getBackground();
     const session = await loadSession(currentSessionId);
     const myLang = LANGUAGES.find(function(l) { return l.id === session?.myLanguage; });
     const myLangName = myLang?.name ?? session?.myLanguage ?? 'English';
 
-    let message = "";
+    let sections = "";
 
     if (background.trim()) {
-        message += `<background>${background}</background>\n\n`;
+        sections += `<background>${background}</background>\n\n`;
     }
 
     const history = await buildHistorySection({
@@ -1077,15 +1088,59 @@ async function buildInterpretationMessage(translation: Translation): Promise<str
         contentMode: 'recipientView'
     });
     if (history) {
-        message += history + "\n\n";
+        sections += history + "\n\n";
     }
 
     const entry = translation.entries?.[translation.activeEntryIndex ?? 0];
     const translationText = entry?.translation ?? (translation as any).translation ?? '';
-    message += `<current_time val="${formatTimestampWithOffset(Date.now())}"/>\n`;
-    message += `(${TIMESTAMP_NOTE})\n\n`;
-    message += `<interpret>${translationText}</interpret>\n\n`;
-    message += `<instructions>Explain how the listener will understand this message — both text and subtext — given their linguistic and cultural context. Write your explanation in ${myLangName}.</instructions>`;
+    sections += `<current_time val="${formatTimestampWithOffset(Date.now())}"/>\n`;
+    sections += `(${TIMESTAMP_NOTE})\n\n`;
+    sections += `<interpret>${translationText}</interpret>\n\n`;
+
+    return { sections, myLanguageName: myLangName };
+}
+
+/**
+ * Builds the user message for interpretation
+ * @param {Translation} translation - Translation to interpret
+ * @returns {Promise<string>} Formatted message
+ */
+async function buildInterpretationMessage(translation: Translation): Promise<string> {
+    const context = await buildInterpretationContext(translation);
+    return context.sections
+        + `<instructions>Explain how the listener will understand this message — both text and subtext — given their linguistic and cultural context. Write your explanation in ${context.myLanguageName}.</instructions>`;
+}
+
+/**
+ * Builds the user message for a follow-up question about an interpretation.
+ * Reuses the interpretation's context, then adds the interpretation itself.
+ * @param {Translation} translation - Translation the interpretation was made for
+ * @param {string} interpretationText - Interpretation the user is asking about
+ * @param {Array<{question: string, answer: string}>} previousQA - Earlier Q&A in this follow-up chain
+ * @param {string} questionText - The user's current question
+ * @returns {Promise<string>} Formatted message
+ */
+async function buildInterpretationFollowupMessage(
+    translation: Translation,
+    interpretationText: string,
+    previousQA: Array<{question: string, answer: string}>,
+    questionText: string
+): Promise<string> {
+    const context = await buildInterpretationContext(translation);
+
+    let message = context.sections;
+    message += `<interpretation>${interpretationText}</interpretation>\n\n`;
+
+    if (previousQA.length > 0) {
+        message += "<previous_qa>\n";
+        for (const qa of previousQA) {
+            message += `Q: ${qa.question}\nA: ${qa.answer}\n\n`;
+        }
+        message += "</previous_qa>\n\n";
+    }
+
+    message += `<current_question>${questionText}</current_question>\n\n`;
+    message += `<instructions>Answer in ${context.myLanguageName}.</instructions>`;
 
     return message;
 }
@@ -2148,6 +2203,10 @@ function renderTranslationItem(container: HTMLElement, translation: Translation,
             interpretationRawEl: element.querySelector('.interpretation-raw') as HTMLElement | null,
             interpretationThinkingEl: interpretationPane?.querySelector('.translation-thinking') as HTMLElement | null,
             interpretationThinkingContentEl: interpretationPane?.querySelector('.thinking-content') as HTMLElement | null,
+            interpretationFollowupEl: element.querySelector('.interpretation-followup') as HTMLElement | null,
+            interpretationFollowupHistoryEl: element.querySelector('.interpretation-followup-history') as HTMLElement | null,
+            interpretationFollowupInputEl: element.querySelector('.interpretation-followup-input') as HTMLTextAreaElement | null,
+            interpretationFollowupAskBtn: element.querySelector('.interpretation-followup-ask-btn') as HTMLButtonElement | null,
             spinnerEl: element.querySelector('.translation-spinner') as HTMLElement | null,
             errorEl: element.querySelector('.translation-error') as HTMLElement | null,
             errorMessageEl: element.querySelector('.error-message') as HTMLElement | null,
@@ -2327,8 +2386,7 @@ function renderTranslationItem(container: HTMLElement, translation: Translation,
                     kind: 'sourceMessage',
                     sourceText: sourceText,
                     systemPrompt: QUICK_QUESTION_MESSAGE_PROMPT,
-                    placeholderQuestion: 'What are the nuances of this message?',
-                    prefillQuestion: cachedSourceQuickQuestion ?? undefined
+                    placeholderQuestion: 'What are the nuances of this message?'
                 });
             });
         }
@@ -2370,9 +2428,19 @@ function renderTranslationItem(container: HTMLElement, translation: Translation,
                     kind: 'contextNote',
                     sourceText: noteText,
                     systemPrompt: QUICK_QUESTION_NOTE_PROMPT,
-                    placeholderQuestion: 'What implications does this have?',
-                    prefillQuestion: cachedContextQuickQuestion ?? undefined
+                    placeholderQuestion: 'What implications does this have?'
                 });
+            });
+        }
+
+        // Wire the inline interpretation follow-up
+        const followupInput = refs.interpretationFollowupInputEl;
+        const followupAskBtn = refs.interpretationFollowupAskBtn;
+        if (followupAskBtn && followupInput) {
+            const followupChain: Array<{question: string; answer: string}> = [];
+            followupAskBtn.addEventListener('click', function() {
+                const questionText = followupInput.value.trim() || followupInput.placeholder || 'Tell me more.';
+                void askInterpretationFollowup(translation, questionText, followupChain);
             });
         }
 
@@ -2722,6 +2790,8 @@ function updateTranslationItemContent(translation: Translation, refs: Translatio
             renderWordContent(refs.wordsContent, translation);
         }
     }
+
+    updateInterpretationFollowupContent(translation, refs, entryInterpretation, entryInterpretationPending);
 }
 
 /**
@@ -4656,15 +4726,210 @@ export async function appendTranslationFromSync(timestamp: number): Promise<void
 /** Which context a quick question is about */
 type QuickQuestionKind = 'draft' | 'sourceMessage' | 'translation' | 'contextNote';
 
+/**
+ * Appends a question/answer pair to a quick question history container.
+ * @param {HTMLElement} historyEl - Container to append to
+ * @param {string} question - The user's question text
+ * @param {boolean} isStreaming - Whether the answer is still loading
+ * @returns {HTMLElement | null} The answer element for streaming updates, or null
+ */
+function appendQuickQuestionHistoryItem(
+    historyEl: HTMLElement,
+    question: string,
+    isStreaming: boolean
+): HTMLElement | null {
+    const template = document.getElementById('quick-question-history-item-template') as HTMLTemplateElement | null;
+    if (!template) return null;
+    const itemClone = template.content.cloneNode(true) as DocumentFragment;
+    const item = itemClone.firstElementChild as HTMLElement;
+    const questionEl = item.querySelector('.quick-question-q') as HTMLElement | null;
+    const answerEl = item.querySelector('.quick-question-a') as HTMLElement | null;
+    if (questionEl) questionEl.textContent = question;
+    if (answerEl) {
+        if (isStreaming) {
+            answerEl.innerHTML = '<div class="spinner-border spinner-border-sm" role="status"></div><span class="ms-2">Thinking...</span>';
+        } else {
+            answerEl.innerHTML = '';
+        }
+    }
+    historyEl.appendChild(itemClone);
+    return answerEl;
+}
+
+/**
+ * Clears the inline interpretation follow-up, aborting any answer still streaming.
+ * @param {Translation} translation - Translation whose follow-up is being reset
+ * @param {TranslationDomRefs} [refs] - Captured DOM references, if the caller has them
+ * @returns {void}
+ */
+function resetInterpretationFollowup(translation: Translation, refs?: TranslationDomRefs): void {
+    const abortFn = interpretationFollowupAbortMap.get(translation);
+    if (abortFn) {
+        abortFn();
+        interpretationFollowupAbortMap.delete(translation);
+    }
+
+    const followupRefs = refs ?? domRefsMap.get(translation);
+    if (!followupRefs) return;
+
+    if (followupRefs.interpretationFollowupHistoryEl) {
+        followupRefs.interpretationFollowupHistoryEl.innerHTML = '';
+    }
+    if (followupRefs.interpretationFollowupInputEl) {
+        followupRefs.interpretationFollowupInputEl.value = '';
+        followupRefs.interpretationFollowupInputEl.disabled = false;
+    }
+    if (followupRefs.interpretationFollowupAskBtn) {
+        followupRefs.interpretationFollowupAskBtn.disabled = false;
+    }
+}
+
+/**
+ * Shows the inline interpretation follow-up only while a completed interpretation exists.
+ * Hides and clears it whenever the interpretation is missing or being regenerated.
+ * @param {Translation} translation - Translation whose follow-up is being updated
+ * @param {TranslationDomRefs} refs - Captured DOM references
+ * @param {string | undefined} entryInterpretation - Current interpretation text
+ * @param {boolean} entryInterpretationPending - Whether an interpretation is being generated
+ * @returns {void}
+ */
+function updateInterpretationFollowupContent(
+    translation: Translation,
+    refs: TranslationDomRefs,
+    entryInterpretation: string | undefined,
+    entryInterpretationPending: boolean
+): void {
+    if (!refs.interpretationFollowupEl) return;
+
+    const isAvailable = Boolean(entryInterpretation) && !entryInterpretationPending;
+    refs.interpretationFollowupEl.style.display = isAvailable ? '' : 'none';
+
+    if (!isAvailable) {
+        resetInterpretationFollowup(translation, refs);
+    }
+}
+
+/**
+ * Asks a follow-up question about an interpretation and streams the answer inline.
+ * The answer is ephemeral: it is never saved and disappears when the item re-renders.
+ * @param {Translation} translation - Translation whose interpretation is being discussed
+ * @param {string} questionText - The user's question
+ * @param {Array<{question: string, answer: string}>} previousQA - Earlier Q&A in this chain
+ * @returns {Promise<void>}
+ */
+async function askInterpretationFollowup(
+    translation: Translation,
+    questionText: string,
+    previousQA: Array<{question: string, answer: string}>
+): Promise<void> {
+    const refs = domRefsMap.get(translation);
+    const historyEl = refs?.interpretationFollowupHistoryEl;
+    const followupInput = refs?.interpretationFollowupInputEl;
+    const askBtn = refs?.interpretationFollowupAskBtn;
+    if (!historyEl || !followupInput) return;
+
+    const inputEl: HTMLTextAreaElement = followupInput;
+
+    const answerEl = appendQuickQuestionHistoryItem(historyEl, questionText, true);
+    inputEl.value = '';
+    inputEl.disabled = true;
+    if (askBtn) askBtn.disabled = true;
+
+    /**
+     * Shows a setup or request error in the answer slot and re-enables the input.
+     * @param {string} message - Error message to display
+     * @returns {void}
+     */
+    function showFollowupError(message: string): void {
+        if (answerEl) {
+            cancelStreamRender(answerEl);
+            answerEl.innerHTML = '<span class="text-danger">' + message + '</span>';
+        }
+        inputEl.disabled = false;
+        if (askBtn) askBtn.disabled = false;
+    }
+
+    try {
+        const interpretationText = translation.entries?.[translation.activeEntryIndex ?? 0]?.interpretation ?? '';
+        if (!interpretationText) {
+            showFollowupError('No interpretation to ask about.');
+            return;
+        }
+        if (!config || !config.openRouterApiKey) {
+            showFollowupError('No API key configured.');
+            return;
+        }
+
+        const session = await loadSession(currentSessionId);
+        const effectiveModel = getQuickQuestionModelToUse(session);
+        if (!effectiveModel) {
+            showFollowupError('No model configured for quick questions.');
+            return;
+        }
+
+        const userMessage = await buildInterpretationFollowupMessage(
+            translation,
+            interpretationText,
+            previousQA,
+            questionText
+        );
+        const systemPrompt = buildInterpretationSystemPrompt(session, INTERPRETATION_FOLLOWUP_PROMPT);
+
+        const abortHandle = streamSendChatMessage(
+            config.openRouterApiKey,
+            userMessage,
+            systemPrompt,
+            effectiveModel,
+            {
+                onChunk: function(text: string): void {
+                    const targetEl = answerEl;
+                    if (!targetEl || !targetEl.isConnected || !text) return;
+                    scheduleStreamRender(targetEl, function(): void {
+                        targetEl.innerHTML = renderMarkdown(text);
+                    });
+                },
+                onDone: function(fullText: string): void {
+                    interpretationFollowupAbortMap.delete(translation);
+                    const targetEl = answerEl;
+                    if (targetEl && targetEl.isConnected) {
+                        cancelStreamRender(targetEl);
+                        targetEl.innerHTML = renderMarkdown(fullText);
+                    }
+                    previousQA.push({ question: questionText, answer: fullText });
+                    inputEl.disabled = false;
+                    if (askBtn) askBtn.disabled = false;
+                },
+                onError: function(error: Error): void {
+                    interpretationFollowupAbortMap.delete(translation);
+                    const targetEl = answerEl;
+                    if (targetEl && targetEl.isConnected) {
+                        cancelStreamRender(targetEl);
+                        targetEl.innerHTML = '<span class="text-danger">Error: ' + error.message + '</span>';
+                    }
+                    inputEl.disabled = false;
+                    if (askBtn) askBtn.disabled = false;
+                }
+            },
+            getQuickQuestionReasoningToUse(session),
+            config.questionTemperature
+        );
+
+        interpretationFollowupAbortMap.set(translation, abortHandle.abort);
+    } catch (error) {
+        showFollowupError((error as Error).message);
+    }
+}
+
     /**
      * Shows a quick question modal for asking about a draft or message.
      * Manages the ephemeral Q&A lifecycle. Supports follow-up questions within the same
      * dialog session. Nothing is persisted when the modal is closed.
      * Accepts optional options for context (sourceText, intentText, translationText),
      * a systemPrompt override, and the kind of context being asked about.
-     * The first question asked in each context (draft, source message, translation,
-     * context note) is cached in memory so the next modal open pre-fills it. Follow-up
-     * questions in the same chain do NOT update the cache.
+     * The first question asked about the text being composed (draft or translation) is
+     * cached in memory so the next modal open pre-fills it. Follow-up questions in the
+     * same chain do NOT update the cache, and questions about received messages or notes
+     * are never cached.
      * @param {{ kind?: QuickQuestionKind; sourceText?: string; intentText?: string; systemPrompt?: string; placeholderQuestion?: string; prefillQuestion?: string; translationText?: string }} [options] - Context and prompt overrides
      * @returns {void}
      */
@@ -4692,7 +4957,6 @@ function showQuickQuestionModal(options?: {
     const thinkingEl = modalEl.querySelector('.translation-thinking') as HTMLElement | null;
     const thinkingContentEl = modalEl.querySelector('.thinking-content') as HTMLElement | null;
     const historyEl = modalEl.querySelector('.quick-question-history') as HTMLElement | null;
-    const historyItemTemplate = document.getElementById('quick-question-history-item-template') as HTMLTemplateElement | null;
 
     if (options?.placeholderQuestion && questionInput) {
         questionInput.placeholder = options.placeholderQuestion;
@@ -4733,21 +4997,8 @@ function showQuickQuestionModal(options?: {
      * @returns {HTMLElement | null} The answer element for streaming, or null
      */
     function addHistoryItem(question: string, isStreaming: boolean): HTMLElement | null {
-        if (!historyItemTemplate || !historyEl) return null;
-        const itemClone = historyItemTemplate.content.cloneNode(true) as DocumentFragment;
-        const item = itemClone.firstElementChild as HTMLElement;
-        const qEl = item.querySelector('.quick-question-q') as HTMLElement | null;
-        const aEl = item.querySelector('.quick-question-a') as HTMLElement | null;
-        if (qEl) qEl.textContent = question;
-        if (aEl) {
-            if (isStreaming) {
-                aEl.innerHTML = '<div class="spinner-border spinner-border-sm" role="status"></div><span class="ms-2">Thinking...</span>';
-            } else {
-                aEl.innerHTML = '';
-            }
-        }
-        historyEl.appendChild(itemClone);
-        return aEl;
+        if (!historyEl) return null;
+        return appendQuickQuestionHistoryItem(historyEl, question, isStreaming);
     }
 
     /**
@@ -4770,17 +5021,13 @@ function showQuickQuestionModal(options?: {
             const question = questionInput?.value.trim() || questionInput?.placeholder || "How's this?";
             const kind: QuickQuestionKind = options?.kind ?? 'draft';
 
-            // Remember the first question asked in this context for next time
-            if (dialogHistory.length === 0) {
-                if (kind === 'translation') {
-                    cachedTranslationQuickQuestion = question;
-                } else if (kind === 'sourceMessage') {
-                    cachedSourceQuickQuestion = question;
-                } else if (kind === 'contextNote') {
-                    cachedContextQuickQuestion = question;
-                } else {
-                    cachedDraftQuickQuestion = question;
-                }
+            // Remember the first question asked about the text being composed so the
+            // next open can pre-fill it. Received messages, notes, and interpretation
+            // follow-ups are never remembered.
+            if (dialogHistory.length === 0 && kind === 'translation') {
+                cachedTranslationQuickQuestion = question;
+            } else if (dialogHistory.length === 0 && kind === 'draft') {
+                cachedDraftQuickQuestion = question;
             }
 
             if (submitBtn) submitBtn.disabled = true;
