@@ -173,8 +173,12 @@ You will receive XML-style tags that structure the input:
 - <instructions> - Specific directions
 
 The conversation exchanges in <history> are shown as the listener received them — in [TARGET_LANGUAGE], including
-the user's own messages, which appear as they were translated for the listener. Notes in <note> tags are the user's own
-remarks about the situation and were not said to the listener. Use them to inform your interpretation; do not interpret them.
+the user's own messages, which appear as they were translated for the listener. Use them to judge how the message will
+land: the relationship and tone already established, anything already asked, promised, or contradicted, and expectations
+set earlier. Mention earlier exchanges only where they change the reading; do not summarize the conversation.
+
+Notes in <note> tags are the user's own remarks about the situation and were not said to the listener. Use them as
+background; do not interpret them.
 
 Provide a clear, insightful explanation covering the following. Every item may legitimately be empty, and an empty item
 is not a gap in your analysis — it usually means the user composed the message well. Say so briefly rather than inventing
@@ -211,8 +215,11 @@ You will receive XML-style tags that structure the input:
 - <instructions> - Specific directions
 
 The conversation exchanges in <history> are shown as the listener received them — in [TARGET_LANGUAGE], including
-the user's own messages, which appear as they were translated for the listener. Notes in <note> tags are the user's own
-remarks about the situation and were not said to the listener. Use them to inform your answer; do not interpret them.
+the user's own messages, which appear as they were translated for the listener. Use earlier exchanges to judge how the
+message landed; do not summarize them.
+
+Notes in <note> tags are the user's own remarks about the situation and were not said to the listener. Use them as
+background; do not interpret them.
 
 Answer the <current_question> using the interpreted message, the interpretation, the conversation context, and any
 previous Q&A. Build on the interpretation rather than repeating it. If the question asks for the reasoning behind a

@@ -906,28 +906,34 @@ type HistorySectionOptions = {
      * 'recipientView' includes only the text the other party actually received.
      */
     contentMode?: 'sourceAndTranslation' | 'recipientView';
+    /** Timestamps to leave out of <history> (the item being interpreted) */
+    excludeTimestamps?: ReadonlySet<number>;
 };
 
 /** Active days of history included in translation, question and quick question messages */
 const HISTORY_CONTEXT_DAYS = 7;
 
-/** Active days of history included in interpretation messages */
-const INTERPRETATION_CONTEXT_DAYS = 5;
+/** Active days of history included in interpretation messages (kept in step with translation context) */
+const INTERPRETATION_CONTEXT_DAYS = 7;
 
 /**
  * Builds the history section for the user message from the most recent active days.
  * In 'recipientView' mode only the text the other party actually received is included:
  * the foreign source of messages they sent, and the foreign translation of messages
  * the user sent. Question/answer pairs are only included when the item is marked
- * includeInContext.
+ * includeInContext. Items whose timestamps are excluded are left out entirely, including
+ * their contribution to the active-day window.
  * @param {HistorySectionOptions} options - Which history to include
  * @returns {Promise<string>} History section or empty string
  */
 async function buildHistorySection(options: HistorySectionOptions): Promise<string> {
     const includeQuestions = options.includeQuestions;
     const recipientView = options.contentMode === 'recipientView';
+    const excludedTimestamps = options.excludeTimestamps;
 
-    const complete = allTranslations.filter(function(t) { return t.status === 'complete'; });
+    const complete = allTranslations.filter(function(t) {
+        return t.status === 'complete' && !excludedTimestamps?.has(t.timestamp);
+    });
 
     // Only conversation content starts or extends the window. Context notes must
     // not consume one of the counted days; they are still included when they fall
@@ -1085,7 +1091,8 @@ async function buildInterpretationContext(
     const history = await buildHistorySection({
         activeDayCount: INTERPRETATION_CONTEXT_DAYS,
         includeQuestions: false,
-        contentMode: 'recipientView'
+        contentMode: 'recipientView',
+        excludeTimestamps: new Set([translation.timestamp])
     });
     if (history) {
         sections += history + "\n\n";
@@ -1096,6 +1103,10 @@ async function buildInterpretationContext(
     sections += `<current_time val="${formatTimestampWithOffset(Date.now())}"/>\n`;
     sections += `(${TIMESTAMP_NOTE})\n\n`;
     sections += `<interpret>${translationText}</interpret>\n\n`;
+
+    if (DEBUG_TRANSLATIONS) {
+        console.log('[interpretation] context:\n' + sections);
+    }
 
     return { sections, myLanguageName: myLangName };
 }
@@ -1108,7 +1119,7 @@ async function buildInterpretationContext(
 async function buildInterpretationMessage(translation: Translation): Promise<string> {
     const context = await buildInterpretationContext(translation);
     return context.sections
-        + `<instructions>Explain how the listener will understand this message — both text and subtext — given their linguistic and cultural context. Write your explanation in ${context.myLanguageName}.</instructions>`;
+        + `<instructions>Explain how the listener will understand this message — both text and subtext — given the conversation so far and their linguistic and cultural context. Write your explanation in ${context.myLanguageName}.</instructions>`;
 }
 
 /**
