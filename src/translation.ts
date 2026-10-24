@@ -157,6 +157,8 @@ interface TranslationDomRefs {
     interpretationThinkingContentEl: HTMLElement | null;
     interpretationFollowupEl: HTMLElement | null;
     interpretationFollowupHistoryEl: HTMLElement | null;
+    interpretationFollowupThinkingEl: HTMLElement | null;
+    interpretationFollowupThinkingContentEl: HTMLElement | null;
     interpretationFollowupInputEl: HTMLTextAreaElement | null;
     interpretationFollowupAskBtn: HTMLButtonElement | null;
     spinnerEl: HTMLElement | null;
@@ -2216,6 +2218,8 @@ function renderTranslationItem(container: HTMLElement, translation: Translation,
             interpretationThinkingContentEl: interpretationPane?.querySelector('.thinking-content') as HTMLElement | null,
             interpretationFollowupEl: element.querySelector('.interpretation-followup') as HTMLElement | null,
             interpretationFollowupHistoryEl: element.querySelector('.interpretation-followup-history') as HTMLElement | null,
+            interpretationFollowupThinkingEl: element.querySelector('.interpretation-followup-thinking') as HTMLElement | null,
+            interpretationFollowupThinkingContentEl: element.querySelector('.interpretation-followup-thinking-content') as HTMLElement | null,
             interpretationFollowupInputEl: element.querySelector('.interpretation-followup-input') as HTMLTextAreaElement | null,
             interpretationFollowupAskBtn: element.querySelector('.interpretation-followup-ask-btn') as HTMLButtonElement | null,
             spinnerEl: element.querySelector('.translation-spinner') as HTMLElement | null,
@@ -4786,6 +4790,12 @@ function resetInterpretationFollowup(translation: Translation, refs?: Translatio
     if (followupRefs.interpretationFollowupHistoryEl) {
         followupRefs.interpretationFollowupHistoryEl.innerHTML = '';
     }
+    if (followupRefs.interpretationFollowupThinkingEl) {
+        followupRefs.interpretationFollowupThinkingEl.style.display = 'none';
+    }
+    if (followupRefs.interpretationFollowupThinkingContentEl) {
+        followupRefs.interpretationFollowupThinkingContentEl.textContent = '';
+    }
     if (followupRefs.interpretationFollowupInputEl) {
         followupRefs.interpretationFollowupInputEl.value = '';
         followupRefs.interpretationFollowupInputEl.disabled = false;
@@ -4835,11 +4845,20 @@ async function askInterpretationFollowup(
 ): Promise<void> {
     const refs = domRefsMap.get(translation);
     const historyEl = refs?.interpretationFollowupHistoryEl;
+    const thinkingEl = refs?.interpretationFollowupThinkingEl;
+    const thinkingContentEl = refs?.interpretationFollowupThinkingContentEl;
     const followupInput = refs?.interpretationFollowupInputEl;
     const askBtn = refs?.interpretationFollowupAskBtn;
     if (!historyEl || !followupInput) return;
 
     const inputEl: HTMLTextAreaElement = followupInput;
+
+    if (thinkingEl) {
+        thinkingEl.style.display = 'none';
+    }
+    if (thinkingContentEl) {
+        thinkingContentEl.textContent = '';
+    }
 
     const answerEl = appendQuickQuestionHistoryItem(historyEl, questionText, true);
     inputEl.value = '';
@@ -4852,6 +4871,9 @@ async function askInterpretationFollowup(
      * @returns {void}
      */
     function showFollowupError(message: string): void {
+        if (thinkingEl) {
+            thinkingEl.style.display = 'none';
+        }
         if (answerEl) {
             cancelStreamRender(answerEl);
             answerEl.innerHTML = '<span class="text-danger">' + message + '</span>';
@@ -4892,15 +4914,31 @@ async function askInterpretationFollowup(
             systemPrompt,
             effectiveModel,
             {
-                onChunk: function(text: string): void {
-                    const targetEl = answerEl;
-                    if (!targetEl || !targetEl.isConnected || !text) return;
-                    scheduleStreamRender(targetEl, function(): void {
-                        targetEl.innerHTML = renderMarkdown(text);
-                    });
+                onChunk: function(text: string, reasoning: string): void {
+                    const hasReasoning = reasoning.length > 0;
+                    const hasText = text.length > 0;
+                    if (hasReasoning && !hasText) {
+                        if (thinkingEl && thinkingContentEl) {
+                            thinkingContentEl.textContent = reasoning;
+                            thinkingEl.style.display = '';
+                            thinkingEl.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+                        }
+                    } else if (hasText) {
+                        if (thinkingEl) {
+                            thinkingEl.style.display = 'none';
+                        }
+                        const targetEl = answerEl;
+                        if (!targetEl || !targetEl.isConnected) return;
+                        scheduleStreamRender(targetEl, function(): void {
+                            targetEl.innerHTML = renderMarkdown(text);
+                        });
+                    }
                 },
                 onDone: function(fullText: string): void {
                     interpretationFollowupAbortMap.delete(translation);
+                    if (thinkingEl) {
+                        thinkingEl.style.display = 'none';
+                    }
                     const targetEl = answerEl;
                     if (targetEl && targetEl.isConnected) {
                         cancelStreamRender(targetEl);
@@ -4912,6 +4950,9 @@ async function askInterpretationFollowup(
                 },
                 onError: function(error: Error): void {
                     interpretationFollowupAbortMap.delete(translation);
+                    if (thinkingEl) {
+                        thinkingEl.style.display = 'none';
+                    }
                     const targetEl = answerEl;
                     if (targetEl && targetEl.isConnected) {
                         cancelStreamRender(targetEl);
@@ -5089,10 +5130,13 @@ function showQuickQuestionModal(options?: {
             const translationTags = session?.translationTags;
             const langInstructionsKey = 'langInstructions_' + (session?.theirLanguage ?? '');
             const langInstructions = await getPreference(langInstructionsKey) ?? undefined;
+            const translationModelId = getTranslationModelToUse(session);
+            const translationModelName = translationModelId ? getModelName(translationModelId) : 'an LLM';
             const effectivePrompt = options?.systemPrompt ?? QUICK_QUESTION_DRAFT_PROMPT;
             const systemPrompt = effectivePrompt
                 .replace(/\[LANGUAGE\]/g, myLangName)
-                .replace(/\[TARGET_LANGUAGE\]/g, theirLangName);
+                .replace(/\[TARGET_LANGUAGE\]/g, theirLangName)
+                .replace(/\[TRANSLATION_MODEL\]/g, translationModelName);
             const userMessage = await buildQuickQuestionMessage(
                 question, sourceText, intentText, myLangName, dialogHistory,
                 isMessageQuestion ? sourceText : undefined,
