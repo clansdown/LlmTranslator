@@ -79,8 +79,44 @@ export interface TranslationEntry {
 }
 
 /**
+ * Snapshot of an earlier message in this session that the current message replies to.
+ * @property {'message'} kind - Discriminator for a real message reference
+ * @property {string} messageId - Stable id of the target, used for live resolution
+ * @property {number} timestamp - Target timestamp at capture time
+ * @property {'input' | 'output'} pill - Author of the target
+ * @property {string} source - Snapshot of the target's source text
+ * @property {string} translation - Snapshot of the target's translation
+ */
+export interface MessageReplyReference {
+    kind: 'message';
+    messageId: string;
+    timestamp: number;
+    pill: 'input' | 'output';
+    source: string;
+    translation: string;
+}
+
+/**
+ * User-supplied quote or description of an earlier message not present in the session.
+ * @property {'text'} kind - Discriminator for a free-text quote
+ * @property {'input' | 'output'} [pill] - Author of the original, when known
+ * @property {string} text - Quote or description (may be a paraphrase)
+ */
+export interface TextReplyReference {
+    kind: 'text';
+    pill?: 'input' | 'output';
+    text: string;
+}
+
+/**
+ * What a message is replying to: either a session message or a free-text quote.
+ */
+export type ReplyReference = MessageReplyReference | TextReplyReference;
+
+/**
  * @property {TranslationEntry[]} entries - All translation entries for this item (newer field)
  * @property {number} activeEntryIndex - Which entry is currently displayed (defaults to 0)
+ * @property {ReplyReference} [replyTo] - The earlier message this message replies to
  */
 export interface Translation {
     id: string;
@@ -94,4 +130,5 @@ export interface Translation {
     answerCollapsed?: boolean;
     sectionsCollapsed?: boolean;
     includeInContext?: boolean;
+    replyTo?: ReplyReference;
 }

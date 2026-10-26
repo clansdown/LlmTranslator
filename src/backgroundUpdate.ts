@@ -7,7 +7,7 @@ import { streamSendChatMessage } from './openrouter';
 import { listSessionTranslations, loadSession, saveSession } from './storage';
 import { BACKGROUND_UPDATE_SYSTEM_PROMPT, BACKGROUND_MERGE_SYSTEM_PROMPT } from './prompts';
 import { getModelName } from './translation';
-import { formatTimestamp, stripIfNeeded } from './core/translation';
+import { formatTimestamp, stripIfNeeded, buildReplyingToBlock } from './core/translation';
 import { Modal } from 'bootstrap';
 import type { Config } from './types/config';
 import type { Translation } from './types/translation';
@@ -378,6 +378,12 @@ export function showBackgroundUpdateModal(sessionId: string): void {
             if (!entry) continue;
 
             const ts = formatTimestamp(t.timestamp);
+            if (t.pill === 'input' || t.pill === 'output') {
+                const replyBlock = buildReplyingToBlock(t.replyTo, allItems, false, outputTags);
+                if (replyBlock) {
+                    history += replyBlock + '\n';
+                }
+            }
             if (t.pill === 'input') {
                 history += '<them ts="' + ts + '">' + entry.source + '</them>\n';
                 if (entry.translation) {

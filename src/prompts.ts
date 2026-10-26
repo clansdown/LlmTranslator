@@ -11,6 +11,18 @@ export const TIMESTAMP_NOTE: string =
 `All timestamps in this prompt are on the user's local clock.`;
 
 /**
+ * One-line glossary entry for the <replying_to> history tag.
+ */
+export const REPLY_TO_TAG_DESCRIPTION: string =
+`- <replying_to> - The earlier message that the following message or translation block replies to. Use it to resolve implied meaning; do not translate it.`;
+
+/**
+ * Explains how to read a <replying_to> block in prompts that consume history.
+ */
+export const REPLY_TO_NOTE: string =
+`A <replying_to> block identifies the earlier message that the message or translation block immediately following it answers. Use it to resolve implied subjects, references, and tone. It is context, not part of the message to translate or interpret, and must not be translated. A message reference contains <original> and <rendered> (the original and translated forms), or a single <text> (the version the listener received). It may repeat an earlier message in <history>; the repetition marks the explicit link. If it has quoted="true", the text was supplied by the user and may be a description or paraphrase rather than a verbatim quote.`;
+
+/**
  * System prompt for output pane translations (native -> foreign)
  * Defines the XML structure and role
  */
@@ -21,11 +33,14 @@ You will receive messages with XML-style tags that structure the input. Here is 
 
 - <background> - Additional context about the conversation or situation. Use this to inform your translation but do not translate it.
 - <history> - Previous conversation exchanges, marked as <me> (the user's own words) and <them> (the other party's words). Use this for context but do not translate it.
+${REPLY_TO_TAG_DESCRIPTION}
 - <already_answered> - Previous questions from the user about the conversation. Use these for context but do not answer them here.
 - <agentanswer> - Answers to previous questions. Use these for context but do not translate them.
 - <note> - Notes the user wrote about the situation, people, or other background. Use them as context but do not translate them.
 - <translate> - The text to be translated. This is the ONLY section you should translate.
 - <instructions> - Specific directions for this translation, such as the target language. Follow these instructions but do not translate them.
+
+${REPLY_TO_NOTE}
 
 Always respond using these exact tags:
 
@@ -46,9 +61,12 @@ You will receive messages with XML-style tags that structure the input. Here is 
 
 - <background> - Additional context about the conversation or situation. Use this to inform your translation but do not translate it.
 - <history> - Previous conversation exchanges, marked as <me> (the user's own words) and <them> (the other party's words). Use this for context but do not translate it.
+${REPLY_TO_TAG_DESCRIPTION}
 - <note> - Notes the user wrote about the situation, people, or other background. Use them as context but do not translate them.
 - <translate> - The text to be translated. This is the ONLY section you should translate.
 - <instructions> - Specific directions for this translation, such as the target language. Follow these instructions but do not translate them.
+
+${REPLY_TO_NOTE}
 
 Always respond using these exact tags:
 
@@ -151,9 +169,12 @@ export const QUESTION_SYSTEM_PROMPT: string =
 You will receive messages with XML-style tags that structure the input:
 - <background> - Additional context about the conversation or situation.
 - <history> - Previous conversation exchanges, marked as <me> (the user's own words), <them> (the other party's words), <already_answered> (previous questions from the user), and <agentanswer> (your previous answers).
+${REPLY_TO_TAG_DESCRIPTION}
 - <note> - Notes the user wrote about the situation, people, or other background.
 - <question> - The user's question. Answer it directly.
 - <instructions> - Any additional directions.
+
+${REPLY_TO_NOTE}
 
 Answer the user's question clearly and helpfully. You may use examples from the conversation history. Write your answer in the same language the user used for their question. You may use Markdown formatting.`;
 
@@ -168,6 +189,7 @@ to understand them — both the literal meaning and the subtext — given their 
 You will receive XML-style tags that structure the input:
 - <background> - Additional context about the conversation or situation
 - <history> - Previous conversation exchanges marked as <me> (the user's own words) and <them> (the other party's words)
+${REPLY_TO_TAG_DESCRIPTION}
 - <note> - Notes the user wrote about the situation or the people involved
 - <interpret> - The message from the user to the listener which you are to interpret
 - <instructions> - Specific directions
@@ -176,6 +198,9 @@ The conversation exchanges in <history> are shown as the listener received them 
 the user's own messages, which appear as they were translated for the listener. Use them to judge how the message will
 land: the relationship and tone already established, anything already asked, promised, or contradicted, and expectations
 set earlier. Mention earlier exchanges only where they change the reading; do not summarize the conversation.
+
+Use <replying_to> to establish what the message was responding to — especially when it answers a question, agrees,
+refuses, or contradicts.
 
 Notes in <note> tags are the user's own remarks about the situation and were not said to the listener. Use them as
 background; do not interpret them.
@@ -207,6 +232,7 @@ behind a claim.
 You will receive XML-style tags that structure the input:
 - <background> - Additional context about the conversation or situation
 - <history> - Previous conversation exchanges marked as <me> (the user's own words) and <them> (the other party's words)
+${REPLY_TO_TAG_DESCRIPTION}
 - <note> - Notes the user wrote about the situation or the people involved
 - <interpret> - The message from the user to the listener which was interpreted
 - <interpretation> - The interpretation the user received
@@ -217,6 +243,9 @@ You will receive XML-style tags that structure the input:
 The conversation exchanges in <history> are shown as the listener received them — in [TARGET_LANGUAGE], including
 the user's own messages, which appear as they were translated for the listener. Use earlier exchanges to judge how the
 message landed; do not summarize them.
+
+Use <replying_to> to establish what the message was responding to — especially when it answers a question, agrees,
+refuses, or contradicts.
 
 Notes in <note> tags are the user's own remarks about the situation and were not said to the listener. Use them as
 background; do not interpret them.
@@ -252,6 +281,8 @@ including any background context (in <background> tags) and notes the user wrote
 draft is below in <current_question> tags. Answer the <current_question> clearly and helpfully, referring to
 the draft text, intent, conversation history, and any previous Q&A as needed.
 
+${REPLY_TO_NOTE}
+
 IMPORTANT: The recipient never sees the draft or any of the source language. Their entire impression of the
 message comes from the LLM's translation. The translation is produced by a modern LLM, not a pre-LLM machine
 translation system, so do not hedge your advice around word-for-word rendering, broken grammar, or other
@@ -276,6 +307,8 @@ including any notes the user wrote about the situation (in <note> tags),
 as well as any previous Q&A from the current dialog session. The user's question is below in <current_question> tags.
 Answer the <current_question> clearly and helpfully, referring to the message, conversation history, and any previous Q&A as needed.
 
+${REPLY_TO_NOTE}
+
 Always write your answer in [LANGUAGE]. Use markdown for clarity.`;
 
 export const QUICK_QUESTION_TRANSLATION_PROMPT: string =
@@ -288,6 +321,8 @@ You will receive the full conversation context and history (up to the last 7 day
 including any notes the user wrote about the situation (in <note> tags),
 as well as any previous Q&A from the current dialog session. The user's question is below in <current_question> tags.
 Answer the <current_question> clearly and helpfully, referring to the source text, intent, translation, conversation history, and any previous Q&A as needed.
+
+${REPLY_TO_NOTE}
 
 Always write your answer in [LANGUAGE]. Use markdown for clarity.`;
 
@@ -304,12 +339,18 @@ including any notes the user wrote about the situation (in <note> tags),
 as well as any previous Q&A from the current dialog session. The user's question about the note is below in <current_question> tags.
 Answer the <current_question> clearly and helpfully, referring to the note, conversation history, and any previous Q&A as needed.
 
+${REPLY_TO_NOTE}
+
 Always write your answer in [LANGUAGE]. Use markdown for clarity.`;
 
 export const BACKGROUND_UPDATE_SYSTEM_PROMPT: string =
 `You are a conversation analyst. Review the user's current background context and the conversation history below.
 Notes the user wrote about the situation appear in <note> tags in the history; treat them as background information
 about the conversation.
+
+${REPLY_TO_TAG_DESCRIPTION}
+${REPLY_TO_NOTE}
+
 Propose specific changes to the background text (e.g., corrections, clarifications, updates about the relationship/situation)
 and specific additions (new information learned from the conversation that should be added to the background).
 

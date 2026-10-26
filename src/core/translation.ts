@@ -2,7 +2,7 @@
  * Core translation logic
  * Pure functions with no DOM dependencies — importable from SW or main thread
  */
-import type { Translation, TranslationEntry, TranslationWordItem } from '@/types/translation';
+import type { Translation, TranslationEntry, TranslationWordItem, MessageReplyReference, TextReplyReference, ReplyReference } from '@/types/translation';
 import type { TranslationTag } from '@/types/translationTag';
 
 /**
@@ -177,4 +177,209 @@ export function ensureEntries(translation: Translation): void {
     translation.entries = [entry];
     translation.activeEntryIndex = 0;
     translation.includeInContext = (translation as any).includeInContext ?? false;
+}
+
+/**
+ * A reply reference with its texts resolved against the currently loaded messages.
+ */
+export type ResolvedReplyReference =
+    | {
+        kind: 'message';
+        pill: 'input' | 'output';
+        timestamp: number;
+        source: string;
+        translation: string;
+    }
+    | {
+        kind: 'text';
+        pill?: 'input' | 'output';
+        text: string;
+    };
+
+/**
+ * The display-oriented view of a reply reference.
+ * @property {string} roleLabel - Human-readable author label ("Me", "Them", or a quoted label)
+ * @property {number | null} timestamp - Target timestamp, or null for a free-text quote
+ * @property {string} primaryText - The text the user would naturally read
+ * @property {string} secondaryText - The counterpart text, when available
+ * @property {boolean} quoted - Whether the reference is a user-supplied quote/description
+ */
+export interface ReplyReferenceDisplay {
+    roleLabel: string;
+    timestamp: number | null;
+    primaryText: string;
+    secondaryText: string;
+    quoted: boolean;
+}
+
+/**
+ * Resolves a reply reference, preferring the live target message when it is loaded.
+ * @param {ReplyReference} reference - Reference to resolve
+ * @param {ReadonlyArray<Translation>} candidates - Currently loaded messages to search
+ * @returns {ResolvedReplyReference} Resolved reference
+ */
+export function resolveReplyReference(
+    reference: ReplyReference,
+    candidates: ReadonlyArray<Translation>
+): ResolvedReplyReference {
+    if (reference.kind === 'text') {
+        return {
+            kind: 'text',
+            pill: reference.pill,
+            text: reference.text
+        };
+    }
+
+    const target = candidates.find(function(candidate: Translation): boolean {
+        return candidate.id === reference.messageId;
+    });
+    if (target) {
+        ensureEntries(target);
+        const entry = target.entries[target.activeEntryIndex ?? 0];
+        if (entry) {
+            return {
+                kind: 'message',
+                pill: reference.pill,
+                timestamp: target.timestamp,
+                source: entry.source,
+                translation: entry.translation
+            };
+        }
+    }
+
+    return {
+        kind: 'message',
+        pill: reference.pill,
+        timestamp: reference.timestamp,
+        source: reference.source,
+        translation: reference.translation
+    };
+}
+
+/**
+ * Creates a snapshot reference for an already loaded message.
+ * @param {Translation} translation - Target message
+ * @returns {MessageReplyReference | null} Reference, or null for non-message pills
+ */
+export function createMessageReplyReference(translation: Translation): MessageReplyReference | null {
+    if (translation.pill !== 'input' && translation.pill !== 'output') {
+        return null;
+    }
+    ensureEntries(translation);
+    const entry = translation.entries[translation.activeEntryIndex ?? 0];
+    return {
+        kind: 'message',
+        messageId: translation.id,
+        timestamp: translation.timestamp,
+        pill: translation.pill,
+        source: entry?.source ?? '',
+        translation: entry?.translation ?? ''
+    };
+}
+
+/**
+ * Creates a free-text reply reference.
+ * @param {'input' | 'output' | undefined} pill - Author of the quoted message, when known
+ * @param {string} text - Quote or description
+ * @returns {TextReplyReference} Reference
+ */
+export function createTextReplyReference(
+    pill: 'input' | 'output' | undefined,
+    text: string
+): TextReplyReference {
+    return {
+        kind: 'text',
+        pill: pill,
+        text: text.trim()
+    };
+}
+
+/**
+ * Builds the display data for a reply reference.
+ * @param {ReplyReference} reference - Reference to display
+ * @param {ReadonlyArray<Translation>} candidates - Currently loaded messages for live resolution
+ * @returns {ReplyReferenceDisplay} Display data
+ */
+export function getReplyReferenceDisplay(
+    reference: ReplyReference,
+    candidates: ReadonlyArray<Translation>
+): ReplyReferenceDisplay {
+    const resolved = resolveReplyReference(reference, candidates);
+
+    if (resolved.kind === 'text') {
+        let roleLabel = 'a quoted message';
+        if (resolved.pill === 'input') {
+            roleLabel = 'Them (quoted)';
+        } else if (resolved.pill === 'output') {
+            roleLabel = 'Me (quoted)';
+        }
+        return {
+            roleLabel: roleLabel,
+            timestamp: null,
+            primaryText: resolved.text,
+            secondaryText: '',
+            quoted: true
+        };
+    }
+
+    const roleLabel = resolved.pill === 'input' ? 'Them' : 'Me';
+    let primaryText = '';
+    let secondaryText = '';
+    if (resolved.pill === 'input') {
+        primaryText = resolved.translation || resolved.source;
+        secondaryText = resolved.translation && resolved.source !== resolved.translation ? resolved.source : '';
+    } else {
+        primaryText = resolved.source || resolved.translation;
+        secondaryText = resolved.source && resolved.translation !== resolved.source ? resolved.translation : '';
+    }
+
+    return {
+        roleLabel: roleLabel,
+        timestamp: resolved.timestamp,
+        primaryText: primaryText,
+        secondaryText: secondaryText,
+        quoted: false
+    };
+}
+
+/**
+ * Formats a <replying_to> block for a prompt.
+ * @param {ReplyReference | undefined} reference - Reference to format
+ * @param {ReadonlyArray<Translation>} candidates - Loaded messages for live resolution
+ * @param {boolean} recipientView - Whether to include only the version the listener received
+ * @param {TranslationTag[]} outputTags - Tags to strip from output translations
+ * @returns {string} Formatted block, or an empty string when there is no reference
+ */
+export function buildReplyingToBlock(
+    reference: ReplyReference | undefined,
+    candidates: ReadonlyArray<Translation>,
+    recipientView: boolean,
+    outputTags: TranslationTag[]
+): string {
+    if (!reference) {
+        return '';
+    }
+
+    if (reference.kind === 'text') {
+        const roleAttribute = reference.pill
+            ? ` role="${reference.pill === 'input' ? 'them' : 'me'}"`
+            : '';
+        return `<replying_to${roleAttribute} quoted="true">\n<text>${reference.text}</text>\n</replying_to>`;
+    }
+
+    const resolved = resolveReplyReference(reference, candidates);
+    if (resolved.kind !== 'message') {
+        return '';
+    }
+
+    const role = resolved.pill === 'input' ? 'them' : 'me';
+    const header = `<replying_to role="${role}" ts="${formatTimestamp(resolved.timestamp)}">`;
+    const translation = stripIfNeeded(resolved.translation, 'output', outputTags);
+
+    if (recipientView) {
+        const receivedText = resolved.pill === 'input' ? resolved.source : translation;
+        return `${header}\n<text>${receivedText}</text>\n</replying_to>`;
+    }
+
+    return `${header}\n<original>${resolved.source}</original>\n<rendered>${translation}</rendered>\n</replying_to>`;
 }

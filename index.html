@@ -247,6 +247,58 @@
             color: var(--bs-secondary-color);
         }
 
+        .compose-reply-chip {
+            background: var(--bs-tertiary-bg);
+            border: 1px solid var(--bs-border-color);
+            border-radius: 0.25rem;
+            padding: 0.25rem 0.5rem;
+            min-width: 0;
+        }
+
+        .translation-reply-quote {
+            background: var(--bs-tertiary-bg);
+            border-bottom: 1px solid var(--bs-border-color);
+            padding: 0.5rem 0.75rem;
+        }
+        .translation-reply-text {
+            display: -webkit-box;
+            -webkit-line-clamp: 3;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+        .translation-reply-secondary {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .reply-picker-list {
+            max-height: 45vh;
+            overflow-y: auto;
+        }
+        .reply-picker-item {
+            cursor: pointer;
+        }
+        .reply-picker-item.selected {
+            background: var(--bs-primary-bg-subtle);
+            border-color: var(--bs-primary-border-subtle);
+        }
+        .reply-picker-item-text {
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+        .reply-picker-item-secondary {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .reply-picker-draft {
+            border-top: 1px solid var(--bs-border-color);
+            padding-top: 0.5rem;
+        }
+
         .translation-target table,
         .translation-source table {
             width: 100%;
@@ -368,6 +420,17 @@
                                         <button type="button" class="btn btn-sm btn-outline-secondary" id="quick-question-btn" title="Quick question">?</button>
                                     </div>
                                 </div>
+                                <div class="compose-reply-chip align-items-center gap-2 mb-2"
+                                     id="compose-reply-chip" style="display: none;">
+                                    <span class="small text-secondary">
+                                        Replying to <span id="compose-reply-role"></span>
+                                    </span>
+                                    <span class="small text-secondary" id="compose-reply-time"></span>
+                                    <span class="small text-truncate" id="compose-reply-text"></span>
+                                    <button type="button" class="btn btn-sm btn-outline-secondary ms-auto"
+                                            id="compose-reply-remove-btn" aria-label="Remove reply target"
+                                            title="Remove reply target">×</button>
+                                </div>
                                 <textarea class="pane-textarea" id="source-textarea" placeholder="Type text to translate..."></textarea>
                                 <div class="pane-toolbar mt-2">
                                     <div class="row g-2 align-items-center">
@@ -380,6 +443,10 @@
                                             </button>
                                             <button type="button" class="btn btn-primary ms-1" id="input-btn" disabled>
                                                 Them
+                                            </button>
+                                            <button type="button" class="btn btn-secondary ms-1" id="reply-to-btn"
+                                                    title="Reply to an earlier message">
+                                                Reply to…
                                             </button>
                                         </div>
                                         <div class="col text-end">
@@ -439,11 +506,26 @@
                             title="Add a context note just before this message">Add Context</button>
                 </div>
             </div>
+            <div class="translation-reply-quote" style="display: none;">
+                <div class="d-flex align-items-center gap-2 small text-secondary">
+                    <span>Replying to <span class="translation-reply-role"></span></span>
+                    <span class="translation-reply-time"></span>
+                    <span class="flex-grow-1"></span>
+                    <button type="button" class="btn btn-sm btn-outline-secondary translation-reply-edit-btn"
+                            aria-label="Change reply target" title="Change reply target">✏️</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary translation-reply-remove-btn"
+                            aria-label="Remove reply target" title="Remove reply target">×</button>
+                </div>
+                <div class="translation-reply-text small"></div>
+                <div class="translation-reply-secondary small text-secondary"></div>
+            </div>
             <div class="row px-3">
                 <div class="col text-justify translation-source p-2" style="border-bottom: 1px solid var(--bs-border-color);"></div>
                 <div class="col-auto p-1 d-flex flex-column">
                     <button type="button" class="btn btn-sm btn-outline-secondary copy-source-btn" title="Copy to clipboard">📋</button>
                     <button type="button" class="btn btn-sm btn-outline-secondary edit-toggle-btn mt-1" title="Edit">✏️</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary reply-to-btn mt-1"
+                            aria-label="Reply to…" title="Reply to…">↩</button>
                 </div>
             </div>
             <div class="translation-thinking" style="display: none;">
@@ -556,11 +638,26 @@
                     <button type="button" class="btn btn-sm btn-outline-secondary delete-translation-btn ms-2" title="Delete message">✕</button>
                 </div>
             </div>
+            <div class="translation-reply-quote" style="display: none;">
+                <div class="d-flex align-items-center gap-2 small text-secondary">
+                    <span>Replying to <span class="translation-reply-role"></span></span>
+                    <span class="translation-reply-time"></span>
+                    <span class="flex-grow-1"></span>
+                    <button type="button" class="btn btn-sm btn-outline-secondary translation-reply-edit-btn"
+                            aria-label="Change reply target" title="Change reply target">✏️</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary translation-reply-remove-btn"
+                            aria-label="Remove reply target" title="Remove reply target">×</button>
+                </div>
+                <div class="translation-reply-text small"></div>
+                <div class="translation-reply-secondary small text-secondary"></div>
+            </div>
             <div class="row px-3">
                 <div class="col text-justify translation-source p-2" style="border-bottom: 1px solid var(--bs-border-color);"></div>
                 <div class="col-auto p-1 d-flex flex-column">
                     <button type="button" class="btn btn-sm btn-outline-secondary copy-source-btn" title="Copy to clipboard">📋</button>
                     <button type="button" class="btn btn-sm btn-outline-secondary quick-question-btn mt-1" title="Ask about this">?</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary reply-to-btn mt-1"
+                            aria-label="Reply to…" title="Reply to…">↩</button>
                 </div>
             </div>
             <div class="translation-thinking" style="display: none;">
@@ -1251,6 +1348,67 @@
             <div class="quick-question-history-item">
                 <div class="quick-question-q text-secondary small mb-1"></div>
                 <div class="quick-question-a"></div>
+            </div>
+        </template>
+
+        <!-- reply-picker-modal-template: Modal for choosing or describing the message being replied to -->
+        <template id="reply-picker-modal-template">
+            <div class="modal fade" tabindex="-1" role="dialog"
+                 aria-labelledby="reply-picker-title" aria-hidden="true" data-bs-focus="false">
+                <div class="modal-dialog modal-lg">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title" id="reply-picker-title">Reply to…</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                        <div class="modal-body">
+                            <input type="search" class="form-control form-control-sm mb-2"
+                                   id="reply-picker-search" placeholder="Search loaded messages…"
+                                   aria-label="Search loaded messages">
+                            <div class="reply-picker-list list-group" id="reply-picker-list"></div>
+                            <div class="reply-picker-empty small text-secondary" id="reply-picker-empty" style="display: none;">
+                                No loaded messages match. Scroll the conversation to load more, or quote it below.
+                            </div>
+
+                            <div class="border-top mt-3 pt-2">
+                                <div class="small text-secondary mb-1">Not in the conversation? Quote or describe it.</div>
+                                <select class="form-select form-select-sm mb-1" id="reply-picker-role"
+                                        aria-label="Who said the quoted message">
+                                    <option value="">Not specified</option>
+                                    <option value="input">Them</option>
+                                    <option value="output">Me</option>
+                                </select>
+                                <textarea class="form-control form-control-sm" id="reply-picker-text" rows="2"
+                                          placeholder="Quote or describe the message being replied to…"
+                                          aria-label="Quote or describe the message being replied to"></textarea>
+                                <button type="button" class="btn btn-sm btn-outline-secondary mt-1"
+                                        id="reply-picker-use-text-btn" disabled>Use this quote</button>
+                            </div>
+
+                            <div class="reply-picker-draft small mt-2" id="reply-picker-draft"></div>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-sm btn-outline-danger me-auto"
+                                    id="reply-picker-remove-btn" style="display: none;">Remove</button>
+                            <button type="button" class="btn btn-secondary" id="reply-picker-cancel-btn">Cancel</button>
+                            <button type="button" class="btn btn-primary" id="reply-picker-save-btn">Save</button>
+                            <button type="button" class="btn btn-primary"
+                                    id="reply-picker-save-retranslate-btn" style="display: none;">Save &amp; retranslate</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </template>
+
+        <!-- reply-picker-item-template: A selectable loaded message in the reply picker -->
+        <template id="reply-picker-item-template">
+            <div class="reply-picker-item list-group-item list-group-item-action" role="button" tabindex="0">
+                <div class="d-flex justify-content-between gap-2 small text-secondary">
+                    <span class="reply-picker-item-role"></span>
+                    <span class="reply-picker-item-time"></span>
+                </div>
+                <div class="reply-picker-item-text"></div>
+                <div class="reply-picker-item-secondary small text-secondary"></div>
             </div>
         </template>
 

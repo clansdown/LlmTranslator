@@ -27,12 +27,12 @@ import {
 } from './prompts';
 import { renderMarkdown, normalizeForMarkdown } from './markdown';
 import { readLocalFile, writeLocalFile, deleteLocalFile, getDeviceId } from './opfs';
-import type { Translation, TranslationEntry, TranslationWordItem, WordItem, PunctItem, NewlineItem } from './types/translation';
+import type { Translation, TranslationEntry, TranslationWordItem, WordItem, PunctItem, NewlineItem, ReplyReference } from './types/translation';
 import type { StreamingAbortHandle, StreamCallbacks, StreamUsage } from './types/api';
 import type { Config } from './types/config';
 import type { TranslationTag } from './types/translationTag';
 import type { TranslationSession, ReasoningLevel } from './types/session';
-import { formatTimestamp, formatTimestampWithOffset, extractStructuredResult, stripTranslationTags, parseWordDefinitions, ensureEntries, stripIfNeeded } from './core/translation';
+import { formatTimestamp, formatTimestampWithOffset, extractStructuredResult, stripTranslationTags, parseWordDefinitions, ensureEntries, stripIfNeeded, createMessageReplyReference, createTextReplyReference, getReplyReferenceDisplay, buildReplyingToBlock } from './core/translation';
 import { getDayStart, groupTimestampsByDay, selectTimestampsInDays } from './historyWindow';
 import { scheduleStreamRender, cancelStreamRender } from './streamRender';
 import { Modal } from 'bootstrap';
@@ -85,6 +85,15 @@ let cachedDraftQuickQuestion: string | null = null;
 
 /** Caches the first question asked about a translation across modal dismissals */
 let cachedTranslationQuickQuestion: string | null = null;
+
+/** Reply target selected in the composer, pending attachment to the next message */
+let pendingReplyTo: ReplyReference | null = null;
+
+/** Prevents multiple reply pickers from stacking */
+let replyPickerOpen = false;
+
+/** Maximum number of reply picker rows rendered at once */
+const REPLY_PICKER_MAX_ROWS: number = 200;
 
 /** Timeout handle for draft auto-save debounce */
 let draftSaveTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -191,6 +200,14 @@ interface TranslationDomRefs {
     editToggleBtn: HTMLButtonElement | null;
     quickQuestionBtn: HTMLButtonElement | null;
     includeInContextToggle: HTMLInputElement | null;
+    replyQuoteEl: HTMLElement | null;
+    replyQuoteRoleEl: HTMLElement | null;
+    replyQuoteTimeEl: HTMLElement | null;
+    replyQuoteTextEl: HTMLElement | null;
+    replyQuoteSecondaryEl: HTMLElement | null;
+    replyQuoteEditBtn: HTMLButtonElement | null;
+    replyQuoteRemoveBtn: HTMLButtonElement | null;
+    replyToBtn: HTMLButtonElement | null;
 }
 
 /**
@@ -529,6 +546,7 @@ export async function setCurrentSession(sessionId: string): Promise<void> {
     currentSessionId = sessionId;
     cachedDraftQuickQuestion = null;
     cachedTranslationQuickQuestion = null;
+    clearPendingReplyTo();
     currentLiteralModel = getLiteralModelToUse(session);
     currentInterpretationModel = getInterpretationModelToUse(session);
     await savePreference('currentSession', sessionId);
@@ -966,6 +984,12 @@ async function buildHistorySection(options: HistorySectionOptions): Promise<stri
         const entry = t.entries[t.activeEntryIndex ?? 0];
         if (!entry) continue;
         const ts = formatTimestamp(t.timestamp);
+        if (t.pill === 'input' || t.pill === 'output') {
+            const replyBlock = buildReplyingToBlock(t.replyTo, allTranslations, recipientView, outputTags);
+            if (replyBlock) {
+                history += replyBlock + '\n';
+            }
+        }
         if (t.pill === 'input') {
             history += `<them ts="${ts}">${entry.source}</them>\n`;
             if (!recipientView) {
@@ -1104,6 +1128,15 @@ async function buildInterpretationContext(
     const translationText = entry?.translation ?? (translation as any).translation ?? '';
     sections += `<current_time val="${formatTimestampWithOffset(Date.now())}"/>\n`;
     sections += `(${TIMESTAMP_NOTE})\n\n`;
+    const replyBlock = buildReplyingToBlock(
+        translation.replyTo,
+        allTranslations,
+        true,
+        session?.translationTags ?? []
+    );
+    if (replyBlock) {
+        sections += replyBlock + "\n\n";
+    }
     sections += `<interpret>${translationText}</interpret>\n\n`;
 
     if (DEBUG_TRANSLATIONS) {
@@ -1197,11 +1230,27 @@ export function setupTranslateButtons(): void {
         quickQuestionBtn.addEventListener('click', function() {
             if (quickQuestionModalOpen) return;
             showQuickQuestionModal(cachedDraftQuickQuestion
-                ? { prefillQuestion: cachedDraftQuickQuestion }
-                : undefined
+                ? { prefillQuestion: cachedDraftQuickQuestion, replyTo: pendingReplyTo ?? undefined }
+                : { replyTo: pendingReplyTo ?? undefined }
             );
         });
     }
+
+    const replyToBtn = document.getElementById('reply-to-btn');
+    if (replyToBtn) {
+        replyToBtn.addEventListener('click', function() {
+            openReplyPickerForCompose();
+        });
+    }
+
+    const composeReplyRemoveBtn = document.getElementById('compose-reply-remove-btn');
+    if (composeReplyRemoveBtn) {
+        composeReplyRemoveBtn.addEventListener('click', function() {
+            clearPendingReplyTo();
+        });
+    }
+
+    updateComposeReplyChip();
 
     const overrideSelect = document.getElementById('model-override') as HTMLSelectElement | null;
 
@@ -1396,9 +1445,17 @@ export function updateButtonStates(): void {
  * @param {'input' | 'output'} pill - Which pane
  * @param {string} sourceText - Text to translate
  * @param {string} instructions - Instruction text (language or prompt instructions)
+ * @param {ReplyReference} [replyTo] - The message this message replies to
+ * @param {TranslationTag[]} [outputTags] - Tags to strip from quoted output translations
  * @returns {Promise<string>} Complete user message
  */
-async function buildUserMessage(pill: 'input' | 'output' | 'question', sourceText: string, instructions: string): Promise<string> {
+async function buildUserMessage(
+    pill: 'input' | 'output' | 'question',
+    sourceText: string,
+    instructions: string,
+    replyTo?: ReplyReference,
+    outputTags: TranslationTag[] = []
+): Promise<string> {
     const background = await getBackground();
 
     let message = "";
@@ -1417,6 +1474,12 @@ async function buildUserMessage(pill: 'input' | 'output' | 'question', sourceTex
 
     message += `<current_time val="${formatTimestampWithOffset(Date.now())}"/>\n`;
     message += `(${TIMESTAMP_NOTE})\n\n`;
+
+    const replyBlock = buildReplyingToBlock(replyTo, allTranslations, false, outputTags);
+    if (replyBlock) {
+        message += replyBlock + "\n\n";
+    }
+
     message += `<translate>${sourceText}</translate>\n\n`;
     message += `<instructions>${instructions}</instructions>`;
 
@@ -1518,11 +1581,16 @@ export async function translate(mode: 'input' | 'output'): Promise<void> {
             error: null
         };
 
+        if (pendingReplyTo) {
+            translation.replyTo = pendingReplyTo;
+        }
+
         allTranslations.push(translation);
         const container = document.getElementById('translations-container');
         if (container) {
             renderTranslationItem(container, translation);
         }
+        clearPendingReplyTo();
 
         const systemPrompt = mode === 'input' ? INPUT_SYSTEM_PROMPT : OUTPUT_SYSTEM_PROMPT;
         console.log(`[translate] Starting streaming translation with model: ${effectiveModel}, mode: ${mode}`);
@@ -2128,6 +2196,512 @@ function insertItemChronologically(container: HTMLElement, element: HTMLElement,
 }
 
 /**
+ * Shows the currently pending composer reply target in the chip.
+ * @returns {void}
+ */
+function updateComposeReplyChip(): void {
+    const chipEl = document.getElementById('compose-reply-chip');
+    if (!chipEl) return;
+
+    if (!pendingReplyTo) {
+        chipEl.style.display = 'none';
+        return;
+    }
+
+    const display = getReplyReferenceDisplay(pendingReplyTo, allTranslations);
+    const roleEl = document.getElementById('compose-reply-role');
+    const timeEl = document.getElementById('compose-reply-time');
+    const textEl = document.getElementById('compose-reply-text');
+
+    if (roleEl) {
+        roleEl.textContent = display.roleLabel;
+    }
+    if (timeEl) {
+        timeEl.textContent = display.timestamp !== null ? formatTimestamp(display.timestamp) : '';
+        timeEl.style.display = display.timestamp !== null ? '' : 'none';
+    }
+    if (textEl) {
+        textEl.textContent = display.primaryText;
+        textEl.title = display.primaryText;
+    }
+
+    chipEl.style.display = 'flex';
+}
+
+/**
+ * Clears the composer's pending reply target.
+ * @returns {void}
+ */
+function clearPendingReplyTo(): void {
+    pendingReplyTo = null;
+    updateComposeReplyChip();
+}
+
+/**
+ * Saves or removes a message's reply reference and repaints its item.
+ * @param {string} translationId - Message id
+ * @param {ReplyReference | null} reference - Reference to save, or null to remove
+ * @returns {Promise<void>}
+ */
+async function saveReplyReference(
+    translationId: string,
+    reference: ReplyReference | null
+): Promise<void> {
+    const translation = allTranslations.find(function(t) { return t.id === translationId; });
+    if (!translation) return;
+
+    if (reference) {
+        translation.replyTo = reference;
+    } else {
+        delete translation.replyTo;
+    }
+
+    await saveSessionTranslation(currentSessionId, translation);
+
+    const refs = domRefsMap.get(translation);
+    if (refs) {
+        updateTranslationItemContent(translation, refs);
+    }
+}
+
+/**
+ * Paints the reply quote block on a message item.
+ * @param {Translation} translation - Message to paint
+ * @param {TranslationDomRefs} refs - Captured DOM references
+ * @returns {void}
+ */
+function paintReplyQuote(translation: Translation, refs: TranslationDomRefs): void {
+    if (!refs.replyQuoteEl) return;
+
+    if (!translation.replyTo) {
+        refs.replyQuoteEl.style.display = 'none';
+        return;
+    }
+
+    const display = getReplyReferenceDisplay(translation.replyTo, allTranslations);
+
+    if (refs.replyQuoteRoleEl) {
+        refs.replyQuoteRoleEl.textContent = display.roleLabel;
+    }
+    if (refs.replyQuoteTimeEl) {
+        refs.replyQuoteTimeEl.textContent = display.timestamp !== null ? formatTimestamp(display.timestamp) : '';
+        refs.replyQuoteTimeEl.style.display = display.timestamp !== null ? '' : 'none';
+    }
+    if (refs.replyQuoteTextEl) {
+        refs.replyQuoteTextEl.textContent = display.primaryText;
+        refs.replyQuoteTextEl.title = display.primaryText;
+    }
+    if (refs.replyQuoteSecondaryEl) {
+        refs.replyQuoteSecondaryEl.textContent = display.secondaryText;
+        refs.replyQuoteSecondaryEl.style.display = display.secondaryText ? '' : 'none';
+    }
+
+    refs.replyQuoteEl.style.display = '';
+    const editable = translation.status !== 'streaming' && translation.status !== 'pending';
+    if (refs.replyQuoteEditBtn) {
+        refs.replyQuoteEditBtn.style.display = editable ? '' : 'none';
+    }
+    if (refs.replyQuoteRemoveBtn) {
+        refs.replyQuoteRemoveBtn.style.display = editable ? '' : 'none';
+    }
+}
+
+/**
+ * Wires the reply button, quote edit button and quote remove button for an item.
+ * @param {Translation} translation - Message the item represents
+ * @param {TranslationDomRefs} refs - Captured DOM references
+ * @returns {void}
+ */
+function wireReplyControls(translation: Translation, refs: TranslationDomRefs): void {
+    const translationId = translation.id;
+
+    /**
+     * Opens the reply picker for the current version of this message.
+     * @returns {void}
+     */
+    function openPicker(): void {
+        const current = allTranslations.find(function(t) { return t.id === translationId; });
+        if (current) {
+            openReplyPickerForEdit(current);
+        }
+    }
+
+    if (refs.replyToBtn) {
+        refs.replyToBtn.addEventListener('click', openPicker);
+    }
+    if (refs.replyQuoteEditBtn) {
+        refs.replyQuoteEditBtn.addEventListener('click', openPicker);
+    }
+    if (refs.replyQuoteRemoveBtn) {
+        refs.replyQuoteRemoveBtn.addEventListener('click', function() {
+            void saveReplyReference(translationId, null);
+        });
+    }
+}
+
+/**
+ * Returns the messages eligible as reply targets in the picker.
+ * @param {Translation} [subject] - Message being annotated, when editing
+ * @returns {Translation[]} Eligible targets, newest first
+ */
+function getReplyPickerCandidates(subject?: Translation): Translation[] {
+    const cutoff = subject ? subject.timestamp : Infinity;
+    return allTranslations.filter(function(t) {
+        return (t.pill === 'input' || t.pill === 'output')
+            && t.status === 'complete'
+            && t.id !== subject?.id
+            && t.timestamp < cutoff;
+    }).sort(function(a, b) {
+        return b.timestamp - a.timestamp;
+    });
+}
+
+/**
+ * Opens the reply picker for the composer.
+ * @returns {void}
+ */
+function openReplyPickerForCompose(): void {
+    showReplyPicker({
+        mode: 'compose',
+        current: pendingReplyTo,
+        onSave: function(reference: ReplyReference | null): void {
+            pendingReplyTo = reference;
+            updateComposeReplyChip();
+        }
+    });
+}
+
+/**
+ * Opens the reply picker for an existing message.
+ * @param {Translation} translation - Message being annotated
+ * @returns {void}
+ */
+function openReplyPickerForEdit(translation: Translation): void {
+    const current = allTranslations.find(function(t) { return t.id === translation.id; }) ?? translation;
+    if (current.status !== 'complete' && current.status !== 'error') {
+        return;
+    }
+
+    showReplyPicker({
+        mode: 'edit',
+        subject: current,
+        current: current.replyTo ?? null,
+        onSave: function(reference: ReplyReference | null): Promise<void> {
+            return saveReplyReference(current.id, reference);
+        },
+        onSaveAndRetranslate: async function(reference: ReplyReference | null): Promise<void> {
+            await saveReplyReference(current.id, reference);
+            const latest = allTranslations.find(function(t) { return t.id === current.id; });
+            if (!latest) return;
+            if (latest.status === 'error') {
+                void retryTranslation(latest.id);
+            } else {
+                void regenerateTranslationById(latest.id, { preserveTimestamp: true });
+            }
+        }
+    });
+}
+
+/**
+ * Options for the shared reply picker.
+ * @property {'compose' | 'edit'} mode - Whether the picker is for a new message or an existing one
+ * @property {Translation} [subject] - Message being edited
+ * @property {ReplyReference | null} current - Currently selected reference
+ * @property {(reference: ReplyReference | null) => void | Promise<void>} onSave - Save handler
+ * @property {(reference: ReplyReference | null) => void | Promise<void>} [onSaveAndRetranslate] - Save-and-retranslate handler
+ */
+interface ReplyPickerOptions {
+    mode: 'compose' | 'edit';
+    subject?: Translation;
+    current: ReplyReference | null;
+    onSave: (reference: ReplyReference | null) => void | Promise<void>;
+    onSaveAndRetranslate?: (reference: ReplyReference | null) => void | Promise<void>;
+}
+
+/**
+ * Opens the shared reply picker modal.
+ * @param {ReplyPickerOptions} options - Picker configuration and callbacks
+ * @returns {void}
+ */
+function showReplyPicker(options: ReplyPickerOptions): void {
+    if (replyPickerOpen) return;
+
+    const template = document.getElementById('reply-picker-modal-template') as HTMLTemplateElement | null;
+    if (!template) return;
+
+    const itemTemplate = document.getElementById('reply-picker-item-template') as HTMLTemplateElement | null;
+    replyPickerOpen = true;
+
+    const clone = template.content.cloneNode(true) as DocumentFragment;
+    const modalEl = clone.firstElementChild as HTMLElement;
+    document.body.appendChild(clone);
+
+    const searchEl = modalEl.querySelector('#reply-picker-search') as HTMLInputElement | null;
+    const listEl = modalEl.querySelector('#reply-picker-list') as HTMLElement | null;
+    const emptyEl = modalEl.querySelector('#reply-picker-empty') as HTMLElement | null;
+    const roleEl = modalEl.querySelector('#reply-picker-role') as HTMLSelectElement | null;
+    const textEl = modalEl.querySelector('#reply-picker-text') as HTMLTextAreaElement | null;
+    const useTextBtn = modalEl.querySelector('#reply-picker-use-text-btn') as HTMLButtonElement | null;
+    const draftEl = modalEl.querySelector('#reply-picker-draft') as HTMLElement | null;
+    const cancelBtn = modalEl.querySelector('#reply-picker-cancel-btn') as HTMLButtonElement | null;
+    const saveBtn = modalEl.querySelector('#reply-picker-save-btn') as HTMLButtonElement | null;
+    const saveRetranslateBtn = modalEl.querySelector('#reply-picker-save-retranslate-btn') as HTMLButtonElement | null;
+    const removeBtn = modalEl.querySelector('#reply-picker-remove-btn') as HTMLButtonElement | null;
+
+    const modal = new Modal(modalEl);
+    const candidates = getReplyPickerCandidates(options.subject);
+    let draft: ReplyReference | null = options.current;
+    let textModeActive = options.current?.kind === 'text';
+
+    if (saveBtn) {
+        saveBtn.textContent = options.mode === 'compose' ? 'Attach' : 'Save';
+    }
+    if (saveRetranslateBtn) {
+        saveRetranslateBtn.style.display = options.mode === 'edit' && options.onSaveAndRetranslate ? '' : 'none';
+    }
+    if (removeBtn) {
+        removeBtn.style.display = options.mode === 'edit' && options.current ? '' : 'none';
+    }
+
+    if (roleEl) {
+        if (options.current?.kind === 'text') {
+            roleEl.value = options.current.pill ?? '';
+        } else {
+            roleEl.value = '';
+        }
+    }
+
+    if (textEl && options.current?.kind === 'text') {
+        textEl.value = options.current.text;
+    }
+
+    /**
+     * Updates the free-text button state.
+     * @returns {void}
+     */
+    function updateTextButtonState(): void {
+        if (useTextBtn && textEl) {
+            useTextBtn.disabled = textEl.value.trim().length === 0;
+        }
+    }
+
+    /**
+     * Returns the selected free-text role, if any.
+     * @returns {'input' | 'output' | undefined} Selected role
+     */
+    function getSelectedTextRole(): 'input' | 'output' | undefined {
+        if (roleEl?.value === 'input' || roleEl?.value === 'output') {
+            return roleEl.value;
+        }
+        return undefined;
+    }
+
+    /**
+     * Keeps an existing free-text draft in step with the textarea and role select.
+     * @returns {void}
+     */
+    function syncTextDraft(): void {
+        if (!textEl || !textModeActive) return;
+        const text = textEl.value.trim();
+        draft = text ? createTextReplyReference(getSelectedTextRole(), text) : null;
+        renderDraftPreview();
+        updateSaveState();
+    }
+
+    /**
+     * Renders the draft preview.
+     * @returns {void}
+     */
+    function renderDraftPreview(): void {
+        if (!draftEl) return;
+        if (!draft) {
+            draftEl.textContent = 'No reply target selected.';
+            draftEl.title = '';
+            return;
+        }
+        const display = getReplyReferenceDisplay(draft, allTranslations);
+        let preview = 'Replying to ' + display.roleLabel;
+        if (display.timestamp !== null) {
+            preview += ' · ' + formatTimestamp(display.timestamp);
+        }
+        if (display.primaryText) {
+            preview += ' — ' + display.primaryText;
+        }
+        draftEl.textContent = preview;
+        draftEl.title = preview;
+    }
+
+    /**
+     * Enables or disables the save buttons based on the draft.
+     * @returns {void}
+     */
+    function updateSaveState(): void {
+        if (saveBtn) saveBtn.disabled = !draft;
+        if (saveRetranslateBtn) saveRetranslateBtn.disabled = !draft;
+    }
+
+    /**
+     * Renders the candidate list for the current search query.
+     * @returns {void}
+     */
+    function renderCandidateList(): void {
+        if (!listEl) return;
+        const previousScrollTop = listEl.scrollTop;
+        listEl.innerHTML = '';
+        if (!itemTemplate) return;
+
+        const query = (searchEl?.value ?? '').trim().toLowerCase();
+        const matches = candidates.filter(function(t) {
+            const reference = createMessageReplyReference(t);
+            if (!reference) return false;
+            const display = getReplyReferenceDisplay(reference, allTranslations);
+            const haystack = (display.roleLabel + ' ' + display.primaryText + ' ' + display.secondaryText).toLowerCase();
+            return haystack.includes(query);
+        });
+        const shown = matches.slice(0, REPLY_PICKER_MAX_ROWS);
+
+        for (const t of shown) {
+            const reference = createMessageReplyReference(t);
+            if (!reference) continue;
+            const display = getReplyReferenceDisplay(reference, allTranslations);
+            const rowClone = itemTemplate.content.cloneNode(true) as DocumentFragment;
+            const row = rowClone.firstElementChild as HTMLElement;
+            const rowRole = row.querySelector('.reply-picker-item-role') as HTMLElement | null;
+            const rowTime = row.querySelector('.reply-picker-item-time') as HTMLElement | null;
+            const rowText = row.querySelector('.reply-picker-item-text') as HTMLElement | null;
+            const rowSecondary = row.querySelector('.reply-picker-item-secondary') as HTMLElement | null;
+
+            if (rowRole) rowRole.textContent = display.roleLabel;
+            if (rowTime) rowTime.textContent = display.timestamp !== null ? formatTimestamp(display.timestamp) : '';
+            if (rowText) {
+                rowText.textContent = display.primaryText;
+                rowText.title = display.primaryText;
+            }
+            if (rowSecondary) {
+                rowSecondary.textContent = display.secondaryText;
+                rowSecondary.style.display = display.secondaryText ? '' : 'none';
+            }
+            if (draft?.kind === 'message' && draft.messageId === t.id) {
+                row.classList.add('selected');
+            }
+
+            /**
+             * Selects this row as the draft.
+             * @returns {void}
+             */
+            function selectRow(): void {
+                textModeActive = false;
+                draft = createMessageReplyReference(t);
+                renderCandidateList();
+                renderDraftPreview();
+                updateSaveState();
+            }
+            row.addEventListener('click', selectRow);
+            row.addEventListener('keydown', function(event: KeyboardEvent) {
+                if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    selectRow();
+                }
+            });
+
+            listEl.appendChild(rowClone);
+        }
+
+        if (emptyEl) {
+            emptyEl.style.display = shown.length === 0 ? '' : 'none';
+        }
+        listEl.scrollTop = previousScrollTop;
+    }
+
+    /**
+     * Saves the draft and closes the modal.
+     * @param {boolean} andRetranslate - Whether to start a retranslation
+     * @returns {void}
+     */
+    function handleSave(andRetranslate: boolean): void {
+        if (!draft) return;
+        const reference = draft;
+        if (andRetranslate && options.onSaveAndRetranslate) {
+            void options.onSaveAndRetranslate(reference);
+        } else {
+            void options.onSave(reference);
+        }
+        modal.hide();
+    }
+
+    if (useTextBtn) {
+        useTextBtn.addEventListener('click', function() {
+            if (!textEl) return;
+            const text = textEl.value.trim();
+            if (!text) return;
+            textModeActive = true;
+            draft = createTextReplyReference(getSelectedTextRole(), text);
+            renderCandidateList();
+            renderDraftPreview();
+            updateSaveState();
+        });
+    }
+
+    if (textEl) {
+        textEl.addEventListener('input', function() {
+            updateTextButtonState();
+            syncTextDraft();
+        });
+    }
+    if (roleEl) {
+        roleEl.addEventListener('change', function() {
+            syncTextDraft();
+        });
+    }
+    if (searchEl) {
+        searchEl.addEventListener('input', renderCandidateList);
+    }
+    if (saveBtn) {
+        saveBtn.addEventListener('click', function() {
+            handleSave(false);
+        });
+    }
+    if (saveRetranslateBtn) {
+        saveRetranslateBtn.addEventListener('click', function() {
+            handleSave(true);
+        });
+    }
+    if (removeBtn) {
+        removeBtn.addEventListener('click', function() {
+            void options.onSave(null);
+            modal.hide();
+        });
+    }
+    if (cancelBtn) {
+        cancelBtn.addEventListener('click', function() {
+            modal.hide();
+        });
+    }
+
+    let cleanedUp = false;
+    /**
+     * Removes the modal from the DOM when it closes.
+     * @returns {void}
+     */
+    function cleanup(): void {
+        if (cleanedUp) return;
+        cleanedUp = true;
+        modalEl.removeEventListener('hidden.bs.modal', cleanup);
+        if (modalEl.isConnected) {
+            modalEl.remove();
+        }
+        replyPickerOpen = false;
+    }
+    modalEl.addEventListener('hidden.bs.modal', cleanup);
+
+    renderCandidateList();
+    renderDraftPreview();
+    updateSaveState();
+    updateTextButtonState();
+    modal.show();
+}
+
+/**
  * Renders a single translation item, creating or updating DOM element.
  * Captures all dynamic child element references once during creation and stores them
  * in domRefsMap for efficient subsequent updates.
@@ -2251,7 +2825,15 @@ function renderTranslationItem(container: HTMLElement, translation: Translation,
             addContextBtn: element.querySelector('.add-context-from-edit-btn') as HTMLButtonElement | null,
             editToggleBtn: element.querySelector('.edit-toggle-btn') as HTMLButtonElement | null,
             quickQuestionBtn: element.querySelector('.quick-question-btn') as HTMLButtonElement | null,
-            includeInContextToggle: element.querySelector('.include-in-context-toggle') as HTMLInputElement | null
+            includeInContextToggle: element.querySelector('.include-in-context-toggle') as HTMLInputElement | null,
+            replyQuoteEl: element.querySelector('.translation-reply-quote') as HTMLElement | null,
+            replyQuoteRoleEl: element.querySelector('.translation-reply-role') as HTMLElement | null,
+            replyQuoteTimeEl: element.querySelector('.translation-reply-time') as HTMLElement | null,
+            replyQuoteTextEl: element.querySelector('.translation-reply-text') as HTMLElement | null,
+            replyQuoteSecondaryEl: element.querySelector('.translation-reply-secondary') as HTMLElement | null,
+            replyQuoteEditBtn: element.querySelector('.translation-reply-edit-btn') as HTMLButtonElement | null,
+            replyQuoteRemoveBtn: element.querySelector('.translation-reply-remove-btn') as HTMLButtonElement | null,
+            replyToBtn: element.querySelector('.reply-to-btn') as HTMLButtonElement | null
         };
         domRefsMap.set(translation, refs);
 
@@ -2401,7 +2983,8 @@ function renderTranslationItem(container: HTMLElement, translation: Translation,
                     kind: 'sourceMessage',
                     sourceText: sourceText,
                     systemPrompt: QUICK_QUESTION_MESSAGE_PROMPT,
-                    placeholderQuestion: 'What are the nuances of this message?'
+                    placeholderQuestion: 'What are the nuances of this message?',
+                    replyTo: t.replyTo
                 });
             });
         }
@@ -2424,7 +3007,8 @@ function renderTranslationItem(container: HTMLElement, translation: Translation,
                     translationText: targetText,
                     systemPrompt: QUICK_QUESTION_TRANSLATION_PROMPT,
                     placeholderQuestion: 'What are the nuances of this message?',
-                    prefillQuestion: cachedTranslationQuickQuestion ?? undefined
+                    prefillQuestion: cachedTranslationQuickQuestion ?? undefined,
+                    replyTo: t.replyTo
                 });
             });
         }
@@ -2510,6 +3094,8 @@ function renderTranslationItem(container: HTMLElement, translation: Translation,
             });
         }
 
+        wireReplyControls(translation, refs);
+
         // Initially hide retranslation tabs
         if (refs.retranslationTabsEl) {
             refs.retranslationTabsEl.style.display = 'none';
@@ -2585,6 +3171,10 @@ function updateTranslationItemContent(translation: Translation, refs: Translatio
 
     if (refs.sourceEl) {
         refs.sourceEl.innerHTML = renderMarkdown(normalizeForMarkdown(entrySource));
+    }
+    paintReplyQuote(translation, refs);
+    if (refs.replyToBtn) {
+        refs.replyToBtn.style.display = (translation.status === 'complete' || translation.status === 'error') ? '' : 'none';
     }
     if (refs.promptEl) {
         refs.promptEl.textContent = entryPrompt;
@@ -2949,13 +3539,25 @@ export async function deleteTranslation(translationId: string): Promise<void> {
 }
 
 /**
- * Regenerates a translation for input mode (updates existing in place)
+ * Options for regenerating a translation.
+ * @property {boolean} [preserveTimestamp] - Keep the existing timestamp so the message stays in place
+ */
+interface RegenerateTranslationOptions {
+    preserveTimestamp?: boolean;
+}
+
+/**
+ * Regenerates a translation for input or output mode by appending a new entry
  * @param {string} translationId - ID of translation to regenerate
+ * @param {RegenerateTranslationOptions} [options] - Regeneration options
  * @returns {Promise<void>}
  */
-async function regenerateTranslationById(translationId: string): Promise<void> {
+async function regenerateTranslationById(
+    translationId: string,
+    options?: RegenerateTranslationOptions
+): Promise<void> {
     const translation = allTranslations.find(function(t) { return t.id === translationId; });
-    if (!translation || translation.pill !== 'input') {
+    if (!translation || (translation.pill !== 'input' && translation.pill !== 'output')) {
         return;
     }
 
@@ -3006,21 +3608,26 @@ async function regenerateTranslationById(translationId: string): Promise<void> {
     }
     const reasoningLevel = getTranslationReasoningToUse(session);
 
-    const systemPrompt = INPUT_SYSTEM_PROMPT;
+    const mode = translation.pill;
+    const systemPrompt = mode === 'input' ? INPUT_SYSTEM_PROMPT : OUTPUT_SYSTEM_PROMPT;
 
     console.log(`[regenerateTranslationById] Regenerating with model: ${effectiveModel}`);
 
-    // Delegate to streaming handler with timestamp rename and no background tasks
+    const streamingOptions: TranslateStreamingOptions = {
+        skipBackgroundTasks: true
+    };
+    if (!options?.preserveTimestamp) {
+        streamingOptions.oldTimestampToDelete = translation.timestamp;
+    }
+
+    // Delegate to streaming handler; omit the rename for annotation edits so the message stays in place
     await handleTranslateStreaming(
         translation,
-        'input',
+        mode,
         systemPrompt,
         effectiveModel,
         reasoningLevel,
-        {
-            oldTimestampToDelete: translation.timestamp,
-            skipBackgroundTasks: true
-        }
+        streamingOptions
     );
 }
 
@@ -4294,7 +4901,7 @@ async function handleTranslateStreaming(
         instructions = instructions.replace(/\[TAG_INSTRUCTIONS_BLOCK\]/g, buildTagInstructionsBlock(session?.translationTags, sourceText));
     }
 
-    const userMessage = await buildUserMessage(mode, sourceText, instructions);
+    const userMessage = await buildUserMessage(mode, sourceText, instructions, translation.replyTo, session?.translationTags ?? []);
 
     // Set up streaming display
     setupStreamingDisplay(refs, translation);
@@ -4635,7 +5242,8 @@ async function buildQuickQuestionMessage(
     translationText?: string,
     translationInstructions?: string,
     translationTags?: TranslationTag[],
-    langInstructions?: string
+    langInstructions?: string,
+    replyTo?: ReplyReference
 ): Promise<string> {
     const background = await getBackground();
 
@@ -4651,6 +5259,11 @@ async function buildQuickQuestionMessage(
     });
     if (history) {
         message += history + "\n\n";
+    }
+
+    const replyBlock = buildReplyingToBlock(replyTo, allTranslations, false, translationTags ?? []);
+    if (replyBlock) {
+        message += replyBlock + "\n\n";
     }
 
     if (translationText) {
@@ -4993,6 +5606,7 @@ function showQuickQuestionModal(options?: {
     placeholderQuestion?: string;
     prefillQuestion?: string;
     translationText?: string;
+    replyTo?: ReplyReference;
 }): void {
     if (quickQuestionModalOpen) return;
     const template = document.getElementById('quick-question-modal-template') as HTMLTemplateElement | null;
@@ -5143,7 +5757,8 @@ function showQuickQuestionModal(options?: {
                 options?.translationText,
                 translationInstructions,
                 translationTags,
-                langInstructions
+                langInstructions,
+                options?.replyTo
             );
 
             const abortHandle = streamSendChatMessage(
