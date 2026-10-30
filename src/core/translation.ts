@@ -2,7 +2,7 @@
  * Core translation logic
  * Pure functions with no DOM dependencies — importable from SW or main thread
  */
-import type { Translation, TranslationEntry, TranslationWordItem, MessageReplyReference, TextReplyReference, ReplyReference } from '@/types/translation';
+import type { Translation, TranslationEntry, TranslationWordItem, WordItem, MessageReplyReference, TextReplyReference, ReplyReference } from '@/types/translation';
 import type { TranslationTag } from '@/types/translationTag';
 
 /**
@@ -94,50 +94,139 @@ export function extractStructuredResult(rawText: string): { translation: string;
 }
 
 /**
- * Parses word definitions XML into structured items
- * Strips markdown code fences from XML before parsing
+ * Decodes common XML entities found in model output
+ * @param {string} text - Text to decode
+ * @returns {string} Decoded text
+ */
+function decodeXmlEntities(text: string): string {
+    return text.replace(/&(#x?[0-9a-f]+|[a-z]+);/gi, function(match: string, entity: string): string {
+        const lower = entity.toLowerCase();
+        if (lower === 'amp') return '&';
+        if (lower === 'lt') return '<';
+        if (lower === 'gt') return '>';
+        if (lower === 'quot') return '"';
+        if (lower === 'apos') return "'";
+        if (lower === 'nbsp') return '\u00A0';
+
+        let code = NaN;
+        if (lower.startsWith('#x')) {
+            code = parseInt(lower.slice(2), 16);
+        } else if (lower.startsWith('#')) {
+            code = parseInt(lower.slice(1), 10);
+        }
+
+        if (Number.isFinite(code)) {
+            try {
+                return String.fromCodePoint(code);
+            } catch {
+                return match;
+            }
+        }
+
+        return match;
+    });
+}
+
+/**
+ * Strips nested markup from a field value
+ * @param {string} text - Field text
+ * @returns {string} Text without nested tags
+ */
+function stripNestedMarkup(text: string): string {
+    return text.replace(/<[^>]*>/g, '');
+}
+
+/**
+ * Extracts a named field from a word item, tolerating attributes and whitespace
+ * @param {string} inner - The content inside an item tag
+ * @param {string} tagName - Field tag to extract
+ * @returns {string | null} Field text, or null when the tag is absent
+ */
+function extractWordField(inner: string, tagName: string): string | null {
+    const regex = new RegExp('<' + tagName + '\\b[^>]*>([\\s\\S]*?)<\\/' + tagName + '>', 'i');
+    const match = regex.exec(inner);
+    if (!match) {
+        return null;
+    }
+    return decodeXmlEntities(stripNestedMarkup(match[1])).trim();
+}
+
+/**
+ * Parses one item into a WordItem
+ * @param {string} inner - The content inside an item tag
+ * @returns {WordItem | null} Parsed word item, or null when no word is present
+ */
+function parseWordItem(inner: string): WordItem | null {
+    const word = extractWordField(inner, 'word');
+    if (!word) {
+        return null;
+    }
+
+    const item: WordItem = {
+        type: 'word',
+        word: word,
+        def: extractWordField(inner, 'def') ?? ''
+    };
+
+    const pos = extractWordField(inner, 'pos');
+    const lemma = extractWordField(inner, 'lemma');
+    const grammar = extractWordField(inner, 'grammar');
+    const exp = extractWordField(inner, 'exp');
+
+    if (pos) item.pos = pos;
+    if (lemma) item.lemma = lemma;
+    if (grammar) item.grammar = grammar;
+    if (exp) item.exp = exp;
+
+    return item;
+}
+
+/**
+ * Normalizes model output before tokenizing
+ * @param {string} xml - Raw model output
+ * @returns {string} XML without fences, declarations, or comments
+ */
+function normalizeWordDefinitionsXml(xml: string): string {
+    return xml
+        .replace(/```[a-z]*\s*([\s\S]*?)```/gi, function(_match: string, body: string): string {
+            return body;
+        })
+        .replace(/<\?xml[\s\S]*?\?>/gi, '')
+        .replace(/<!--[\s\S]*?-->/g, '');
+}
+
+/**
+ * Parses word definitions XML into structured items.
+ * Tolerates whitespace, attributes, mixed case, code fences, and old <exp>/<nl> output.
  * @param {string} xml - Raw XML string from LLM
  * @returns {TranslationWordItem[]} Parsed word definition items
  */
 export function parseWordDefinitions(xml: string): TranslationWordItem[] {
-    // Strip markdown code fences from the XML
-    xml = xml.replace(/```[\s\S]*?```/g, function(m) {
-        return m.replace(/```\w*\n?/, '').replace(/\n?```/, '');
-    });
-
+    const normalized = normalizeWordDefinitionsXml(xml);
     const items: TranslationWordItem[] = [];
+    const tokenRegex = /<item\b[^>]*>([\s\S]*?)<\/item>|<p\b[^>]*>([\s\S]*?)<\/p>|<br\s*\/?>|<nl\s*\/?>|<space\s*\/?>/gi;
+    let match: RegExpExecArray | null;
 
-    const itemRegex = /<item><word>([\s\S]*?)<\/word><def>([\s\S]*?)<\/def><exp>([\s\S]*?)<\/exp><\/item>/g;
-    const nonItemParts = xml.split(/(<item>[\s\S]*?<\/item>)/);
-
-    for (const part of nonItemParts) {
-        if (/^<item>/.test(part)) {
-            const match = itemRegex.exec(part);
-            if (match) {
-                items.push({
-                    type: 'word',
-                    word: match[1].trim(),
-                    def: match[2].trim(),
-                    exp: match[3].trim()
-                });
+    while ((match = tokenRegex.exec(normalized)) !== null) {
+        const token = match[0];
+        if (/^<item\b/i.test(token)) {
+            const item = parseWordItem(match[1] ?? '');
+            if (item) {
+                items.push(item);
             }
-            itemRegex.lastIndex = 0;
+        } else if (/^<p\b/i.test(token)) {
+            items.push({
+                type: 'punct',
+                text: decodeXmlEntities(match[2] ?? '')
+            });
+        } else if (/^<space\b/i.test(token)) {
+            items.push({
+                type: 'space'
+            });
         } else {
-            const punctRegex = /<p>([\s\S]*?)<\/p>/g;
-            let punctMatch;
-            while ((punctMatch = punctRegex.exec(part)) !== null) {
-                items.push({
-                    type: 'punct',
-                    text: punctMatch[1]
-                });
-            }
-            const nlRegex = /<nl\s*\/>/g;
-            let nlMatch;
-            while ((nlMatch = nlRegex.exec(part)) !== null) {
-                items.push({
-                    type: 'nl'
-                });
-            }
+            items.push({
+                type: 'nl'
+            });
         }
     }
 

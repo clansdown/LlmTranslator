@@ -4008,18 +4008,20 @@ export async function regenerateIndependentSections(translationId: string): Prom
  * Fetches word-by-word definitions for a completed translation
  * @param {string} model - Model ID to use
  * @param {string} reasoning - Reasoning level
- * @param {string} text - The translation text to analyze
+ * @param {string} text - The foreign-language text to analyze
  * @param {string} outputLanguage - Language name for definitions/explanations in the prompt
  * @returns {Promise<{ xml: string; generationId: string }>} Raw XML response and generation ID
  * @throws {Error} If API request fails
  */
 async function fetchWordDefinitions(model: string, reasoning: string, text: string, outputLanguage: string): Promise<{ xml: string; generationId: string }> {
-    const prompt = WORD_DEFINITIONS_PROMPT.replace(/\[TEXT\]/g, text).replace(/\[LANGUAGE\]/g, outputLanguage);
+    const prompt = WORD_DEFINITIONS_PROMPT.replace(/\[(TEXT|LANGUAGE)\]/g, function(_match: string, key: string): string {
+        return key === 'TEXT' ? text : outputLanguage;
+    });
     console.log('[wordDefinitions] Sending API request, text length:', text.length);
     const { content, generationId } = await sendChatMessage(
         config!.openRouterApiKey!,
         prompt,
-        'You are a linguistic analysis tool. Output only the requested XML structure with no additional text.',
+        'You are a dictionary and grammar reference. Output only the requested XML structure with no additional text.',
         model,
         reasoning,
         config!.temperature
@@ -4051,6 +4053,17 @@ function ensureWordPopup(): HTMLElement {
             const clone = template.content.cloneNode(true) as DocumentFragment;
             wordPopupEl = clone.firstElementChild as HTMLElement;
             document.body.appendChild(clone);
+
+            // Keep the popup open while the pointer is over it so longer notes can be read or scrolled.
+            wordPopupEl.addEventListener('mouseenter', function() {
+                if (wordPopupHideTimeout !== null) {
+                    clearTimeout(wordPopupHideTimeout);
+                    wordPopupHideTimeout = null;
+                }
+            });
+            wordPopupEl.addEventListener('mouseleave', function() {
+                hideWordPopup();
+            });
         }
     }
     return wordPopupEl!;
@@ -4059,30 +4072,63 @@ function ensureWordPopup(): HTMLElement {
 /**
  * Shows the word definition popup near a target element
  * @param {HTMLElement} target - The word element
- * @param {string} word - The word text
- * @param {string} def - Definition
- * @param {string} exp - Context explanation
+ * @param {WordItem} item - Word data to display
  * @returns {void}
  */
-function showWordPopup(target: HTMLElement, word: string, def: string, exp: string): void {
+function showWordPopup(target: HTMLElement, item: WordItem): void {
     if (wordPopupHideTimeout !== null) {
         clearTimeout(wordPopupHideTimeout);
         wordPopupHideTimeout = null;
     }
 
     const popup = ensureWordPopup();
-    const wordEl = popup.querySelector('.word-popup-word') as HTMLElement;
-    const defEl = popup.querySelector('.word-popup-def') as HTMLElement;
-    const expEl = popup.querySelector('.word-popup-exp') as HTMLElement;
+    const wordEl = popup.querySelector('.word-popup-word') as HTMLElement | null;
+    const metaEl = popup.querySelector('.word-popup-meta') as HTMLElement | null;
+    const defEl = popup.querySelector('.word-popup-def') as HTMLElement | null;
+    const grammarEl = popup.querySelector('.word-popup-grammar') as HTMLElement | null;
 
-    if (wordEl) wordEl.textContent = word;
-    if (defEl) defEl.textContent = def;
-    if (expEl) expEl.textContent = exp;
+    if (wordEl) {
+        wordEl.textContent = item.word;
+    }
+
+    const metaParts: string[] = [];
+    if (item.pos) {
+        metaParts.push(item.pos);
+    }
+    if (item.lemma && item.lemma !== item.word) {
+        metaParts.push(item.lemma);
+    }
+    const metaText = metaParts.join(' · ');
+    if (metaEl) {
+        metaEl.textContent = metaText;
+        metaEl.style.display = metaText ? '' : 'none';
+    }
+
+    if (defEl) {
+        defEl.textContent = item.def;
+        defEl.style.display = item.def ? '' : 'none';
+    }
+
+    const grammarText = item.grammar ?? item.exp ?? '';
+    if (grammarEl) {
+        grammarEl.textContent = grammarText;
+        grammarEl.style.display = grammarText ? '' : 'none';
+    }
+
+    popup.style.display = 'block';
 
     const rect = target.getBoundingClientRect();
-    popup.style.left = Math.min(rect.left, window.innerWidth - 310) + 'px';
-    popup.style.top = (rect.bottom + 6) + 'px';
-    popup.style.display = 'block';
+    const popupRect = popup.getBoundingClientRect();
+    const margin = 8;
+    let left = Math.max(margin, Math.min(rect.left, window.innerWidth - popupRect.width - margin));
+    let top = rect.bottom + 6;
+    if (top + popupRect.height > window.innerHeight - margin) {
+        top = rect.top - popupRect.height - 6;
+    }
+    top = Math.max(margin, top);
+
+    popup.style.left = left + 'px';
+    popup.style.top = top + 'px';
 }
 
 /**
@@ -4133,7 +4179,7 @@ function renderWordContent(container: HTMLElement, translation: Translation): vo
             span.className = 'translation-word';
             span.textContent = item.word;
             span.addEventListener('mouseenter', function() {
-                showWordPopup(span, item.word, item.def, item.exp);
+                showWordPopup(span, item);
             });
             span.addEventListener('mouseleave', function() {
                 hideWordPopup();
@@ -4143,6 +4189,8 @@ function renderWordContent(container: HTMLElement, translation: Translation): vo
             const span = document.createElement('span');
             span.textContent = item.text;
             container.appendChild(span);
+        } else if (item.type === 'space') {
+            container.appendChild(document.createTextNode(' '));
         } else if (item.type === 'nl') {
             container.appendChild(document.createElement('br'));
         }

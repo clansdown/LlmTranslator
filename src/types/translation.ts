@@ -2,23 +2,48 @@
  * Translation data types
  */
 
+/**
+ * A hoverable word with dictionary and grammar information.
+ * @property {string} word - Exact surface form from the text
+ * @property {string} [pos] - Lexical part of speech of the lemma
+ * @property {string} [lemma] - Dictionary form of the word
+ * @property {string} def - Common dictionary meanings
+ * @property {string} [grammar] - Morphology, particles, inflection, and usage
+ * @property {string} [exp] - Legacy context explanation from older saved data
+ */
 export interface WordItem {
     type: 'word';
     word: string;
+    pos?: string;
+    lemma?: string;
     def: string;
-    exp: string;
+    grammar?: string;
+    exp?: string;
 }
 
+/**
+ * A punctuation token.
+ */
 export interface PunctItem {
     type: 'punct';
     text: string;
 }
 
+/**
+ * A newline token.
+ */
 export interface NewlineItem {
     type: 'nl';
 }
 
-export type TranslationWordItem = WordItem | PunctItem | NewlineItem;
+/**
+ * A run of spaces between tokens.
+ */
+export interface SpaceItem {
+    type: 'space';
+}
+
+export type TranslationWordItem = WordItem | PunctItem | NewlineItem | SpaceItem;
 
 /**
  * Token usage statistics from an API call.

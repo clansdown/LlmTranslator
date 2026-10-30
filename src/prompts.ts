@@ -141,24 +141,37 @@ Output only the literal translation of the text into [LANGUAGE] with no explanat
  */
 /**
  * Prompt for word-by-word definitions and explanations
- * [TEXT] is replaced with the translation text to analyze
+ * [TEXT] is replaced with the foreign-language text to analyze
+ * [LANGUAGE] is replaced with the user's language
  */
 export const WORD_DEFINITIONS_PROMPT: string =
-`You will be given a text in an original language. For each word and punctuation in the text, output an XML entry describing it in [LANGUAGE].
+`You are a dictionary and grammar reference for a language learner. Write all definitions and grammar notes in [LANGUAGE]. Analyze each token independently. The text may contain words from more than one language; analyze each token as it appears. Do not translate the whole text and do not use the surrounding sentence to choose a meaning.
 
-Use these tags:
-- <item><word>word</word><def>concise dictionary definition in [LANGUAGE]</def><exp>explanation of how the word is used in this specific context in [LANGUAGE]</exp></item> for each word
-- <p>punctuation</p> for each punctuation mark (include the punctuation inside the P tag)
-- <nl /> for each newline
+Output only the XML structure below. Do not put spaces, tabs, or line breaks between tags, and put each <item> on one line. Represent whitespace in the text with <space/> and <br/>.
 
-Important rules:
-1. Preserve the exact order of words and punctuation from the input text
-2. Include ALL words and ALL punctuation marks - nothing should be skipped
-3. All words must be in an <item> tag with nested <word>, <def>, and <exp> tags
-4. The <word> tag should contain the exact word from the text
-5. The <def> tag should contain a concise dictionary definition in [LANGUAGE]
-6. The <exp> tag should explain in [LANGUAGE] how this word is used in context
-7. Do not output anything except the XML structure
+For each token in exact original order:
+- Word: <item><word>WORD</word><pos>PART_OF_SPEECH</pos><lemma>LEMMA</lemma><def>DEFINITIONS</def><grammar>GRAMMAR</grammar></item>
+- Punctuation: <p>PUNCT</p>
+- Space: <space/> (one per space)
+- Newline: <br/> (one per newline)
+
+Rules:
+1. Preserve the exact surface text. The concatenation of all token contents must reproduce the input exactly.
+2. <word> is the exact surface form, with original spelling and capitalization, no punctuation, and no surrounding spaces. Keep contractions, clitics, attached particles, conjugations, and declensions as one token; do not split them into morphemes.
+3. Split at word boundaries. For languages written without spaces, segment into words and particles, not whole clauses. Particles written separately are their own <item> with <pos>particle</pos>.
+4. <pos> is the lexical part of speech of the lemma: noun, verb, adjective, adverb, pronoun, determiner, particle, adposition, conjunction, interjection, numeral, auxiliary, proper noun, symbol, other. Do not put inflection or attached particles in <pos>.
+5. <lemma> is the dictionary form. For a particle, use the particle itself. For a contraction or clitic, use the main head word, and explain the expansion in <grammar>.
+6. <def> gives the 2-3 most common dictionary meanings of the lemma, ordered by frequency, separated by semicolons, 15-25 words total. Write explanatory definitions, not one-word translation equivalents. Do not include rare or archaic senses unless the word itself is rare. For function words and particles, give the grammatical meaning instead of lexical senses.
+7. <grammar> explains the morphology and grammatical behavior:
+   - verbs: tense, mood, aspect, voice, person, number, register, negation, auxiliaries;
+   - nouns, adjectives, pronouns, articles: case, gender, number, definiteness;
+   - particles: type, what it attaches to, what it marks, nuance;
+   - contractions/clitics: expanded form and function;
+   - compounds: components.
+   Always name the lemma and, for an inflected form, identify the stem and ending that carry the inflection. When explaining an attached particle, clitic, stem change, or inflection, quote the exact source characters in single quotes, for example '를', '-었-', '-ae'. Keep it compact.
+8. For proper nouns, <def> is "name of ..."; do not invent a lexical meaning. For numbers, dates, URLs, emoji, or code, describe them briefly.
+9. Use plain text inside tags. Do not use angle brackets, ampersands, or XML entities.
+10. Do not skip, add, reorder, or merge tokens. Do not output anything outside the XML.
 
 Input text:
 [TEXT]`;
