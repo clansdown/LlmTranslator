@@ -171,8 +171,20 @@
         }
 
         
-        .translation-words {
+        .translation-words-content {
             white-space: pre-wrap;
+        }
+        .section-regenerate-btn {
+            float: right;
+            margin: 0 0 0.5rem 0.5rem;
+            line-height: 1;
+        }
+        .translation-literal::after,
+        .translation-words::after,
+        .translation-interpretation::after {
+            content: '';
+            display: block;
+            clear: both;
         }
         .translation-word {
             cursor: pointer;
@@ -578,10 +590,6 @@
                                     </li>
                                 </ul>
                             </div>
-                            <div class="col-auto">
-                                <button type="button" class="btn btn-sm btn-outline-secondary regenerate-literal-btn" style="display: none;">Regenerate</button>
-                                <button type="button" class="btn btn-sm btn-outline-secondary regenerate-interpretation-btn" style="display: none;">Regen</button>
-                            </div>
                         </div>
                     </div>
                     <div class="ms-auto col-auto">
@@ -590,10 +598,24 @@
                 </div>
                 <div class="tab-content translation-sections-content">
                     <div class="tab-pane fade show active" id="literal-pane" role="tabpanel" aria-labelledby="literal-tab">
-                        <div class="translation-literal p-2 small text-justify"></div>
+                        <div class="translation-literal p-2 small text-justify">
+                            <button type="button"
+                                    class="btn btn-sm btn-outline-secondary section-regenerate-btn regenerate-literal-btn"
+                                    style="display: none;"
+                                    title="Regenerate literal translation"
+                                    aria-label="Regenerate literal translation">↻</button>
+                            <div class="translation-literal-content"></div>
+                        </div>
                     </div>
                     <div class="tab-pane fade" id="words-pane" role="tabpanel" aria-labelledby="words-tab">
-                        <div class="translation-words p-2 small text-justify"></div>
+                        <div class="translation-words p-2 small text-justify">
+                            <button type="button"
+                                    class="btn btn-sm btn-outline-secondary section-regenerate-btn regenerate-words-btn"
+                                    style="display: none;"
+                                    title="Regenerate words"
+                                    aria-label="Regenerate words">↻</button>
+                            <div class="translation-words-content"></div>
+                        </div>
                     </div>
                     <div class="tab-pane fade" id="explanation-pane" role="tabpanel" aria-labelledby="explanation-tab">
                         <div class="translation-explanation p-2 small text-justify"></div>
@@ -606,6 +628,11 @@
                             <div class="thinking-content"></div>
                         </div>
                         <div class="translation-interpretation p-2 small text-justify">
+                            <button type="button"
+                                    class="btn btn-sm btn-outline-secondary section-regenerate-btn regenerate-interpretation-btn"
+                                    style="display: none;"
+                                    title="Regenerate interpretation"
+                                    aria-label="Regenerate interpretation">↻</button>
                             <div class="interpretation-markdown"></div>
                             <span class="interpretation-raw"></span>
                         </div>
@@ -707,9 +734,6 @@
                                     </li>
                                 </ul>
                             </div>
-                            <div class="col-auto">
-                                <button type="button" class="btn btn-sm btn-outline-secondary regenerate-literal-btn" style="display: none;">Regenerate</button>
-                            </div>
                         </div>
                     </div>
                     <div class="col-auto">
@@ -718,10 +742,24 @@
                 </div>
                 <div class="tab-content translation-sections-content">
                     <div class="tab-pane fade show active" id="literal-pane" role="tabpanel" aria-labelledby="literal-tab">
-                        <div class="translation-literal p-2 small text-justify"></div>
+                        <div class="translation-literal p-2 small text-justify">
+                            <button type="button"
+                                    class="btn btn-sm btn-outline-secondary section-regenerate-btn regenerate-literal-btn"
+                                    style="display: none;"
+                                    title="Regenerate literal translation"
+                                    aria-label="Regenerate literal translation">↻</button>
+                            <div class="translation-literal-content"></div>
+                        </div>
                     </div>
                     <div class="tab-pane fade" id="words-pane" role="tabpanel" aria-labelledby="words-tab">
-                        <div class="translation-words p-2 small text-justify"></div>
+                        <div class="translation-words p-2 small text-justify">
+                            <button type="button"
+                                    class="btn btn-sm btn-outline-secondary section-regenerate-btn regenerate-words-btn"
+                                    style="display: none;"
+                                    title="Regenerate words"
+                                    aria-label="Regenerate words">↻</button>
+                            <div class="translation-words-content"></div>
+                        </div>
                     </div>
                     <div class="tab-pane fade" id="explanation-pane" role="tabpanel" aria-labelledby="explanation-tab">
                         <div class="translation-explanation p-2 small text-justify"></div>

@@ -66,6 +66,11 @@ let currentSessionId: string = 'default';
  */
 let currentLiteralModel: string | null = null;
 /**
+ * Current session's word-definition model ID
+ * @type {string | null}
+ */
+let currentWordDefModel: string | null = null;
+/**
  * Currently active interpretation model from the active session
  * @type {string | null}
  */
@@ -182,6 +187,7 @@ interface TranslationDomRefs {
     retryBtn: HTMLButtonElement | null;
     regenerateTranslationBtn: HTMLButtonElement | null;
     regenerateLiteralBtn: HTMLButtonElement | null;
+    regenerateWordsBtn: HTMLButtonElement | null;
     regenerateInterpretationBtn: HTMLButtonElement | null;
     regenerateAnswerBtn: HTMLButtonElement | null;
     stopGenerationBtn: HTMLButtonElement | null;
@@ -548,6 +554,7 @@ export async function setCurrentSession(sessionId: string): Promise<void> {
     cachedTranslationQuickQuestion = null;
     clearPendingReplyTo();
     currentLiteralModel = getLiteralModelToUse(session);
+    currentWordDefModel = getWordDefModelToUse(session);
     currentInterpretationModel = getInterpretationModelToUse(session);
     await savePreference('currentSession', sessionId);
 
@@ -1541,6 +1548,7 @@ export async function translate(mode: 'input' | 'output'): Promise<void> {
         }
         const reasoningLevel = getTranslationReasoningToUse(session);
         currentLiteralModel = getLiteralModelToUse(session);
+        currentWordDefModel = getWordDefModelToUse(session);
         const theirLang = LANGUAGES.find(function(l) { return l.id === session?.theirLanguage; });
         const myLang = LANGUAGES.find(function(l) { return l.id === session?.myLanguage; });
         const myLangName = myLang?.name ?? session?.myLanguage ?? 'English';
@@ -2782,7 +2790,7 @@ function renderTranslationItem(container: HTMLElement, translation: Translation,
             targetEl: element.querySelector('.translation-target') as HTMLElement | null,
             thinkingEl: element.querySelector('.translation-thinking') as HTMLElement | null,
             thinkingContentEl: element.querySelector('.thinking-content') as HTMLElement | null,
-            literalEl: element.querySelector('.translation-literal') as HTMLElement | null,
+            literalEl: element.querySelector('.translation-literal-content') as HTMLElement | null,
             explanationEl: element.querySelector('.translation-explanation') as HTMLElement | null,
             nuancesEl: element.querySelector('.translation-nuances') as HTMLElement | null,
             interpretationEl: element.querySelector('.translation-interpretation') as HTMLElement | null,
@@ -2808,6 +2816,7 @@ function renderTranslationItem(container: HTMLElement, translation: Translation,
             retryBtn: element.querySelector('.retry-btn') as HTMLButtonElement | null,
             regenerateTranslationBtn: element.querySelector('.regenerate-translation-btn') as HTMLButtonElement | null,
             regenerateLiteralBtn: element.querySelector('.regenerate-literal-btn') as HTMLButtonElement | null,
+            regenerateWordsBtn: element.querySelector('.regenerate-words-btn') as HTMLButtonElement | null,
             regenerateInterpretationBtn: element.querySelector('.regenerate-interpretation-btn') as HTMLButtonElement | null,
             regenerateAnswerBtn: element.querySelector('.regenerate-answer-btn') as HTMLButtonElement | null,
             stopGenerationBtn: element.querySelector('.stop-generation-btn') as HTMLButtonElement | null,
@@ -2817,7 +2826,7 @@ function renderTranslationItem(container: HTMLElement, translation: Translation,
             saveAnswerBtn: element.querySelector('.save-answer-btn') as HTMLButtonElement | null,
             retranslationTabsEl: element.querySelector('.retranslation-tabs') as HTMLElement | null,
             wordsTab: element.querySelector('#words-tab-' + translation.id) as HTMLElement | null,
-            wordsContent: element.querySelector('.translation-words') as HTMLElement | null,
+            wordsContent: element.querySelector('.translation-words-content') as HTMLElement | null,
             editArea: element.querySelector('.translation-edit-area') as HTMLElement | null,
             editSource: element.querySelector('.translation-edit-source') as HTMLTextAreaElement | null,
             editIntent: element.querySelector('.translation-edit-intent') as HTMLTextAreaElement | null,
@@ -3055,7 +3064,15 @@ function renderTranslationItem(container: HTMLElement, translation: Translation,
         if (refs.regenerateLiteralBtn) {
             const translationId = translation.id;
             refs.regenerateLiteralBtn.addEventListener('click', function() {
-                regenerateIndependentSections(translationId);
+                regenerateLiteralSection(translationId);
+            });
+        }
+
+        // Wire regenerate words button
+        if (refs.regenerateWordsBtn) {
+            const translationId = translation.id;
+            refs.regenerateWordsBtn.addEventListener('click', function() {
+                regenerateWordDefinitions(translationId);
             });
         }
 
@@ -3374,7 +3391,8 @@ function updateTranslationItemContent(translation: Translation, refs: Translatio
             }
         }
 
-        if (refs.regenerateLiteralBtn) refs.regenerateLiteralBtn.style.display = currentLiteralModel ? 'inline-block' : 'none';
+        const literalBusy = entryLiteralPending || literalStreamingStateMap.has(translation);
+        if (refs.regenerateLiteralBtn) refs.regenerateLiteralBtn.style.display = currentLiteralModel && !literalBusy ? 'inline-block' : 'none';
         if (refs.regenerateInterpretationBtn && !entryInterpretationPending) refs.regenerateInterpretationBtn.style.display = currentInterpretationModel ? 'inline-block' : 'none';
 
         if (refs.sectionsArea && refs.toggleSectionsBtn) {
@@ -3386,6 +3404,17 @@ function updateTranslationItemContent(translation: Translation, refs: Translatio
                 refs.toggleSectionsBtn.textContent = '▲';
             }
         }
+    }
+
+    const wordsSourceText = translation.pill === 'input'
+        ? entry?.source ?? ''
+        : entry?.translation ?? '';
+    const showWordsRegenerate = translation.status === 'complete'
+        && currentWordDefModel !== null
+        && !(entry?.wordPending ?? false)
+        && wordsSourceText.trim().length > 0;
+    if (refs.regenerateWordsBtn) {
+        refs.regenerateWordsBtn.style.display = showWordsRegenerate ? 'inline-block' : 'none';
     }
 
     if (refs.wordsTab) {
@@ -3728,7 +3757,7 @@ export async function regenerateInterpretation(translationId: string): Promise<v
         return;
     }
 
-    if (translation.status !== 'complete') {
+    if (translation.pill !== 'output') {
         return;
     }
 
@@ -3824,17 +3853,16 @@ export async function regenerateInterpretation(translationId: string): Promise<v
 }
 
 /**
- * Regenerates all independently-sourced tab content for the active entry:
- * literal retranslation, word definitions, and interpretation.
- * These are the auxiliary sections that run as separate API calls
- * after the main translation completes.
- * @param {string} translationId - ID of the completed translation
+ * Regenerates the literal retranslation for a completed message.
+ * @param {string} translationId - ID of the message
  * @returns {Promise<void>}
  */
-export async function regenerateIndependentSections(translationId: string): Promise<void> {
+async function regenerateLiteralSection(translationId: string): Promise<void> {
     const translation = allTranslations.find(function(t) { return t.id === translationId; });
-
     if (!translation) {
+        return;
+    }
+    if (translation.pill !== 'input' && translation.pill !== 'output') {
         return;
     }
 
@@ -3843,165 +3871,127 @@ export async function regenerateIndependentSections(translationId: string): Prom
         console.error('[regenerateLiteral] No session found');
         return;
     }
-    const effectiveModel = getTranslationModelToUse(session);
-    if (!config || !config!.openRouterApiKey!) {
+    if (!config || !config.openRouterApiKey) {
         console.error('[regenerateLiteral] No API key');
         return;
     }
 
-    const myLang = LANGUAGES.find(function(l) { return l.id === session?.myLanguage; });
-    const myLangName = myLang?.name ?? session?.myLanguage ?? 'English';
-    const literalPrompt = translation.pill === 'input'
-        ? LITERAL_RETRANSLATION_PROMPT
-        : OUTPUT_LITERAL_RETRANSLATION_PROMPT;
-    const literalSystemPrompt = literalPrompt.replace(/\[LANGUAGE\]/g, myLangName);
+    const literalModel = getLiteralModelToUse(session);
+    if (!literalModel) {
+        return;
+    }
 
     ensureEntries(translation);
-    const activeIdx = translation.activeEntryIndex ?? 0;
-    const entry = translation.entries[activeIdx];
-    if (!entry) return;
+    const entry = translation.entries[translation.activeEntryIndex ?? 0];
+    if (!entry) {
+        return;
+    }
 
-    const literalUserMessage = translation.pill === 'input'
-        ? entry.source
-        : entry.translation;
-    console.log('[regenerateLiteral] Starting literal retranslation with model:', session?.literalModel);
+    const literalUserMessage = translation.pill === 'input' ? entry.source : entry.translation;
+    if (!literalUserMessage.trim()) {
+        return;
+    }
+
+    const myLang = LANGUAGES.find(function(l) { return l.id === session.myLanguage; });
+    const myLangName = myLang?.name ?? session.myLanguage ?? 'English';
+    console.log('[regenerateLiteral] Starting literal retranslation with model:', literalModel);
     console.log('[regenerateLiteral] Input text (' + translation.pill + '):', literalUserMessage.substring(0, 200));
 
-    entry.literalPending = true;
-    entry.literalRetranslation = undefined;
-    updateTranslationItem(translation);
+    handleLiteralRetranslationStreaming(
+        translation,
+        literalUserMessage,
+        literalModel,
+        myLangName,
+        translation.pill
+    );
+}
 
-    /** @type {Promise<void>[]} */
-    const tasks: Promise<void>[] = [];
+/**
+ * Regenerates word definitions for a completed message.
+ * @param {string} translationId - ID of the message
+ * @returns {Promise<void>}
+ */
+async function regenerateWordDefinitions(translationId: string): Promise<void> {
+    const translation = allTranslations.find(function(t) { return t.id === translationId; });
+    if (!translation) {
+        return;
+    }
+    if (translation.pill !== 'input' && translation.pill !== 'output') {
+        return;
+    }
 
-    if (getLiteralModelToUse(session)) {
-        const literalModel = getLiteralModelToUse(session)!;
-        console.log('[regenerateLiteral] Starting literal retranslation streaming with model:', literalModel);
-        handleLiteralRetranslationStreaming(
-            translation,
-            literalUserMessage,
-            literalModel,
-            myLangName,
-            translation.pill === 'input' ? 'input' : 'output'
-        );
+    const session = await loadSession(currentSessionId);
+    if (!session) {
+        console.error('[wordDefinitions] No session found');
+        return;
+    }
+    if (!config || !config.openRouterApiKey) {
+        console.error('[wordDefinitions] No API key');
+        return;
     }
 
     const wordDefModel = getWordDefModelToUse(session);
-    if (wordDefModel && entry.translation) {
-        entry.wordPending = true;
-        entry.wordDefinitions = undefined;
-        entry.wordData = undefined;
-        tasks.push((async () => {
-            try {
-                console.log('[wordDefinitions] Starting word definitions with model:', wordDefModel);
-                const wordText = translation.pill === 'input'
-                    ? entry.source
-                    : entry.translation;
-                const { xml: wordXml } = await fetchWordDefinitions(wordDefModel, getWordDefReasoningToUse(session), wordText, myLangName);
-                entry.wordDefinitions = wordXml;
-
-                entry.wordData = parseWordDefinitions(wordXml);
-                console.log('[wordDefinitions] Parsed', entry.wordData.length, 'word items');
-                entry.wordPending = false;
-                syncTopLevelFromActive(translation);
-                saveSessionTranslation(currentSessionId, translation);
-                updateTranslationItem(translation);
-                const wordElement = document.getElementById('translation-' + translation.id);
-                const wordContent = (wordElement as HTMLElement | null)?.querySelector('.translation-words') as HTMLElement | null | undefined;
-                if (wordContent) {
-                    wordContent.innerHTML = '';
-                    renderWordContent(wordContent, translation);
-                }
-            } catch (wordDefError) {
-                console.error('[wordDefinitions] Failed:', wordDefError);
-                entry.wordPending = false;
-                updateTranslationItem(translation);
-            }
-        })());
+    if (!wordDefModel) {
+        return;
     }
 
-    const interpModel = getInterpretationModelToUse(session);
-    if (interpModel && entry.translation) {
-        abortExistingInterpretation(translation);
-        startInterpretationStreaming(translation);
-        entry.interpretationPending = true;
-        entry.interpretation = undefined;
-        updateTranslationItem(translation);
+    ensureEntries(translation);
+    const entry = translation.entries[translation.activeEntryIndex ?? 0];
+    if (!entry) {
+        return;
+    }
 
-        const message = await buildInterpretationMessage(translation);
-        console.log('[interpretation] Starting interpretation with model:', interpModel);
-        const abortHandle = streamSendChatMessage(
-            config!.openRouterApiKey!,
-            message,
-            buildInterpretationSystemPrompt(session),
-            interpModel,
-            {
-                onChunk: function(text: string, reasoning: string): void {
-                    entry.interpretation = text;
-                    const iRefs = domRefsMap.get(translation);
-                    if (!iRefs) return;
-                    if (reasoning && iRefs.interpretationThinkingEl && iRefs.interpretationThinkingContentEl) {
-                        iRefs.interpretationThinkingEl.style.display = '';
-                        iRefs.interpretationThinkingContentEl.textContent = reasoning;
-                    }
-                    if (iRefs.regenerateInterpretationBtn) {
-                        iRefs.regenerateInterpretationBtn.style.display = 'none';
-                    }
-                    const streamState = interpretationStreamingStateMap.get(translation);
-                    if (!streamState) return;
-                    streamState.accumulatedText = text;
-                    scheduleStreamRender(streamState, function(): void {
-                        renderInterpretationStreaming(translation);
-                    });
-                },
-                onDone: function(fullText: string, fullReasoning: string, generationId: string | null, usage?: StreamUsage): void {
-                    interpretationAbortMap.delete(translation);
-                    stopInterpretationStreaming(translation);
-                    entry.interpretation = fullText;
-                    entry.interpretationPending = false;
-                    const iRefs = domRefsMap.get(translation);
-                    if (iRefs?.interpretationThinkingEl) {
-                        iRefs.interpretationThinkingEl.style.display = 'none';
-                    }
-                    if (usage && entry) {
-                        entry.usage = {
-                            promptTokens: usage.prompt_tokens,
-                            completionTokens: usage.completion_tokens,
-                            totalTokens: usage.total_tokens
-                        };
-                    }
-                    if (generationId && entry) {
-                        entry.generationId = generationId;
-                    }
-                    syncTopLevelFromActive(translation);
-                    saveSessionTranslation(currentSessionId, translation);
-                    updateTranslationItem(translation);
-                },
-                onError: function(error: Error): void {
-                    interpretationAbortMap.delete(translation);
-                    stopInterpretationStreaming(translation);
-                    console.error('[interpretation] Error:', error);
-                    entry.interpretationPending = false;
-                    entry.interpretation = undefined;
-                    const iRefs = domRefsMap.get(translation);
-                    if (iRefs?.interpretationThinkingEl) {
-                        iRefs.interpretationThinkingEl.style.display = 'none';
-                    }
-                    updateTranslationItem(translation);
-                }
-            },
-            getInterpretationReasoningToUse(session),
-            config!.temperature
+    const wordText = translation.pill === 'input' ? entry.source : entry.translation;
+    if (!wordText.trim()) {
+        return;
+    }
+
+    const myLang = LANGUAGES.find(function(l) { return l.id === session.myLanguage; });
+    const myLangName = myLang?.name ?? session.myLanguage ?? 'English';
+
+    entry.wordPending = true;
+    entry.wordDefinitions = undefined;
+    entry.wordData = undefined;
+    updateTranslationItem(translation);
+
+    try {
+        console.log('[wordDefinitions] Starting word definitions with model:', wordDefModel);
+        const { xml: wordXml } = await fetchWordDefinitions(
+            wordDefModel,
+            getWordDefReasoningToUse(session),
+            wordText,
+            myLangName
         );
-        interpretationAbortMap.set(translation, abortHandle.abort);
+        entry.wordDefinitions = wordXml;
+        entry.wordData = parseWordDefinitions(wordXml);
+        entry.wordPending = false;
+        syncTopLevelFromActive(translation);
+        await saveSessionTranslation(currentSessionId, translation);
+        updateTranslationItem(translation);
+    } catch (wordDefError) {
+        console.error('[wordDefinitions] Failed:', wordDefError);
+        entry.wordPending = false;
+        updateTranslationItem(translation);
+    }
+}
+
+/**
+ * Regenerates all independently-sourced tab content for the active entry:
+ * literal retranslation, word definitions, and interpretation.
+ * @param {string} translationId - ID of the completed translation
+ * @returns {Promise<void>}
+ */
+export async function regenerateIndependentSections(translationId: string): Promise<void> {
+    const translation = allTranslations.find(function(t) { return t.id === translationId; });
+    if (!translation) {
+        return;
     }
 
-    if (tasks.length > 0) {
-            Promise.all(tasks)
-                .then(() => updateTranslationItem(translation))
-                .catch(() => updateTranslationItem(translation));
-        }
-        updateTranslationItem(translation);
+    await Promise.allSettled([
+        regenerateLiteralSection(translationId),
+        regenerateWordDefinitions(translationId),
+        regenerateInterpretation(translationId)
+    ]);
 }
 
 /**
@@ -4220,6 +4210,7 @@ function setupStreamingDisplay(refs: TranslationDomRefs, translation: Translatio
     if (refs.retryBtn) refs.retryBtn.style.display = 'none';
     if (refs.regenerateTranslationBtn) refs.regenerateTranslationBtn.style.display = 'none';
     if (refs.regenerateLiteralBtn) refs.regenerateLiteralBtn.style.display = 'none';
+    if (refs.regenerateWordsBtn) refs.regenerateWordsBtn.style.display = 'none';
     if (refs.regenerateInterpretationBtn) refs.regenerateInterpretationBtn.style.display = 'none';
     if (refs.regenerateAnswerBtn) refs.regenerateAnswerBtn.style.display = 'none';
     if (refs.copyAnswerBtn) refs.copyAnswerBtn.style.display = 'none';
